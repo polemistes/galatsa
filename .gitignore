@@ -1,0 +1,8 @@
+# Exports of the project sketch are kept out of the repository
+Galatsa-prosjektskisse.pdf
+Galatsa-prosjektskisse.docx
+# Private project notes, kept out of the public repository
+CLAUDE.md
+idenotat.md
+# Claude Code local state and agent worktrees
+.claude/
