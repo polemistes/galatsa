@@ -66,6 +66,12 @@ export interface DomEngineOptions {
    * compositor layer (will-change: transform) while the camera moves. Default "none".
    */
   readonly layersWhileMoving?: "none" | "text" | "all";
+  /**
+   * How images are shown: "img" (an <img> with a small JPEG per level, decoded by
+   * the browser when painted) or "canvas" (a <canvas> holding the decoded level).
+   * Default "img".
+   */
+  readonly imageElement?: "img" | "canvas";
   /** Wait for the images of the first pose in load(). Default true. */
   readonly awaitFirstImages?: boolean;
 }
@@ -144,6 +150,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   const budgetMs = options.relayoutBudgetMs ?? 6;
   const greekBelowPx = options.greekBelowPx ?? 0;
   const layersWhileMoving = options.layersWhileMoving ?? "none";
+  const imageElement = options.imageElement ?? "img";
   let container: HTMLElement | undefined;
   let world: HTMLElement | undefined;
   let viewport: BenchViewport = { width: 0, height: 0, devicePixelRatio: 1 };
@@ -251,10 +258,17 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       div.dataset["id"] = e.id;
       node = div;
     } else {
-      const img = document.createElement("img");
-      img.alt = "";
-      img.decoding = "async";
-      img.draggable = false;
+      let img: HTMLImageElement | HTMLCanvasElement;
+      if (imageElement === "canvas") {
+        img = document.createElement("canvas");
+        img.width = 1;
+        img.height = 1;
+      } else {
+        img = document.createElement("img");
+        img.alt = "";
+        img.decoding = "async";
+        img.draggable = false;
+      }
       img.style.width = `${e.width}px`;
       img.style.height = `${e.height}px`;
       img.style.background = "#bbb"; // until a level has arrived
@@ -312,6 +326,17 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     const level = images.best(asset.id, k);
     if (level === undefined || level.k === item.shownLevel) return;
     if (level.k === item.loadingLevel) return;
+    if (level.bitmap !== undefined) {
+      // Canvas: copy the decoded level in, synchronously.
+      const canvas = item.node as HTMLCanvasElement;
+      canvas.width = level.width;
+      canvas.height = level.height;
+      canvas.getContext("2d")?.drawImage(level.bitmap, 0, 0);
+      item.shownLevel = level.k;
+      canvas.style.background = "";
+      counters.imageSwaps++;
+      return;
+    }
     // Decode off-screen first, then swap, so the old level stays until the new one
     // is ready (no flash of the placeholder).
     const img = item.node as HTMLImageElement;
@@ -373,7 +398,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       viewport = setup.viewport;
       reportTextSharp = setup.reportTextSharp;
       for (const asset of setup.scene.assets) assets.set(asset.id, asset);
-      images = new ImageLevels(setup.images);
+      images = new ImageLevels(
+        setup.images,
+        imageElement === "canvas" ? "bitmap" : "url",
+      );
       items = setup.scene.elements.map((el, index) => {
         const angle = (el.rotation * Math.PI) / 180;
         const item: Item = {

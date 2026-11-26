@@ -1,5 +1,6 @@
 {
-  "variant": "dom",
+  "renamedFrom": "profile-dom",
+  "variant": "profile-dom-nogreek",
   "project": "chromium",
   "note": "Milliseconds summed over one camera run, per thread and event (nested events overlap: Paint includes nothing of Layout, but RasterTask includes image decodes on the same thread)",
   "traceStartedAtMs": 1795707871513.12,

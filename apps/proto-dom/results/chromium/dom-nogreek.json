@@ -1,6 +1,7 @@
 {
+  "renamedFrom": "dom",
   "project": "chromium",
-  "variant": "dom",
+  "variant": "dom-nogreek",
   "processMemory": {
     "note": "Sum of PSS of the browser's processes (Linux /proc), sampled every 250 ms",
     "baselineBeforeLoadBytes": 875864064,
@@ -394,7 +395,7 @@
   "result": {
     "format": "galatsa-bench-result",
     "version": 1,
-    "engine": "dom",
+    "engine": "dom-nogreek",
     "startedAt": "2026-11-26T15:30:35.728Z",
     "environment": {
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36",

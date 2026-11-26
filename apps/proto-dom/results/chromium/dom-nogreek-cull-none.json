@@ -1,6 +1,7 @@
 {
+  "renamedFrom": "dom-cull-none",
   "project": "chromium",
-  "variant": "dom-cull-none",
+  "variant": "dom-nogreek-cull-none",
   "processMemory": {
     "note": "Sum of PSS of the browser's processes (Linux /proc), sampled every 250 ms",
     "baselineBeforeLoadBytes": 1662114816,
@@ -758,7 +759,7 @@
   "result": {
     "format": "galatsa-bench-result",
     "version": 1,
-    "engine": "dom-cull-none",
+    "engine": "dom-nogreek-cull-none",
     "startedAt": "2026-11-26T15:39:36.595Z",
     "environment": {
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36",

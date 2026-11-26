@@ -27,7 +27,10 @@ export interface Level {
   readonly k: number;
   readonly width: number;
   readonly height: number;
+  /** Object URL of a small JPEG ("url" kind), or "" */
   readonly url: string;
+  /** The decoded level ("bitmap" kind). */
+  readonly bitmap: ImageBitmap | undefined;
   readonly bytes: number;
   lastUsed: number;
 }
@@ -36,6 +39,11 @@ interface Request {
   readonly asset: ImageAsset;
   k: number;
   priority: number;
+}
+
+function release(level: { url: string; bitmap: ImageBitmap | undefined }): void {
+  if (level.url !== "") URL.revokeObjectURL(level.url);
+  level.bitmap?.close();
 }
 
 export function levelSize(asset: ImageAsset, k: number): [number, number] {
@@ -69,9 +77,18 @@ export class ImageLevels {
   readonly stats = { decodes: 0, decodeMs: 0, evictions: 0, encodedBytes: 0 };
 
   private readonly source: ImageSource;
+  private readonly kind: "url" | "bitmap";
+  private readonly budget: number;
 
-  constructor(source: ImageSource) {
+  /**
+   * kind "url": levels are small JPEG files for <img> elements (the browser
+   * decodes them again when it paints). kind "bitmap": levels stay decoded as
+   * ImageBitmaps, for drawing into a <canvas>.
+   */
+  constructor(source: ImageSource, kind: "url" | "bitmap" = "url") {
     this.source = source;
+    this.kind = kind;
+    this.budget = kind === "url" ? CACHE_PIXEL_BUDGET : CACHE_PIXEL_BUDGET / 2;
   }
 
   /** Advance the clock used for least-recently-used eviction (once per frame). */
@@ -149,7 +166,7 @@ export class ImageLevels {
     this.disposed = true;
     this.queue.clear();
     for (const cached of this.levels.values())
-      for (const level of cached.values()) URL.revokeObjectURL(level.url);
+      for (const level of cached.values()) release(level);
     this.levels.clear();
     this.cachedPixels = 0;
   }
@@ -180,14 +197,23 @@ export class ImageLevels {
     const start = performance.now();
     const [width, height] = levelSize(asset, k);
     const blob = this.source.getBlob(asset.id);
-    let url: string;
+    let url = "";
+    let bitmap: ImageBitmap | undefined;
     let bytes: number;
-    if (k === 0) {
+    if (this.kind === "bitmap") {
+      bitmap = await createImageBitmap(
+        blob,
+        k === 0
+          ? {}
+          : { resizeWidth: width, resizeHeight: height, resizeQuality: "medium" },
+      );
+      bytes = width * height * 4;
+    } else if (k === 0) {
       // Full size: show the original file.
       url = URL.createObjectURL(blob);
       bytes = blob.size;
     } else {
-      const bitmap = await createImageBitmap(blob, {
+      const decoded = await createImageBitmap(blob, {
         resizeWidth: width,
         resizeHeight: height,
         resizeQuality: "medium",
@@ -195,14 +221,14 @@ export class ImageLevels {
       const canvas = new OffscreenCanvas(width, height);
       const context = canvas.getContext("2d");
       if (context === null) throw new Error("No 2D context");
-      context.drawImage(bitmap, 0, 0);
-      bitmap.close();
+      context.drawImage(decoded, 0, 0);
+      decoded.close();
       const small = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.9 });
       url = URL.createObjectURL(small);
       bytes = small.size;
     }
     if (this.disposed) {
-      URL.revokeObjectURL(url);
+      release({ url, bitmap });
       return;
     }
     let cached = this.levels.get(asset.id);
@@ -210,7 +236,7 @@ export class ImageLevels {
       cached = new Map();
       this.levels.set(asset.id, cached);
     }
-    cached.set(k, { k, width, height, url, bytes, lastUsed: this.clock });
+    cached.set(k, { k, width, height, url, bitmap, bytes, lastUsed: this.clock });
     this.cachedPixels += width * height;
     this.stats.decodes++;
     this.stats.decodeMs += performance.now() - start;
@@ -221,7 +247,7 @@ export class ImageLevels {
 
   /** Drop least recently used levels over budget, but never the newest one. */
   private evict(keepAsset: string, keepK: number): void {
-    if (this.cachedPixels <= CACHE_PIXEL_BUDGET) return;
+    if (this.cachedPixels <= this.budget) return;
     const all: { assetId: string; level: Level }[] = [];
     for (const [assetId, cached] of this.levels)
       for (const level of cached.values()) all.push({ assetId, level });
@@ -233,7 +259,7 @@ export class ImageLevels {
         b.level.width * b.level.height - a.level.width * a.level.height,
     );
     for (const { assetId, level } of all) {
-      if (this.cachedPixels <= CACHE_PIXEL_BUDGET) break;
+      if (this.cachedPixels <= this.budget) break;
       if (assetId === keepAsset && level.k === keepK) continue;
       if (level.lastUsed >= this.clock - 1) continue; // shown in the last frame
       const cached = this.levels.get(assetId);
@@ -241,7 +267,7 @@ export class ImageLevels {
       const coarsest = Math.max(...cached.keys());
       if (level.k === coarsest) continue;
       cached.delete(level.k);
-      URL.revokeObjectURL(level.url);
+      release(level);
       this.cachedPixels -= level.width * level.height;
       this.stats.evictions++;
     }
