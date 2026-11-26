@@ -28,7 +28,9 @@ import { FileFormatError, type FileErrorCode } from "./errors.ts";
 import { assetIdOf } from "./hash.ts";
 import { canonicalJson, fromUtf8, utf8 } from "./json.ts";
 import { FORMAT_VERSION, MIGRATIONS, type MigrationRegistry } from "./migrations.ts";
-import { MIMETYPE, readGalatsaFile, writeGalatsaFile } from "./file.ts";
+import { readGalatsaFile, writeGalatsaFile } from "./file.ts";
+import { MIMETYPE } from "./layout.ts";
+import { readGalatsaSnapshot } from "./read.ts";
 import { readZip, writeZip } from "./zip.ts";
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
@@ -186,6 +188,14 @@ describe("file round trip", () => {
       const json = JSON.parse(fromUtf8(again.get("document.json")!)) as DocumentSnapshot;
       expect(canonicalJson(json.elements.alien)).toBe(canonicalJson(original));
     }
+  });
+
+  it("reads the JSON form without Yjs, as the player does", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const read = await readGalatsaSnapshot(writeGalatsaFile(doc, (id) => assets.get(id)));
+    expect(read.snapshot).toEqual(toSnapshot(doc));
+    expect(read.ydoc).not.toBe(null);
+    expect(read.migrated).toBe(false);
   });
 
   it("keeps merge identity: a reopened file merges with other copies without duplicates", async () => {

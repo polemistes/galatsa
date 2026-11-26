@@ -12,6 +12,11 @@
       "@galatsa/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./read": {
+      "@galatsa/source": "./src/read-entry.ts",
+      "types": "./dist/read-entry.d.ts",
+      "default": "./dist/read-entry.js"
     }
   },
   "sideEffects": false,
