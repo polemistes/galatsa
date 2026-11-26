@@ -17,6 +17,7 @@ import {
 } from "../model/grammar.ts";
 import { newId } from "../model/ids.ts";
 import { keysBetween, sortOrdered } from "../model/order.ts";
+import { purgeSnapshot } from "../model/purge.ts";
 import { Resolver, lookupFromRecord } from "../model/resolve.ts";
 import { isRemoved, liveRoutes } from "../model/route.ts";
 import {
@@ -25,7 +26,6 @@ import {
   type DocumentSnapshot,
   type Element,
   type ElementId,
-  type Revision,
   type Route,
   type RouteId,
   type Stop,
@@ -33,10 +33,19 @@ import {
 } from "../model/types.ts";
 import { referencedAssets, remapStrings } from "../model/walk.ts";
 import { jsonFromY } from "./encode.ts";
-import { addAsset, assertWritable, slotsOf, type OpOptions } from "./ops.ts";
-import { META_KEYS, ORIGIN, roots } from "./schema.ts";
+import {
+  addAsset,
+  assertWritable,
+  createTransact,
+  makeRoom,
+  slotsOf,
+  type OpOptions,
+} from "./ops.ts";
+import { META_KEYS, ORIGIN, isVersionKey, roots } from "./schema.ts";
 import {
   RECORD_KEYS,
+  foreignRootContent,
+  fromSnapshot,
   marksOf,
   revisionOf,
   toSnapshot,
@@ -50,7 +59,7 @@ import { trackWork } from "./track.ts";
 export interface TidySummary {
   /** Removed elements whose records were deleted. */
   elements: number;
-  /** Removed frames and groups that were emptied and kept as place markers. */
+  /** Removed frames and groups that were emptied and are now place markers. */
   containers: number;
   stops: number;
   routes: number;
@@ -123,19 +132,49 @@ function clearMap(value: unknown): void {
   if (value instanceof Y.Map) for (const key of [...value.keys()]) value.delete(key);
 }
 
+/** Deletes everything a root type holds that the format has no place for. */
+function clearForeign(
+  tr: Y.Transaction,
+  type: Y.AbstractType<unknown>,
+  what: "all" | "list",
+): void {
+  for (let item = type._start; item !== null; item = item.right) {
+    if (!item.deleted) item.delete(tr);
+  }
+  if (what === "list") return;
+  for (const item of type._map.values()) if (!item.deleted) item.delete(tr);
+}
+
+/** The shared types directly in a root type, whatever kind of type it is. */
+function typesIn(type: Y.AbstractType<unknown>): unknown[] {
+  const out: unknown[] = [];
+  const take = (item: Y.Item | null) => {
+    if (item && !item.deleted && item.content instanceof Y.ContentType)
+      out.push(item.content.type);
+  };
+  for (let item = type._start; item !== null; item = item.right) take(item);
+  for (const item of type._map.values()) take(item);
+  return out;
+}
+
 /**
  * Tidy up (section 5.8): permanently removes what the user no longer sees. What
- * the user sees does not change, and nothing that is kept is rewritten, so the
- * purge conflicts with no edit made elsewhere.
+ * the user sees does not change, and no value that is kept is rewritten
+ * (positions, parents, order keys, sizes, content), so the purge conflicts with
+ * no edit made elsewhere.
  *
  * - Removed elements are deleted, except frames and groups: those are emptied
- *   (name, data, ext, references and marks cleared) and stay as dissolved place
- *   markers, so that work done offline inside them still lands in the right
- *   place when it merges.
+ *   (name, data, ext, references and lock cleared) and stay as place markers
+ *   (`purged`), gone for good, so that work done offline inside them still
+ *   lands in the right place when it merges.
  * - Removed stops and routes are deleted, with route entries and visibility
  *   entries that point at deleted records.
- * - Delete marks that are no longer in effect, asset descriptions nothing refers
- *   to, and records and keys this version does not define are deleted.
+ * - Asset descriptions nothing refers to, and everything this version of the
+ *   format does not define (records, keys, the content of unknown root types),
+ *   are deleted.
+ * - Delete marks stay, without their entries for the records deleted here: a
+ *   mark that hides nothing now may be waiting for work it lists that has not
+ *   arrived yet. The work tracker removes a mark when it can never apply again.
  *
  * It cannot be undone, and edits that offline copies made to purged records are
  * lost when they merge, which is why it only runs on request.
@@ -172,6 +211,10 @@ export function tidyUp(doc: Y.Doc): TidySummary {
   for (const [id, record] of r.stops.entries()) stopFates.set(id, removed(id, record));
   const routeFates = new Map<string, Fate>();
   for (const [id, record] of r.routes.entries()) routeFates.set(id, removed(id, record));
+  const foreign = [...doc.share].flatMap(([name, type]) => {
+    const what = foreignRootContent(name, type as Y.AbstractType<unknown>);
+    return what === null ? [] : [{ type: type as Y.AbstractType<unknown>, what }];
+  });
 
   // What is about to be deleted is emptied first where it is nested too deep.
   const doomed = (
@@ -195,8 +238,28 @@ export function tidyUp(doc: Y.Doc): TidySummary {
   doomed(r.elements as Y.Map<unknown>, fates, RECORD_KEYS.elements);
   doomed(r.stops as Y.Map<unknown>, stopFates, RECORD_KEYS.stops);
   doomed(r.routes as Y.Map<unknown>, routeFates, RECORD_KEYS.routes);
+  for (const { type } of foreign) for (const inner of typesIn(type)) emptyDeep(doc, inner);
 
-  doc.transact(() => {
+  /** Takes the entries for records deleted here out of the marks that stay. */
+  const trimMarks = (record: Y.Map<unknown>, gone: Map<string, Fate>) => {
+    const marks = record.get("deleted");
+    if (!(marks instanceof Y.Map)) return;
+    for (const mark of (marks as Y.Map<unknown>).values()) {
+      if (!(mark instanceof Y.Map)) continue;
+      const seen = (mark as Y.Map<unknown>).get("seen");
+      if (typeof seen !== "object" || seen === null) continue;
+      const kept: Record<string, unknown> = {};
+      let dropped = false;
+      for (const id of Object.keys(seen)) {
+        const fate = gone.get(id);
+        if (fate === "delete" || fate === "junk") dropped = true;
+        else setOwn(kept, id, (seen as Record<string, unknown>)[id]);
+      }
+      if (dropped) (mark as Y.Map<unknown>).set("seen", kept);
+    }
+  };
+
+  doc.transact((tr) => {
     for (const [id, fate] of fates) {
       const record = r.elements.get(id) as Y.Map<unknown>;
       if (fate === "junk" || fate === "delete") {
@@ -206,15 +269,15 @@ export function tidyUp(doc: Y.Doc): TidySummary {
         continue;
       }
       summary.other += dropUnknownKeys(record, RECORD_KEYS.elements);
-      // A visible element has no delete in effect; a marker is gone for good.
-      clearMap(record.get("deleted"));
+      trimMarks(record, fates);
       if (fate === "marker") {
-        summary.containers++;
-        if (record.get("dissolved") !== true) record.set("dissolved", true);
+        if (record.get("purged") !== true) {
+          record.set("purged", true);
+          summary.containers++;
+        }
         if (record.get("name") !== "") record.set("name", "");
         if (record.get("locked") !== false) record.set("locked", false);
-        const refs = record.get("refs");
-        if (!Array.isArray(refs) || refs.length > 0) record.set("refs", []);
+        clearMap(record.get("refs"));
         clearMap(record.get("data"));
         clearMap(record.get("ext"));
       }
@@ -228,7 +291,6 @@ export function tidyUp(doc: Y.Doc): TidySummary {
       }
       const record = r.stops.get(id) as Y.Map<unknown>;
       summary.other += dropUnknownKeys(record, RECORD_KEYS.stops);
-      clearMap(record.get("deleted"));
       const visibility = record.get("visibility");
       if (visibility instanceof Y.Map) {
         for (const element of [...visibility.keys()]) {
@@ -245,7 +307,6 @@ export function tidyUp(doc: Y.Doc): TidySummary {
       }
       const record = r.routes.get(id) as Y.Map<unknown>;
       summary.other += dropUnknownKeys(record, RECORD_KEYS.routes);
-      clearMap(record.get("deleted"));
       const entries = record.get("entries");
       if (entries instanceof Y.Map) {
         const quiet = new Problems(0);
@@ -257,7 +318,15 @@ export function tidyUp(doc: Y.Doc): TidySummary {
         }
       }
     }
-    summary.other += dropUnknownKeys(r.meta, META_KEYS);
+    for (const key of [...r.meta.keys()]) {
+      if ((META_KEYS as readonly string[]).includes(key) || isVersionKey(key)) continue;
+      r.meta.delete(key);
+      summary.other++;
+    }
+    for (const { type, what } of foreign) {
+      clearForeign(tr, type, what);
+      summary.other++;
+    }
     const used = referencedAssets(toSnapshot(doc));
     const quiet = new Problems(0);
     for (const [id, info] of [...r.assets.entries()]) {
@@ -280,7 +349,8 @@ export interface PasteResult {
   assets: AssetId[];
 }
 
-const NO_REVISION: Revision = {};
+/** The digest of the revision of a record that was just created. */
+const NEW = "";
 
 /**
  * Pastes a fragment with new ids (section 3.5). Roots go into `parent` (default:
@@ -303,6 +373,7 @@ export function pasteFragment(
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
     throw new InvalidDocumentError("offset", ["offset: must be finite numbers"]);
   }
+  makeRoom(doc, parent);
   const r0 = roots(doc);
   const ids = new Map<string, string>();
   for (const id of [
@@ -352,15 +423,14 @@ export function pasteFragment(
       rev: {},
       deleted: {},
       dissolved: false,
-      refs: element.refs.map((ref) => ids.get(ref) ?? ref),
+      purged: false,
+      refs: [...new Set(element.refs.map((ref) => ids.get(ref) ?? ref))].sort(),
       ext: remapStrings(element.ext, own),
       data: remapStrings(element.data, own),
     };
     if (index !== undefined) {
-      const seen: { [id: string]: Revision } = {};
-      for (const member of inside.get(oldId) ?? [oldId]) {
-        setOwn(seen, ids.get(member)!, NO_REVISION);
-      }
+      const seen: { [id: string]: string } = {};
+      for (const member of inside.get(oldId) ?? [oldId]) setOwn(seen, ids.get(member)!, NEW);
       const action = newId(options?.randomBytes);
       actions.set(`elements ${id}`, action);
       next.deleted = { [action]: { seen } };
@@ -370,12 +440,18 @@ export function pasteFragment(
   const selfMark = (kind: string, id: string) => {
     const action = newId(options?.randomBytes);
     actions.set(`${kind} ${id}`, action);
-    return { [action]: { seen: { [id]: NO_REVISION } } };
+    return { [action]: { seen: { [id]: NEW } } };
   };
   const stops: [StopId, Stop][] = [];
   for (const [oldId, stop] of Object.entries(fragment.stops)) {
     const id = ids.get(oldId)!;
     let view = stop.view;
+    // A frame stop whose frame is not pasted, and was gone where it was copied,
+    // shows the same place as a rectangle.
+    const fallback = Object.hasOwn(fragment.fallbackViews, oldId)
+      ? fragment.fallbackViews[oldId]
+      : undefined;
+    if (view.kind === "frame" && !ids.has(view.frame) && fallback) view = fallback;
     if (view.kind === "frame") view = { ...view, frame: mapId(view.frame)! };
     else if (view.space === null)
       view = { ...view, space: parent, x: view.x + dx, y: view.y + dy };
@@ -434,7 +510,7 @@ export function pasteFragment(
 
   for (const [id, info] of Object.entries(fragment.assets))
     addAsset(doc, id as AssetId, info);
-  doc.transact(() => {
+  createTransact(doc, () => {
     for (const [id, element] of elements) {
       const map = new Y.Map<unknown>();
       r0.elements.set(id, map);
@@ -450,7 +526,7 @@ export function pasteFragment(
       r0.routes.set(id, map);
       writeRoute(map, route);
     }
-  }, ORIGIN.create);
+  });
   doc.transact(() => {
     const restore = (kind: "elements" | "stops" | "routes", id: string) => {
       const action = actions.get(`${kind} ${id}`);
@@ -492,4 +568,23 @@ export function importCopy(
     liveRoutes(snapshot),
   );
   return pasteFragment(doc, fragment, target, options);
+}
+
+/**
+ * A new document with the content of another: a new document id and a new
+ * lineage, so the two are separate presentations from then on and never merge
+ * ("save as a copy"). With `purge`, removed content is left behind.
+ */
+export function independentCopy(
+  source: Y.Doc | DocumentSnapshot,
+  options: OpOptions & { purge?: boolean } = {},
+): Y.Doc {
+  let snapshot = source instanceof Y.Doc ? toSnapshot(source) : readSnapshot(source).snapshot;
+  if (!snapshot) throw new InvalidDocumentError("document", ["must be an object"]);
+  if (options.purge) snapshot = purgeSnapshot(snapshot);
+  return fromSnapshot(
+    { ...snapshot, id: newId(options.randomBytes) },
+    new Y.Doc(),
+    options.randomBytes,
+  );
 }

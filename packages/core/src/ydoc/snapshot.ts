@@ -14,8 +14,9 @@ import {
   InvalidDocumentError,
   Problems,
   envelopeField,
-  readDeleteMarks,
+  isPlainObject,
   readRevision,
+  readSeen,
   readSnapshot,
 } from "../model/grammar.ts";
 import { newId, type RandomBytes } from "../model/ids.ts";
@@ -24,6 +25,7 @@ import {
   FRAME_TYPE,
   GROUP_TYPE,
   type AssetId,
+  type DeleteMark,
   type DeleteMarks,
   type DocumentSnapshot,
   type Element,
@@ -43,7 +45,9 @@ import {
   ROOT_NAMES,
   ROUTE_KEYS,
   STOP_KEYS,
+  isVersionKey,
   roots,
+  versionsOf,
 } from "./schema.ts";
 
 type Raw = Record<string, unknown>;
@@ -90,14 +94,40 @@ function rawMarks(value: unknown): unknown {
 
 const QUIET = new Problems(0);
 
+/** A record's `refs` as stored: a set of ids. */
+function rawRefs(value: unknown): unknown {
+  if (!(value instanceof Y.Map)) return jsonFromY(value);
+  return [...(value as Y.Map<unknown>).keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 /** The current revision of a record map. */
 export function revisionOf(record: Y.Map<unknown>): Revision {
   return readRevision(rawRevision(record.get("rev")), QUIET);
 }
 
-/** The delete marks of a record map. */
+/**
+ * What marks list, read once per stored value. A mark's `seen` is one stored
+ * object that is replaced as a whole, so the reading of it can be kept for as
+ * long as that object is: resolving a document after every local transaction
+ * then costs nothing for the marks that are there, however much they list.
+ */
+const SEEN = new WeakMap<object, DeleteMark["seen"]>();
+const NO_MARKS: DeleteMarks = Object.freeze({}) as DeleteMarks;
+
+/** The delete marks of a record map, as the grammar reads them. */
 export function marksOf(record: Y.Map<unknown>): DeleteMarks {
-  return readDeleteMarks(rawMarks(record.get("deleted")), QUIET);
+  const marks = record.get("deleted");
+  if (!(marks instanceof Y.Map) || marks.size === 0) return NO_MARKS;
+  const out: DeleteMarks = {};
+  for (const [action, mark] of (marks as Y.Map<unknown>).entries()) {
+    if (!ID_PATTERN.test(action) || !(mark instanceof Y.Map)) continue;
+    const stored = (mark as Y.Map<unknown>).get("seen");
+    if (!isPlainObject(stored)) continue;
+    let seen = SEEN.get(stored);
+    if (!seen) SEEN.set(stored, (seen = readSeen(jsonFromY(stored) as Raw, QUIET)));
+    out[action] = { seen };
+  }
+  return out;
 }
 
 function revisionToY(rev: Revision): Y.Map<unknown> {
@@ -111,7 +141,7 @@ function revisionToY(rev: Revision): Y.Map<unknown> {
 }
 
 /** A delete mark as it is stored: a map, so that undo keeps it while it is refreshed. */
-export function markToY(seen: { [id: string]: Revision }): Y.Map<unknown> {
+export function markToY(seen: DeleteMark["seen"]): Y.Map<unknown> {
   const mark = new Y.Map<unknown>();
   mark.set("seen", cloneJson(seen));
   return mark;
@@ -148,6 +178,7 @@ function rawJsonMap(value: unknown): unknown {
 const ELEMENT_SPECIAL: { [key: string]: (value: unknown) => unknown } = {
   rev: rawRevision,
   deleted: rawMarks,
+  refs: rawRefs,
   ext: rawSlots,
   data: rawSlots,
 };
@@ -197,6 +228,7 @@ class LiveEnvelope implements ElementEnvelope {
   private _rev: Revision | Unread = UNREAD;
   private _deleted: DeleteMarks | Unread = UNREAD;
   private _dissolved: boolean | Unread = UNREAD;
+  private _purged: boolean | Unread = UNREAD;
   private _size: Size | undefined | Unread = UNREAD;
   private _rot: number | undefined | Unread = UNREAD;
 
@@ -243,7 +275,7 @@ class LiveEnvelope implements ElementEnvelope {
 
   get deleted(): DeleteMarks {
     if (this._deleted === UNREAD)
-      this._deleted = envelopeField.deleted(rawMarks(this.map.get("deleted")), QUIET);
+      this._deleted = marksOf(this.map);
     return this._deleted;
   }
 
@@ -256,6 +288,13 @@ class LiveEnvelope implements ElementEnvelope {
       );
     }
     return this._dissolved;
+  }
+
+  get purged(): boolean {
+    if (this._purged === UNREAD) {
+      this._purged = envelopeField.purged(this.map.get("purged"), this.type, QUIET);
+    }
+    return this._purged;
   }
 
   get size(): Size | undefined {
@@ -319,9 +358,18 @@ function rawSnapshot(doc: Y.Doc): Raw {
   for (const [key, value] of r.settings.entries()) put(settings, key, jsonFromY(value));
   const assets: Raw = {};
   for (const [id, info] of r.assets.entries()) put(assets, id, jsonFromY(info));
+  // The versions in effect; a base value that is not a version is passed on as
+  // it is, so that the grammar reports it.
+  const versions = versionsOf(doc);
+  const version = (key: "schemaVersion" | "minReaderVersion"): unknown => {
+    const base = r.meta.get(key);
+    return Number.isSafeInteger(base) && (base as number) >= 1
+      ? versions[key]
+      : jsonFromY(base);
+  };
   return {
-    schemaVersion: jsonFromY(r.meta.get("schemaVersion")),
-    minReaderVersion: jsonFromY(r.meta.get("minReaderVersion")),
+    schemaVersion: version("schemaVersion"),
+    minReaderVersion: version("minReaderVersion"),
     id: jsonFromY(r.meta.get("id")),
     title: jsonFromY(r.meta.get("title")),
     settings,
@@ -341,6 +389,25 @@ export interface Inspection {
    * for a document that only the reference operations wrote.
    */
   problems: string[];
+}
+
+/**
+ * What a root type holds that the format has no place for: "all" of it if the
+ * root is not one of the six, its "list" content if it is (they are maps), or
+ * null. A root that has been emptied counts as holding nothing.
+ */
+export function foreignRootContent(
+  name: string,
+  type: Y.AbstractType<unknown>,
+): "all" | "list" | null {
+  let list = false;
+  for (let item = type._start; item !== null; item = item.right) {
+    if (!item.deleted) list = true;
+  }
+  if (ROOT_NAMES.includes(name)) return list ? "list" : null;
+  if (list) return "all";
+  for (const item of type._map.values()) if (!item.deleted) return "all";
+  return null;
 }
 
 /** True if the document holds nothing at all (a replica that has not synced yet). */
@@ -369,11 +436,12 @@ export function inspectDocument(doc: Y.Doc): Inspection {
   const read = readSnapshot(raw);
   const problems = [...read.problems];
   for (const [name, type] of doc.share) {
-    if (!ROOT_NAMES.includes(name)) problems.push(`root ${name}: unknown root type`);
-    else if (type._start !== null) problems.push(`root ${name}: not a map`);
+    const content = foreignRootContent(name, type as Y.AbstractType<unknown>);
+    if (content === "all") problems.push(`root ${name}: unknown root type`);
+    else if (content === "list") problems.push(`root ${name}: not a map`);
   }
   for (const key of r.meta.keys()) {
-    if (!(META_KEYS as readonly string[]).includes(key))
+    if (!(META_KEYS as readonly string[]).includes(key) && !isVersionKey(key))
       problems.push(`meta.${key}: unknown field`);
   }
   if (doc.store.pendingStructs !== null || doc.store.pendingDs !== null) {
@@ -416,7 +484,10 @@ export function writeElement(map: Y.Map<unknown>, element: Element): void {
   map.set("name", element.name);
   map.set("locked", element.locked);
   map.set("dissolved", element.dissolved);
-  map.set("refs", [...element.refs]);
+  map.set("purged", element.purged);
+  const refs = new Y.Map<unknown>();
+  map.set("refs", refs);
+  for (const ref of element.refs) refs.set(ref, true);
   map.set("rev", revisionToY(element.rev));
   map.set("deleted", marksToY(element.deleted));
   map.set("ext", slotsToY(element.ext));

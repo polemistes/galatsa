@@ -16,6 +16,7 @@
 // unreadable. Sections 3.4 and 9.6 of
 // docs/adr/0001-document-model-and-file-format.md.
 
+import { DIGEST_PATTERN } from "./digest.ts";
 import { DEFAULT_ORDER_KEY, isValidOrderKey } from "./order.ts";
 import {
   FRAME_TYPE,
@@ -28,6 +29,7 @@ import {
   type AssetId,
   type AssetInfo,
   type DataValue,
+  type DeleteMark,
   type DeleteMarks,
   type DocumentSnapshot,
   type Element,
@@ -705,6 +707,18 @@ export function readRevision(raw: unknown, p: Problems): Revision {
   return out;
 }
 
+/** What a delete mark lists: record id -> digest of its revision. */
+export function readSeen(seen: Record<string, unknown>, p: Problems): DeleteMark["seen"] {
+  const read: DeleteMark["seen"] = {};
+  for (const id of Object.keys(seen)) {
+    const digest = seen[id];
+    if (ID_PATTERN.test(id) && typeof digest === "string" && DIGEST_PATTERN.test(digest)) {
+      setOwn(read, id, digest);
+    } else p.at(id, () => p.add("not an id with a revision digest, left out"));
+  }
+  return read;
+}
+
 export function readDeleteMarks(raw: unknown, p: Problems): DeleteMarks {
   const out: DeleteMarks = {};
   if (!isPlainObject(raw)) {
@@ -720,19 +734,7 @@ export function readDeleteMarks(raw: unknown, p: Problems): DeleteMarks {
         return;
       }
       unknownKeys(mark, ["seen"], p);
-      const read: { [id: string]: Revision } = {};
-      for (const id of Object.keys(seen)) {
-        if (!ID_PATTERN.test(id)) {
-          p.at(id, () => p.add("not an id, left out"));
-          continue;
-        }
-        setOwn(
-          read,
-          id,
-          p.at(id, () => readRevision(seen[id], p)),
-        );
-      }
-      setOwn(out, action, { seen: read });
+      setOwn(out, action, { seen: readSeen(seen, p) });
     });
   }
   return out;
@@ -792,17 +794,26 @@ function readSize(raw: unknown, p: Problems): Size {
   return { w: readNumber(raw, "w", 0, p, 0), h: readNumber(raw, "h", 0, p, 0) };
 }
 
+/** References are a set of ids, written sorted. */
 function readRefs(raw: unknown, p: Problems): string[] {
   if (!Array.isArray(raw)) {
     p.add("must be an array, read as empty");
     return [];
   }
   const out: string[] = [];
+  let canonical = true;
   for (const ref of raw) {
-    if (isId(ref)) out.push(ref);
-    else p.add("an entry is not an id, left out");
+    if (!isId(ref)) {
+      p.add("an entry is not an id, left out");
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (last !== undefined && !(last < ref)) canonical = false;
+    out.push(ref);
   }
-  return out;
+  if (canonical) return out;
+  p.add("not a sorted set, read as one");
+  return [...new Set(out)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** The envelope of an element: every key except `ext` and `data`. */
@@ -825,6 +836,7 @@ const ENVELOPE_KEYS = [
   "rev",
   "deleted",
   "dissolved",
+  "purged",
   "refs",
 ];
 
@@ -885,6 +897,13 @@ export const envelopeField = {
       return fail(p, "only frames and groups can be dissolved", false);
     return value;
   },
+  /** A place marker left by tidy up; only frames and groups can be one. */
+  purged: (value: unknown, type: string, p: Problems): boolean => {
+    if (typeof value !== "boolean") return fail(p, "must be a boolean, read as false", false);
+    if (value && !isContainerType(type))
+      return fail(p, "only frames and groups can be place markers", false);
+    return value;
+  },
   refs: readRefs,
   size: readSize,
   rot: (value: unknown, p: Problems): number =>
@@ -924,6 +943,7 @@ export function readEnvelope(raw: unknown, p: Problems): ElementFields | null {
     rev: at("rev", f.rev),
     deleted: at("deleted", f.deleted),
     dissolved: at("dissolved", (value) => f.dissolved(value, type, p)),
+    purged: at("purged", (value) => f.purged(value, type, p)),
     refs: at("refs", f.refs),
   };
   if (type !== GROUP_TYPE) fields.size = at("size", f.size);

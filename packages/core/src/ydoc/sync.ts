@@ -7,7 +7,7 @@
 
 import * as Y from "yjs";
 import { SCHEMA_VERSION } from "../model/types.ts";
-import { NewerVersionError, roots } from "./schema.ts";
+import { NewerVersionError, roots, versionsOf } from "./schema.ts";
 import { isBlank, lineageOf } from "./snapshot.ts";
 import { trackWork } from "./track.ts";
 
@@ -34,12 +34,9 @@ export interface SyncHello {
   blank: boolean;
 }
 
-/** The format version a document needs its readers to have. */
+/** The format version a document needs its readers to have (section 9.4). */
 export function neededVersion(doc: Y.Doc): number {
-  const needed = roots(doc).meta.get("minReaderVersion");
-  return typeof needed === "number" && Number.isInteger(needed) && needed >= 1
-    ? needed
-    : 1;
+  return versionsOf(doc).minReaderVersion;
 }
 
 export function syncHello(doc: Y.Doc): SyncHello {

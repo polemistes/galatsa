@@ -38,7 +38,11 @@ import {
   type Element,
   type Stop,
 } from "./types.ts";
+import { revisionDigest, revisionText, sha256Ascii } from "./digest.ts";
 import { MAX_DEPTH, nestingDepth, readSnapshot, validateSnapshot } from "./grammar.ts";
+
+/** The digest of the revision that `el` and `stop` give their records. */
+const W1 = revisionDigest({ w: 1 });
 
 function seeded(seed: number): () => number {
   let s = seed;
@@ -61,6 +65,7 @@ function el(partial: Record<string, unknown>): Element {
     rev: { w: 1 },
     deleted: {},
     dissolved: false,
+    purged: false,
     refs: [],
     ext: {},
     data: {},
@@ -216,13 +221,7 @@ describe("resolution", () => {
         order: "a4",
         deleted: {
           k: {
-            seen: {
-              D: { w: 1 },
-              d1: { w: 1 },
-              d3: { w: 1 },
-              sub: { w: 1 },
-              s1: { w: 1 },
-            },
+            seen: { D: W1, d1: W1, d3: W1, sub: W1, s1: W1 },
           },
         },
       }),
@@ -272,7 +271,7 @@ describe("resolution", () => {
   });
 
   it("a delete stops applying when the deleted element itself was worked on", () => {
-    const seen = { D: { w: 1 }, d1: { w: 1 } };
+    const seen = { D: W1, d1: W1 };
     const make = (rev: Record<string, number>, dissolved: boolean) =>
       new Resolver(
         lookupFromRecord({
@@ -285,6 +284,38 @@ describe("resolution", () => {
     expect(make({ w: 1, v: 64 }, true).isDeleted("d1")).toBe(false);
     // Dissolved knowingly, after the delete: still deleted.
     expect(make({ w: 1 }, true).isDeleted("d1")).toBe(true);
+  });
+
+  it("a place marker is gone for good, whatever else its record says", () => {
+    const r = new Resolver(
+      lookupFromRecord({
+        F: el({ type: FRAME_TYPE, purged: true, dissolved: false }),
+        x: el({ parent: "F" }),
+      }),
+    );
+    expect(r.isGone("F")).toBe(true);
+    expect(r.drawOrder()).toEqual(["x"]);
+    expect(r.logicalParentOf("x")).toBe(null);
+  });
+
+  it("the digest of a revision is fixed by the format", () => {
+    const hex = (bytes: Uint8Array) =>
+      [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+    // SHA-256 test vectors (FIPS 180-2).
+    expect(hex(sha256Ascii("abc"))).toBe(
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
+    expect(hex(sha256Ascii("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))).toBe(
+      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+    );
+    expect(hex(sha256Ascii(""))).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
+    expect(revisionText({ "b.0": 3, "a.1": 64 })).toBe("a.1=64\nb.0=3");
+    expect(revisionDigest({})).toBe("");
+    expect(revisionDigest({ "abc.0": 7 })).toBe("kHrilVv4WhFPXweb");
+    expect(revisionDigest({ "b.0": 3, "a.1": 64 })).toBe(revisionDigest({ "a.1": 64, "b.0": 3 }));
+    expect(revisionDigest({ "a.1": 64 })).not.toBe(revisionDigest({ "a.1": 63 }));
   });
 
   it("resolves very deep trees without overflowing the stack", () => {
@@ -309,7 +340,7 @@ describe("resolution", () => {
       c: el({
         parent: "Gr",
         pos: { x: 500, y: 500, space: "Gr" },
-        deleted: { k: { seen: { c: { w: 1 } } } },
+        deleted: { k: { seen: { c: W1 } } },
       }),
       Empty: el({ type: GROUP_TYPE }),
     };
@@ -340,9 +371,9 @@ describe("routes and visibility", () => {
       s2: stop({ visibility: { title: { action: "hide" } } }),
       s3: stop({ visibility: { chart: { action: "show" } } }),
       s4: stop({ visibility: { chart: { action: "hide" } } }),
-      gone: stop({ deleted: { k: { seen: { gone: { w: 1 } } } } }),
+      gone: stop({ deleted: { k: { seen: { gone: W1 } } } }),
       // Removed, but worked on concurrently: the removal does not apply.
-      kept: stop({ rev: { w: 1, v: 2 }, deleted: { k: { seen: { kept: { w: 1 } } } } }),
+      kept: stop({ rev: { w: 1, v: 2 }, deleted: { k: { seen: { kept: W1 } } } }),
     },
     routes: {
       full: {
@@ -373,7 +404,7 @@ describe("routes and visibility", () => {
         name: "",
         order: "Zz",
         rev: {},
-        deleted: { k: { seen: { old: {} } } },
+        deleted: { k: { seen: { old: "" } } },
         ext: {},
         entries: {},
       },
@@ -561,7 +592,13 @@ describe("validation", () => {
     a.size = { w: -5, h: "x" };
     a.typeVersion = 0;
     a.rev = { ok: 3, "bad key": 1, zero: 0 };
-    a.deleted = { k: { seen: { a: { ok: 3 }, "bad id": {} } }, "bad action": {}, j: 5 };
+    a.deleted = {
+      k: { seen: { a: W1, "bad id": "", b: "not a digest", c: { w: 1 } } },
+      "bad action": {},
+      j: 5,
+    };
+    a.refs = ["z", "a", "z", "not an id!"];
+    a.purged = true;
     a.rebase = { to: null, base: null, shifts: "many" };
     const data = a.data as Record<string, unknown>;
     data.future = { $y: "hologram", depth: 3 };
@@ -600,7 +637,9 @@ describe("validation", () => {
       size: { w: 0, h: 0 },
       typeVersion: 1,
       rev: { ok: 3 },
-      deleted: { k: { seen: { a: { ok: 3 } } } },
+      deleted: { k: { seen: { a: W1 } } },
+      refs: ["a", "z"],
+      purged: false,
       rebase: null,
     });
     const read = snapshot.elements.a!.data;

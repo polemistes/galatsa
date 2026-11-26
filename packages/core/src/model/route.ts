@@ -6,10 +6,10 @@
 
 import { compareOrdered } from "./order.ts";
 import type { Point, Resolver } from "./resolve.ts";
+import { revisionDigest } from "./digest.ts";
 import {
   FRAME_TYPE,
   GROUP_TYPE,
-  sameRevision,
   type DeleteMarks,
   type DocumentSnapshot,
   type ElementId,
@@ -38,9 +38,12 @@ export function isRemoved(
   id: string,
   record: { readonly rev: Revision; readonly deleted: DeleteMarks },
 ): boolean {
+  let digest: string | undefined;
   for (const action of Object.keys(record.deleted)) {
     const seen = record.deleted[action]!.seen;
-    if (Object.hasOwn(seen, id) && sameRevision(seen[id], record.rev)) return true;
+    if (!Object.hasOwn(seen, id)) continue;
+    digest ??= revisionDigest(record.rev);
+    if (seen[id] === digest) return true;
   }
   return false;
 }

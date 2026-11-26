@@ -44,6 +44,18 @@ const JITTER_DIGITS = 3;
 export const DEFAULT_ORDER_KEY = "a0";
 /** Longest key accepted. Keys grow by about one character per six insertions at one spot. */
 export const MAX_ORDER_KEY_LENGTH = 1024;
+/**
+ * Length from which the keys of a list are worth renewing before another one is
+ * generated among them (`needsRebalance`). Far below the longest key accepted,
+ * so that a generated key is always valid.
+ */
+export const LONG_ORDER_KEY_LENGTH = 128;
+
+/** True if some key in the list is long enough that the list should be re-keyed. */
+export function needsRebalance(items: Iterable<Ordered>): boolean {
+  for (const item of items) if (item.order.length >= LONG_ORDER_KEY_LENGTH) return true;
+  return false;
+}
 
 /**
  * True for keys in the format's syntax (section 4.1): a head letter giving the
@@ -91,9 +103,10 @@ function withJitter(
 
 /**
  * A key that sorts strictly between `low` and `high` (null means open end).
- * Never throws: bounds that are not valid keys (possible only in state written by
- * a faulty peer; files are validated) are treated as open ends. If the bounds are
- * equal or reversed, the new key goes just after `low` (section 4.3).
+ * Bounds that are not valid keys (possible only in state written by a faulty
+ * peer) are treated as open ends. If the bounds are equal or reversed, the new
+ * key goes just after `low` (section 4.3). The result is always a valid key; if
+ * the bounds leave no room for one within the length limit, it throws.
  */
 export function keyBetween(
   low: OrderKey | null,
@@ -103,7 +116,13 @@ export function keyBetween(
   if (low !== null && !isValidOrderKey(low)) low = null;
   if (high !== null && !isValidOrderKey(high)) high = null;
   if (low !== null && high !== null && compareCodeUnits(low, high) >= 0) high = null;
-  return withJitter(generateKeyBetween(low, high), low, high, random);
+  const key = withJitter(generateKeyBetween(low, high), low, high, random);
+  // Never hand out a key the grammar would not accept. Callers re-key a list
+  // long before this (needsRebalance), so this is not reached through them.
+  if (!isValidOrderKey(key)) {
+    throw new RangeError("No room for another order key here: the list must be re-keyed");
+  }
+  return key;
 }
 
 /** `n` increasing keys strictly between `low` and `high` (no jitter). Never throws. */

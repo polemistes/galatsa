@@ -6,7 +6,7 @@
 
 import { keysBetween } from "./order.ts";
 import { Resolver, lookupFromRecord } from "./resolve.ts";
-import { isRemoved } from "./route.ts";
+import { isRemoved, stopRegion } from "./route.ts";
 import {
   setOwn,
   type AssetId,
@@ -14,6 +14,7 @@ import {
   type DocumentSnapshot,
   type Element,
   type ElementId,
+  type RectView,
   type Route,
   type RouteId,
   type Stop,
@@ -36,6 +37,11 @@ export interface Fragment {
   stops: { [id: StopId]: Stop };
   /** Routes, with all their entries (also those whose stop is not in the fragment). */
   routes: { [id: RouteId]: Route };
+  /**
+   * For frame stops whose frame is not in the fragment and was gone where the
+   * fragment was copied: the rectangle the stop showed, in the roots' space.
+   */
+  fallbackViews: { [id: StopId]: RectView };
   /** Descriptions of the assets the fragment refers to; the bytes travel separately. */
   assets: { [id: AssetId]: AssetInfo };
 }
@@ -85,6 +91,7 @@ export function copyFragment(
       rev: {},
       deleted: {},
       dissolved: false,
+      purged: false,
     });
     const children = r.logicalChildren(id);
     const keys = keysBetween(null, null, children.length);
@@ -92,11 +99,31 @@ export function copyFragment(
   }
 
   const stops: { [id: StopId]: Stop } = {};
+  const fallbackViews: { [id: StopId]: RectView } = {};
   for (const id of stopIds) {
     const stop = Object.hasOwn(snapshot.stops, id) ? snapshot.stops[id] : undefined;
     if (!stop || isRemoved(id, stop)) continue;
     const copy: Stop = { ...structuredJson(stop), rev: {}, deleted: {} };
     const view = copy.view;
+    if (
+      view.kind === "frame" &&
+      !Object.hasOwn(elements, view.frame) &&
+      (!r.get(view.frame) || r.isGone(view.frame))
+    ) {
+      // The stop still shows where the frame was (section 6.2); a copy must too.
+      const region = stopRegion(snapshot, r, id);
+      if (region) {
+        const d = r.offset(region.space, space);
+        setOwn(fallbackViews, id, {
+          kind: "rect",
+          space: null,
+          x: region.rect.x + d.x,
+          y: region.rect.y + d.y,
+          w: region.rect.w,
+          h: region.rect.h,
+        });
+      }
+    }
     if (
       view.kind === "rect" &&
       !(view.space !== null && Object.hasOwn(elements, view.space))
@@ -115,7 +142,7 @@ export function copyFragment(
       setOwn(routes, id, { ...structuredJson(route), rev: {}, deleted: {} });
   }
 
-  const fragment: Fragment = { elements, roots, stops, routes, assets: {} };
+  const fragment: Fragment = { elements, roots, stops, routes, fallbackViews, assets: {} };
   const used = referencedAssets({
     ...snapshot,
     elements,

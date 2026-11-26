@@ -41,9 +41,12 @@ import {
   wellFormed,
 } from "../model/grammar.ts";
 import { newId, type RandomBytes } from "../model/ids.ts";
+import { revisionDigest } from "../model/digest.ts";
 import {
   compareOrdered,
   keyAt,
+  keysBetween,
+  needsRebalance,
   sortOrdered,
   type Ordered,
   type RandomSource,
@@ -73,7 +76,13 @@ import {
   type TextRun,
 } from "../model/types.ts";
 import { cloneJson, valueToY } from "./encode.ts";
-import { NewerVersionError, ORIGIN, roots } from "./schema.ts";
+import {
+  INTERNAL_ORIGINS,
+  NewerVersionError,
+  ORIGIN,
+  roots,
+  versionsOf,
+} from "./schema.ts";
 import {
   marksOf,
   markToY,
@@ -83,7 +92,7 @@ import {
   writeStop,
   yLookup,
 } from "./snapshot.ts";
-import { noteWork, trackWork } from "./track.ts";
+import { trackWork } from "./track.ts";
 
 /** Options shared by all operations. */
 export interface OpOptions {
@@ -95,12 +104,21 @@ export interface OpOptions {
   randomBytes?: RandomBytes;
 }
 
-/** Throws if the document needs a newer version of the format than this code reads. */
+/**
+ * Throws if the document must not be written to: it is not a document yet (a
+ * replica that has not been initialized and has not synced, which would get
+ * content without merge identity and could then never sync), or it needs a
+ * newer version of the format than this code reads.
+ */
 export function assertWritable(doc: Y.Doc): void {
-  const needed = roots(doc).meta.get("minReaderVersion");
-  if (typeof needed === "number" && needed > SCHEMA_VERSION) {
-    throw new NewerVersionError(needed, SCHEMA_VERSION);
+  const lineage = roots(doc).meta.get("lineage");
+  if (typeof lineage !== "string" || lineage === "") {
+    throw new Error(
+      "The document is not initialized and has not synced yet; it cannot be edited",
+    );
   }
+  const needed = versionsOf(doc).minReaderVersion;
+  if (needed > SCHEMA_VERSION) throw new NewerVersionError(needed, SCHEMA_VERSION);
 }
 
 function prepare(doc: Y.Doc, options: OpOptions | undefined): void {
@@ -117,8 +135,47 @@ function transact<T>(doc: Y.Doc, options: OpOptions | undefined, fn: () => T): T
   return result;
 }
 
-function createTransact(doc: Y.Doc, fn: () => void): void {
+/**
+ * Creates records, in a transaction of their own that undo does not track.
+ * Inside somebody else's transaction that cannot be had: the creation would
+ * become part of it, undo would then delete the record for good, and with it
+ * what other users have done inside it meanwhile (section 10). So this refuses.
+ */
+export function createTransact(doc: Y.Doc, fn: () => void): void {
+  const outer = doc._transaction;
+  if (outer !== null && !INTERNAL_ORIGINS.has(outer.origin)) {
+    throw new Error(
+      "Records cannot be created inside another transaction. Call the operation outside doc.transact; to make several operations one undo step, use the undo manager's group().",
+    );
+  }
   doc.transact(fn, ORIGIN.create);
+}
+
+/**
+ * Re-keys a list whose order keys have grown long, before another key is
+ * generated in it (section 4.1): the items keep their order and get short keys.
+ * It runs in a transaction of its own that is neither work nor undoable.
+ */
+function rebalance(
+  doc: Y.Doc,
+  items: readonly Ordered[],
+  write: (id: string, order: string) => void,
+): void {
+  if (!needsRebalance(items)) return;
+  const sorted = sortOrdered(items);
+  const keys = keysBetween(null, null, sorted.length);
+  doc.transact(() => sorted.forEach((item, i) => write(item.id, keys[i]!)), ORIGIN.rebalance);
+}
+
+/** Makes room for another order key among the children of a container. */
+export function makeRoom(doc: Y.Doc, parent: ElementId | null): void {
+  const r = resolver(doc);
+  const elements = roots(doc).elements;
+  rebalance(
+    doc,
+    r.children(parent).map((id) => ({ id, order: r.get(id)?.order ?? "" })),
+    (id, order) => elements.get(id)?.set("order", order),
+  );
 }
 
 function invalid(what: string, message: string): never {
@@ -252,6 +309,7 @@ export function addElement(doc: Y.Doc, init: NewElement, options?: OpOptions): E
   checkId(id, "element id");
   if (roots(doc).elements.has(id)) throw new Error(`Element ${id} exists already`);
   const parent = init.parent ?? null;
+  makeRoom(doc, parent);
   const siblings = slotsOf(resolver(doc), parent);
   const action = newId(options?.randomBytes);
   const raw: Record<string, unknown> = {
@@ -265,9 +323,10 @@ export function addElement(doc: Y.Doc, init: NewElement, options?: OpOptions): E
     locked: init.locked ?? false,
     rev: {},
     // Created removed (the creation itself is the removal that undo restores).
-    deleted: { [action]: { seen: { [id]: {} } } },
+    deleted: { [action]: { seen: { [id]: "" } } },
     dissolved: false,
-    refs: init.refs ?? [],
+    purged: false,
+    refs: [...new Set(init.refs ?? [])].sort(),
     ext: init.ext ?? {},
     data: init.data ?? {},
   };
@@ -360,7 +419,11 @@ export function setLocked(
   setKey(doc, id, "locked", locked === true, options);
 }
 
-/** Sets the ids of elements and stops that the element's data refers to. */
+/**
+ * Sets the ids of elements and stops that the element's data refers to. The
+ * references are a set: only what differs is written, so two users who add
+ * different references at the same time both keep theirs.
+ */
 export function setRefs(
   doc: Y.Doc,
   id: ElementId,
@@ -368,7 +431,15 @@ export function setRefs(
   options?: OpOptions,
 ): void {
   for (const ref of refs) checkId(ref, "reference");
-  setKey(doc, id, "refs", [...refs], options);
+  const wanted = new Set(refs);
+  transact(doc, options, () => {
+    const map = elementMap(doc, id);
+    let stored = map.get("refs");
+    if (!(stored instanceof Y.Map)) map.set("refs", (stored = new Y.Map<unknown>()));
+    const set = stored as Y.Map<unknown>;
+    for (const ref of [...set.keys()]) if (!wanted.has(ref)) set.delete(ref);
+    for (const ref of wanted) if (!set.has(ref)) set.set(ref, true);
+  });
 }
 
 /** Nesting level of a value directly in a data or ext map of a record. */
@@ -487,6 +558,8 @@ export function reparent(
   target: ElementId | null,
   options?: OpOptions & { index?: number },
 ): void {
+  prepare(doc, options);
+  makeRoom(doc, target);
   transact(doc, options, () => {
     const r = resolver(doc);
     checkTarget(r, id, target);
@@ -508,6 +581,8 @@ function restack(
   target: (others: number, current: number, inGone: boolean) => number,
   options?: OpOptions,
 ): void {
+  prepare(doc, options);
+  makeRoom(doc, resolver(doc).logicalParentOf(id));
   transact(doc, options, () => {
     const r = resolver(doc);
     const logical = r.logicalParentOf(id);
@@ -573,6 +648,7 @@ export function group(
   checkId(groupId, "group id");
   if (roots(doc).elements.has(groupId))
     throw new Error(`Element ${groupId} exists already`);
+  makeRoom(doc, resolver(doc).logicalParentOf(ids[0]!));
   const r = resolver(doc);
   const logical = r.logicalParentOf(ids[0]!);
   if (ids.some((id) => r.logicalParentOf(id) !== logical || r.isGone(id))) {
@@ -608,6 +684,7 @@ export function group(
       rev: {},
       deleted: {},
       dissolved: true,
+      purged: false,
       refs: [],
       ext: {},
       data: {},
@@ -707,7 +784,7 @@ export function addStop(
         visibility: {},
         transition: null,
         rev: {},
-        deleted: { [action]: { seen: { [id]: {} } } },
+        deleted: { [action]: { seen: { [id]: "" } } },
         ext: {},
       },
       p,
@@ -801,7 +878,10 @@ export function setVisibility(
 function removeRecord(id: string, map: Y.Map<unknown>, options?: OpOptions): void {
   const rev = revisionOf(map);
   if (isRemoved(id, { rev, deleted: marksOf(map) })) return;
-  marksMap(map).set(newId(options?.randomBytes), markToY({ [id]: rev }));
+  marksMap(map).set(
+    newId(options?.randomBytes),
+    markToY({ [id]: revisionDigest(rev) }),
+  );
 }
 
 /**
@@ -826,13 +906,22 @@ export function addRoute(
   checkId(id, "route id");
   const routes = roots(doc).routes;
   if (routes.has(id)) throw new Error(`Route ${id} exists already`);
-  const siblings: Ordered[] = [];
-  for (const [routeId, map] of routes.entries()) {
-    if (!(map instanceof Y.Map)) continue;
-    if (isRemoved(routeId, { rev: revisionOf(map), deleted: marksOf(map) })) continue;
-    const order = map.get("order");
-    siblings.push({ id: routeId, order: typeof order === "string" ? order : "" });
-  }
+  const all: Ordered[] = [];
+  const list = () => {
+    all.length = 0;
+    for (const [routeId, map] of routes.entries()) {
+      if (!(map instanceof Y.Map)) continue;
+      const order = map.get("order");
+      all.push({ id: routeId, order: typeof order === "string" ? order : "" });
+    }
+  };
+  list();
+  rebalance(doc, all, (routeId, order) => routes.get(routeId)?.set("order", order));
+  list();
+  const siblings = all.filter(({ id: routeId }) => {
+    const map = routes.get(routeId)!;
+    return !isRemoved(routeId, { rev: revisionOf(map), deleted: marksOf(map) });
+  });
   const action = newId(options?.randomBytes);
   const route = checked("route", (p) =>
     readRoute(
@@ -841,7 +930,7 @@ export function addRoute(
         order: keyAt(sortOrdered(siblings), siblings.length, options?.random),
         entries: {},
         rev: {},
-        deleted: { [action]: { seen: { [id]: {} } } },
+        deleted: { [action]: { seen: { [id]: "" } } },
         ext: {},
       },
       p,
@@ -891,10 +980,20 @@ function entryList(entries: Y.Map<unknown>, except?: RouteEntryId): Ordered[] {
   );
 }
 
+/** Re-keys the visits of a route if their order keys have grown long. */
+function makeRoomInRoute(doc: Y.Doc, route: RouteId): void {
+  const entries = entriesMap(routeMap(doc, route));
+  rebalance(doc, entryList(entries), (id, order) => {
+    const entry = entries.get(id);
+    if (typeof entry === "object" && entry !== null) entries.set(id, { ...entry, order });
+  });
+}
+
 /**
  * Adds a visit to `stop` at `index` in the route (default: at the end). This is
  * work on both the route and the stop, so it cancels a concurrent removal of
- * either (section 5.5).
+ * either (section 5.5); the work tracker sees to that, as for every visit that
+ * comes about in any other way.
  */
 export function insertRouteEntry(
   doc: Y.Doc,
@@ -905,6 +1004,8 @@ export function insertRouteEntry(
   const id = options?.id ?? newId(options?.randomBytes);
   checkId(id, "route entry id");
   checkId(stop, "stop id");
+  prepare(doc, options);
+  makeRoomInRoute(doc, route);
   return transact(doc, options, () => {
     const entries = entriesMap(routeMap(doc, route));
     const list = entryList(entries);
@@ -914,8 +1015,6 @@ export function insertRouteEntry(
     };
     if (options?.ext) raw.ext = options.ext;
     entries.set(id, cloneJson(checked("route entry", (p) => readRouteEntry(raw, p))));
-    const stopRecord = roots(doc).stops.get(stop);
-    if (stopRecord instanceof Y.Map) noteWork(doc, stopRecord);
     return id;
   });
 }
@@ -928,6 +1027,8 @@ export function moveRouteEntry(
   index: number,
   options?: OpOptions,
 ): void {
+  prepare(doc, options);
+  makeRoomInRoute(doc, route);
   transact(doc, options, () => {
     const entries = entriesMap(routeMap(doc, route));
     const current = entries.get(entry);
@@ -957,15 +1058,15 @@ export function removeRouteEntry(
 // ---------------------------------------------------------------------------
 
 /**
- * Registers an asset's description. Adding the same asset twice changes nothing.
- * Not undoable: descriptions are immutable and harmless.
+ * Registers an asset's description. Whoever writes a reference to an asset calls
+ * this, also when the description is there already: it is written again, so
+ * that a tidy up made elsewhere at the same time, which found the asset unused
+ * and deleted its description, does not leave the new reference without one (a
+ * concurrent write beats a delete of the same key). Not undoable.
  */
 export function addAsset(doc: Y.Doc, id: AssetId, info: AssetInfo): void {
   if (!ASSET_ID_PATTERN.test(id)) invalid("asset id", "not an asset id");
   const read = checked("asset", (p) => readAsset(info, p));
   assertWritable(doc);
-  doc.transact(() => {
-    const assets = roots(doc).assets;
-    if (!assets.has(id)) assets.set(id, cloneJson(read));
-  }, ORIGIN.create);
+  doc.transact(() => roots(doc).assets.set(id, cloneJson(read)), ORIGIN.create);
 }

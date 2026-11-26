@@ -9,10 +9,10 @@
 
 import { rotatedBounds, unionRect } from "./geometry.ts";
 import { compareOrdered } from "./order.ts";
+import { revisionDigest } from "./digest.ts";
 import {
   FRAME_TYPE,
   GROUP_TYPE,
-  sameRevision,
   type DeleteMarks,
   type Element,
   type ElementId,
@@ -35,6 +35,7 @@ export interface ElementEnvelope {
   readonly rev?: Revision;
   readonly deleted?: DeleteMarks;
   readonly dissolved?: boolean;
+  readonly purged?: boolean;
   readonly size?: Size | undefined;
   readonly rot?: number | undefined;
 }
@@ -102,6 +103,7 @@ export function withoutMarks(
         rev: element.rev ?? NO_REVISION,
         deleted,
         dissolved: element.dissolved === true,
+        purged: element.purged === true,
         size: element.size,
         rot: element.rot,
       };
@@ -126,6 +128,7 @@ export class Resolver {
   readonly #local = new Map<ElementId, Point>();
   readonly #simpleLocal = new Map<ElementId, Point>();
   readonly #deleters = new Map<ElementId, readonly Deleter[]>();
+  readonly #digest = new Map<ElementId, string>();
 
   constructor(lookup: ElementLookup) {
     this.#lookup = lookup;
@@ -291,16 +294,25 @@ export class Resolver {
     return this.#deleters.get(id) ?? NO_DELETERS;
   }
 
+  /** The digest of the element's current revision (what marks list). */
+  digestOf(id: ElementId): string {
+    let digest = this.#digest.get(id);
+    if (digest === undefined) {
+      digest = revisionDigest(this.get(id)?.rev);
+      this.#digest.set(id, digest);
+    }
+    return digest;
+  }
+
   #computeDeleters(id: ElementId): readonly Deleter[] {
     const element = this.get(id);
     if (!element) return NO_DELETERS;
-    const rev = element.rev ?? NO_REVISION;
     let out: Deleter[] | null = null;
     const marks = element.deleted;
     if (marks) {
       for (const action of Object.keys(marks)) {
         const seen = marks[action]!.seen;
-        if (Object.hasOwn(seen, id) && sameRevision(seen[id], rev)) {
+        if (Object.hasOwn(seen, id) && seen[id] === this.digestOf(id)) {
           (out ??= []).push({ root: id, action });
         }
       }
@@ -309,7 +321,7 @@ export class Resolver {
     if (parent !== null) {
       for (const deleter of this.#deleters.get(parent) ?? NO_DELETERS) {
         const seen = this.get(deleter.root)?.deleted?.[deleter.action]?.seen;
-        if (seen && Object.hasOwn(seen, id) && sameRevision(seen[id], rev)) {
+        if (seen && Object.hasOwn(seen, id) && seen[id] === this.digestOf(id)) {
           (out ??= []).push(deleter);
         }
       }
@@ -319,15 +331,15 @@ export class Resolver {
 
   /**
    * What a delete of `id` made now lists: the element and everything inside it,
-   * each with its current revision. If the element is already gone, the visible
-   * elements inside it are not part of it for the user (they survived an earlier
-   * removal), so they and what is inside them are left out.
+   * each with the digest of its current revision. If the element is already
+   * gone, the visible elements inside it are not part of it for the user (they
+   * survived an earlier removal), so they and what is inside them are left out.
    */
-  coverage(id: ElementId): { [id: ElementId]: Revision } {
-    const seen: { [id: ElementId]: Revision } = {};
+  coverage(id: ElementId): { [id: ElementId]: string } {
+    const seen: { [id: ElementId]: string } = {};
     const list = (element: ElementId) => {
       Object.defineProperty(seen, element, {
-        value: { ...(this.get(element)?.rev ?? NO_REVISION) },
+        value: this.digestOf(element),
         enumerable: true,
         writable: true,
         configurable: true,
@@ -349,7 +361,7 @@ export class Resolver {
     return this.deleters(id).length > 0;
   }
 
-  /** A container that was ungrouped, removed with "keep contents", or tidied. */
+  /** A container that was ungrouped or removed with "keep contents". */
   isDissolved(id: ElementId): boolean {
     const element = this.get(id);
     return (
@@ -357,13 +369,21 @@ export class Resolver {
     );
   }
 
+  /** A place marker: a removed container that tidy up emptied (section 5.8). */
+  isPurged(id: ElementId): boolean {
+    const element = this.get(id);
+    return (
+      element !== undefined && element.purged === true && isContainerType(element.type)
+    );
+  }
+
   /**
-   * Gone: deleted or dissolved. A gone element is not drawn and cannot be
-   * selected. A gone container is transparent: it keeps its position and its slot
-   * in the z-order for any children that are not gone themselves.
+   * Gone: deleted, dissolved, or a place marker. A gone element is not drawn and
+   * cannot be selected. A gone container is transparent: it keeps its position
+   * and its slot in the z-order for any children that are not gone themselves.
    */
   isGone(id: ElementId): boolean {
-    return this.isDissolved(id) || this.isDeleted(id);
+    return this.isPurged(id) || this.isDissolved(id) || this.isDeleted(id);
   }
 
   /** Nearest effective ancestor that is not gone: the parent the user sees. */

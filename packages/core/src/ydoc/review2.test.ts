@@ -534,7 +534,11 @@ describe("review 2: tidy up leaves place markers", () => {
     expect(after.drawOrder()).toEqual(order);
     expect(order.map((id) => after.worldOrigin(id))).toEqual(places);
     const marker = toSnapshot(d).elements.F!;
-    expect(marker).toMatchObject({ name: "", dissolved: true, data: {}, deleted: {} });
+    expect(marker).toMatchObject({ name: "", purged: true, data: {}, refs: [] });
+    // Its delete mark stays, without the entries for what was purged.
+    expect(Object.values(marker.deleted).map((mark) => Object.keys(mark.seen))).toEqual([
+      ["F"],
+    ]);
     expect(JSON.stringify(toSnapshot(d))).not.toContain("Secret");
     expect(inspectDocument(d).problems).toEqual([]);
   });

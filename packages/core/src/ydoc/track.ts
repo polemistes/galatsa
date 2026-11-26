@@ -13,19 +13,25 @@
 //
 // 1. changes the revision of every record that was worked on, unless the record
 //    is deleted as the local user sees it (work done knowingly on a deleted
-//    thing, such as undoing an old edit, does not bring it back); and
-// 2. rewrites every delete mark the transaction wrote, so that it lists what
+//    thing, such as undoing an old edit, does not bring it back);
+// 2. removes, from each record whose revision it changed, the delete marks that
+//    did not apply: they never can again; and
+// 3. rewrites every delete mark the transaction wrote, so that it lists what
 //    the user sees now. This matters when undo or redo puts an old mark back.
+//
+// Work is: a change of a record's content; taking a delete mark off a record
+// (restoring it); and, for a stop, a new visit to it in a route, however the
+// visit comes about (an operation, an undo or redo, a pasted or restored route).
 //
 // A revision is one counter per writer. A writer's counter is the length of a
 // shared array that only it shortens; shortening creates no new CRDT items, so
 // typing still merges into runs as usual.
 
 import * as Y from "yjs";
+import { revisionDigest } from "../model/digest.ts";
 import { jsonEquals } from "../model/grammar.ts";
 import { defaultRandomBytes, newId, type RandomBytes } from "../model/ids.ts";
 import { Resolver, withoutMarks } from "../model/resolve.ts";
-import { isRemoved } from "../model/route.ts";
 import { INTERNAL_ORIGINS, ORIGIN, roots } from "./schema.ts";
 import { marksOf, revisionOf, yLookup } from "./snapshot.ts";
 
@@ -58,23 +64,22 @@ interface Located {
   path: string[];
 }
 
+function kindOf(doc: Y.Doc, parent: unknown): RecordKind | null {
+  const r = roots(doc);
+  if (parent === r.elements) return "elements";
+  if (parent === r.stops) return "stops";
+  return parent === r.routes ? "routes" : null;
+}
+
 /** Finds the record a changed shared type belongs to. */
 function locate(doc: Y.Doc, type: Y.AbstractType<unknown>): Located | null {
-  const r = roots(doc);
   const path: string[] = [];
   let at = type;
   for (;;) {
     const item = at._item;
     if (item === null) return null;
     const parent = item.parent as Y.AbstractType<unknown>;
-    const kind: RecordKind | null =
-      parent === r.elements
-        ? "elements"
-        : parent === r.stops
-          ? "stops"
-          : parent === r.routes
-            ? "routes"
-            : null;
+    const kind = kindOf(doc, parent);
     if (kind !== null) {
       if (item.deleted || item.parentSub === null || !(at instanceof Y.Map)) return null;
       return { kind, id: item.parentSub, record: at as RecordMap, path: path.reverse() };
@@ -84,15 +89,37 @@ function locate(doc: Y.Doc, type: Y.AbstractType<unknown>): Located | null {
   }
 }
 
-function isDeletedNow(view: Resolver, located: Located): boolean {
-  if (located.kind === "elements") return view.isDeleted(located.id);
-  return isRemoved(located.id, {
-    rev: revisionOf(located.record),
-    deleted: marksOf(located.record),
-  });
+/** Locates a record map itself. */
+function locateRecord(doc: Y.Doc, record: RecordMap): Located | null {
+  const item = record._item;
+  if (!item || item.deleted || item.parentSub === null) return null;
+  const kind = kindOf(doc, item.parent);
+  return kind === null ? null : { kind, id: item.parentSub, record, path: [] };
 }
 
-/** Changes this writer's entry in the record's revision. */
+/**
+ * Whether a record is hidden by a delete, the marks in `ignored` aside (those
+ * the transaction at hand wrote itself).
+ */
+function isDeleted(view: Resolver, located: Located, ignored: ReadonlySet<string>): boolean {
+  if (located.kind === "elements") return view.isDeleted(located.id);
+  const marks = marksOf(located.record);
+  let digest: string | undefined;
+  for (const action of Object.keys(marks)) {
+    if (ignored.has(markKey(located, action))) continue;
+    const seen = marks[action]!.seen;
+    if (!Object.hasOwn(seen, located.id)) continue;
+    digest ??= revisionDigest(revisionOf(located.record));
+    if (seen[located.id] === digest) return true;
+  }
+  return false;
+}
+
+/**
+ * Changes this writer's entry in the record's revision. The entry is a counter
+ * that only goes down, under a key that is never used twice, so a revision never
+ * repeats.
+ */
 function bump(tracker: Tracker, record: RecordMap): void {
   let rev = record.get("rev");
   if (!(rev instanceof Y.Map)) {
@@ -118,14 +145,44 @@ function bump(tracker: Tracker, record: RecordMap): void {
   }
 }
 
+interface Work {
+  located: Located;
+  force: boolean;
+}
+
+function markKey(located: Located, action: string): string {
+  return `${located.kind} ${located.id} ${action}`;
+}
+
 function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void {
   if (!tr.local || INTERNAL_ORIGINS.has(tr.origin)) return;
-  const worked = new Map<RecordMap, { located: Located; force: boolean }>();
-  const marks = new Map<Y.Map<unknown>, { located: Located; action: string }>();
+  const worked = new Map<RecordMap, Work>();
+  const work = (located: Located | null, force = false) => {
+    if (!located) return;
+    const known = worked.get(located.record);
+    if (known) known.force ||= force;
+    else worked.set(located.record, { located, force });
+  };
+  /** Marks this transaction wrote: they are not what hides a record from it. */
+  const written = new Map<Y.Map<unknown>, { located: Located; action: string }>();
+  const ignored = new Set<string>();
+  /** The same, for elements, in the form the resolver takes. */
+  const ignoredElements = new Set<string>();
+  /** Routes that this transaction took a mark off, or whose visits it changed. */
+  const restoredRoutes: Located[] = [];
+  const visited = new Set<string>();
   const noteMark = (located: Located, action: string) => {
     const deleted = located.record.get("deleted");
     const mark = deleted instanceof Y.Map ? (deleted.get(action) as unknown) : undefined;
-    if (mark instanceof Y.Map) marks.set(mark, { located, action });
+    if (mark instanceof Y.Map) {
+      written.set(mark, { located, action });
+      ignored.add(markKey(located, action));
+      if (located.kind === "elements") ignoredElements.add(`${located.id} ${action}`);
+    } else {
+      // The mark is gone: taking a delete back is work on the record.
+      work(located);
+      if (located.kind === "routes") restoredRoutes.push(located);
+    }
   };
   for (const [type, keys] of tr.changed) {
     const located = locate(doc, type as Y.AbstractType<unknown>);
@@ -133,62 +190,77 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
     const [first, second] = located.path;
     if (first === undefined) {
       // The record map itself: every key except the bookkeeping is work.
-      let work = false;
-      for (const key of keys) if (key !== "rev" && key !== "deleted") work = true;
-      if (work && !worked.has(located.record))
-        worked.set(located.record, { located, force: false });
+      for (const key of keys) if (key !== "rev" && key !== "deleted") work(located);
     } else if (first === "rev") continue;
     else if (first === "deleted") {
       if (second === undefined) {
         for (const action of keys) if (action !== null) noteMark(located, action);
       } else noteMark(located, second);
-    } else if (!worked.has(located.record)) {
-      worked.set(located.record, { located, force: false });
+    } else {
+      work(located);
+      if (located.kind === "routes" && first === "entries" && second === undefined) {
+        // A new visit, or a visit pointed at another stop, is work on the stop.
+        const entries = type as unknown as Y.Map<unknown>;
+        const changes = new Y.YMapEvent(entries, tr, keys as Set<string>).changes.keys;
+        for (const [entry, change] of changes) {
+          if (change.action === "delete") continue;
+          const stop = stopOf(entries.get(entry));
+          if (stop !== null && (change.action === "add" || stopOf(change.oldValue) !== stop))
+            visited.add(stop);
+        }
+      }
     }
   }
-  const r = roots(doc);
-  for (const [record, force] of tracker.noted) {
-    const item = record._item;
-    if (!item || item.deleted || item.parentSub === null) continue;
-    const parent = item.parent as Y.AbstractType<unknown>;
-    const kind: RecordKind | null =
-      parent === r.elements
-        ? "elements"
-        : parent === r.stops
-          ? "stops"
-          : parent === r.routes
-            ? "routes"
-            : null;
-    if (kind === null) continue;
-    const located: Located = { kind, id: item.parentSub, record, path: [] };
-    worked.set(record, { located, force: force || worked.get(record)?.force === true });
-  }
+  for (const [record, force] of tracker.noted) work(locateRecord(doc, record), force);
   tracker.noted.clear();
-  if (worked.size === 0 && marks.size === 0) return;
+  if (worked.size === 0 && written.size === 0) return;
 
-  const view = new Resolver(yLookup(doc));
-  const toBump = [...worked.values()].filter(
-    ({ located, force }) => force || !isDeletedNow(view, located),
-  );
-  if (toBump.length === 0 && marks.size === 0) return;
-  doc.transact(() => {
-    for (const { located } of toBump) bump(tracker, located.record);
-    if (marks.size === 0) return;
-    // Each mark is refreshed to what its user sees now, the marks being
-    // refreshed aside.
-    const ignored = new Set<string>();
-    for (const { located, action } of marks.values()) {
-      if (located.kind === "elements") ignored.add(`${located.id} ${action}`);
+  const view = new Resolver(withoutMarks(yLookup(doc), ignoredElements));
+  // A route that came back brings its visits back.
+  for (const route of restoredRoutes) {
+    if (isDeleted(view, route, ignored)) continue;
+    const entries = route.record.get("entries");
+    if (!(entries instanceof Y.Map)) continue;
+    for (const entry of (entries as Y.Map<unknown>).values()) {
+      const stop = stopOf(entry);
+      if (stop !== null) visited.add(stop);
     }
-    const fresh = new Resolver(withoutMarks(yLookup(doc), ignored));
-    for (const [mark, { located }] of marks) {
+  }
+  for (const stop of visited) {
+    const record = roots(doc).stops.get(stop) as unknown;
+    if (record instanceof Y.Map) work(locateRecord(doc, record as RecordMap));
+  }
+  const toBump = [...worked.values()].filter(
+    ({ located, force }) => force || !isDeleted(view, located, ignored),
+  );
+  if (toBump.length === 0 && written.size === 0) return;
+  doc.transact(() => {
+    for (const { located } of toBump) {
+      bump(tracker, located.record);
+      // No other mark on this record applied, and after this work none ever can.
+      const marks = located.record.get("deleted");
+      if (!(marks instanceof Y.Map)) continue;
+      for (const action of [...(marks as Y.Map<unknown>).keys()]) {
+        if (!ignored.has(markKey(located, action))) marks.delete(action);
+      }
+    }
+    if (written.size === 0) return;
+    // Each mark written is refreshed to what its user sees now.
+    const fresh = new Resolver(withoutMarks(yLookup(doc), ignoredElements));
+    for (const [mark, { located }] of written) {
       const seen =
         located.kind === "elements"
           ? fresh.coverage(located.id)
-          : { [located.id]: revisionOf(located.record) };
+          : { [located.id]: revisionDigest(revisionOf(located.record)) };
       if (!jsonEquals(mark.get("seen"), seen)) mark.set("seen", seen);
     }
   }, ORIGIN.track);
+}
+
+/** The stop a route entry visits, or null if the value is not an entry. */
+function stopOf(entry: unknown): string | null {
+  const stop = (entry as { stop?: unknown } | null | undefined)?.stop;
+  return typeof stop === "string" ? stop : null;
 }
 
 /**
@@ -215,9 +287,9 @@ export function trackWork(
 
 /**
  * Declares, inside a local transaction, that a record was worked on although the
- * transaction does not change it (adding a visit to a stop is work on the stop).
- * With `evenIfDeleted`, the work counts although the record is deleted as the
- * user sees it, which brings it back.
+ * transaction does not change it. With `evenIfDeleted`, the work counts although
+ * the record is deleted as the user sees it, which brings it back (and what is
+ * inside it).
  */
 export function noteWork(
   doc: Y.Doc,
@@ -259,22 +331,75 @@ function fillHoles(doc: Y.Doc, deletions: unknown): void {
 }
 
 /**
- * The undo manager configuration that keeps the guarantees of section 10: it
- * undoes transactions of the local user (ORIGIN.local and the origins given, for
- * example an editor binding), never remote changes, loading, record creation,
- * tidy up or the recording of work; and an undo never leaves a key without a
- * value (see fillHoles).
+ * The undo manager of a Galatsa document (section 10). It undoes transactions
+ * of the local user (ORIGIN.local and the origins given, for example an editor
+ * binding), never remote changes, loading, record creation, tidy up or the
+ * recording of work.
+ */
+export class DocumentUndoManager extends Y.UndoManager {
+  /**
+   * Runs several operations as one undo step, whatever the capture timeout. This
+   * is how a command composes operations. (Wrapping them in one Yjs transaction
+   * is not: records must be created in transactions of their own, and the
+   * operations refuse to create inside another transaction.)
+   */
+  group<T>(fn: () => T): T {
+    const timeout = this.captureTimeout;
+    this.stopCapturing();
+    this.captureTimeout = Number.POSITIVE_INFINITY;
+    try {
+      return fn();
+    } finally {
+      this.captureTimeout = timeout;
+      this.stopCapturing();
+    }
+  }
+
+  override undo(): ReturnType<Y.UndoManager["undo"]> {
+    this.#adoptMarks();
+    return super.undo();
+  }
+
+  /**
+   * Undoing a delete takes the user's mark off. If another user restored the
+   * element and undid that, the mark is there again, but as a new entry under
+   * the same action id, which Yjs does not connect with the one this manager
+   * wrote: the undo would do nothing. This connects them, the way Yjs itself
+   * does on the replica that put the mark back.
+   */
+  #adoptMarks(): void {
+    const step = this.undoStack[this.undoStack.length - 1];
+    if (!step) return;
+    this.doc.transact((tr) => {
+      Y.iterateDeletedStructs(tr, step.insertions, (struct) => {
+        if (!(struct instanceof Y.Item) || !struct.deleted || struct.redone !== null) return;
+        if (struct.parentSub === null || !(struct.content instanceof Y.ContentType)) return;
+        const parent = struct.parent;
+        if (!(parent instanceof Y.Map) || parent._item?.parentSub !== "deleted") return;
+        const current = parent._map.get(struct.parentSub);
+        if (current && !current.deleted && current !== struct) struct.redone = current.id;
+      });
+    }, ORIGIN.track);
+  }
+}
+
+/**
+ * Creates the undo manager of a document, with the guarantees of section 10; in
+ * particular, an undo never leaves a key without a value (see fillHoles).
  */
 export function createUndoManager(
   doc: Y.Doc,
   options: { captureTimeout?: number; origins?: Iterable<unknown> } = {},
-): Y.UndoManager {
+): DocumentUndoManager {
   trackWork(doc);
   const r = roots(doc);
-  const manager = new Y.UndoManager([r.elements, r.stops, r.routes, r.settings, r.meta], {
-    trackedOrigins: new Set<unknown>([ORIGIN.local, ...(options.origins ?? [])]),
-    captureTimeout: options.captureTimeout ?? 500,
-  });
+  const manager = new DocumentUndoManager(
+    [r.elements, r.stops, r.routes, r.settings, r.meta],
+    {
+      trackedOrigins: new Set<unknown>([ORIGIN.local, ...(options.origins ?? [])]),
+      captureTimeout: options.captureTimeout ?? 500,
+    },
+  );
   manager.on("stack-item-popped", (event: { stackItem: { deletions: unknown } }) =>
     fillHoles(doc, event.stackItem.deletions),
   );

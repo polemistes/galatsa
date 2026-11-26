@@ -14,6 +14,7 @@
 // Used by the property tests of this package and of @galatsa/format.
 
 import * as Y from "yjs";
+import { revisionDigest } from "../model/digest.ts";
 import { copyFragment } from "../model/fragment.ts";
 import { validateSnapshot } from "../model/grammar.ts";
 import { purgeSnapshot } from "../model/purge.ts";
@@ -21,7 +22,6 @@ import { Resolver, lookupFromRecord } from "../model/resolve.ts";
 import { isRemoved, routeSteps } from "../model/route.ts";
 import {
   FRAME_TYPE,
-  sameRevision,
   type DeleteMarks,
   type DocumentSnapshot,
   type Revision,
@@ -197,7 +197,7 @@ class Oracle {
       for (const id of Object.keys(snapshot[kind])) {
         const record = recordOf(snapshot, kind, id)!;
         const inEffect = Object.keys(record.deleted).filter((action) =>
-          sameRevision(record.deleted[action]!.seen[id], record.rev),
+          record.deleted[action]!.seen[id] === revisionDigest(record.rev),
         );
         if (inEffect.length === 0) continue;
         const reasons = inEffect.map((action) => sawAll(kind, id, action, [id]));

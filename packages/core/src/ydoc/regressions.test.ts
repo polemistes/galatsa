@@ -476,7 +476,8 @@ describe("tidy up and paste (sections 3.5, 5.8)", () => {
     const s = toSnapshot(d);
     expect(validateSnapshot(s)).toEqual([]);
     expect(Object.keys(s.elements).sort()).toEqual(["F", "G", "Gx", "X", "Y"]);
-    expect(s.elements.G).toMatchObject({ dissolved: true, deleted: {}, data: {} });
+    expect(s.elements.G).toMatchObject({ purged: true, name: "", data: {} });
+    expect(s.elements.Gx).toMatchObject({ purged: true, dissolved: true });
     // The stop still shows where the frame was.
     expect(regionToWorld(after, stopRegion(s, after, stop)!)).toEqual(region);
 
@@ -515,7 +516,7 @@ describe("tidy up and paste (sections 3.5, 5.8)", () => {
     // X was pasted, so its reference is remapped; Y was not, so it stays.
     expect(c2.data.from).toBe(x2);
     expect(c2.data.to).toBe("Y");
-    expect(c2.refs).toEqual([x2, "Y"]);
+    expect(c2.refs).toEqual([x2, "Y"].sort());
     // Text is user content, never remapped.
     expect(c2.data.label).toEqual({ $y: "text", delta: [{ insert: "X" }] });
     const s2 = s.stops[ids.get(stop)!]!;

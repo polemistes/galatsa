@@ -239,14 +239,20 @@ export interface Rect {
 // ---------------------------------------------------------------------------
 
 /**
+ * The digest of a revision (`model/digest.ts`): empty for the empty revision,
+ * otherwise 16 URL-safe base64 characters. Equal revisions have equal digests.
+ */
+export type RevisionDigest = string;
+
+/**
  * One delete (section 5.5), stored on the record the user deleted. `seen` lists
  * what the deleting user saw: the record itself and, for an element, everything
- * inside it, each with its revision at that moment. The delete hides a record
- * only while the record, and every container between it and the deleted element,
- * still has exactly the revision listed.
+ * inside it, each with the digest of its revision at that moment. The delete
+ * hides a record only while the record, and every container between it and the
+ * deleted element, still has exactly the revision listed.
  */
 export interface DeleteMark {
-  seen: { [id: string]: Revision };
+  seen: { [id: string]: RevisionDigest };
 }
 
 /** The deletes of one record, keyed by a random action id. Empty: not deleted. */
@@ -275,9 +281,17 @@ export interface ElementBase {
   rev: Revision;
   /** Deletes of this element; see DeleteMark. */
   deleted: DeleteMarks;
-  /** Containers only: dissolved (ungrouped, or emptied by tidy up). */
+  /** Containers only: dissolved (ungrouped, or removed with "keep contents"). */
   dissolved: boolean;
-  /** Ids of elements and stops that `data` or `ext` refer to (section 3.5). */
+  /**
+   * Containers only: a place marker. Tidy up emptied this removed container and
+   * kept only where it was; it is gone for good (section 5.8).
+   */
+  purged: boolean;
+  /**
+   * Ids of elements and stops that `data` or `ext` refer to (section 3.5): a
+   * set, written sorted.
+   */
   refs: string[];
   /** Additive envelope-level features (section 9.4). */
   ext: ExtSlots;

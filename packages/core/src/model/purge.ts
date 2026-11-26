@@ -53,6 +53,7 @@ export function purgeSnapshot(snapshot: DocumentSnapshot): DocumentSnapshot {
       rev: {},
       deleted: {},
       dissolved: false,
+      purged: false,
     });
   }
 

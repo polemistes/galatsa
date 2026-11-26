@@ -6,6 +6,7 @@
 
 export * from "./types.ts";
 export * from "./order.ts";
+export * from "./digest.ts";
 export * from "./ids.ts";
 export * from "./geometry.ts";
 export * from "./resolve.ts";
