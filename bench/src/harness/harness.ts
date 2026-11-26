@@ -244,6 +244,12 @@ export function startHarness(options: HarnessOptions): HarnessApi {
     if (busy) throw new Error("A run is already in progress");
     const entry = engines.find((e) => e.id === engineId);
     if (entry === undefined) throw new Error(`Unknown engine ${engineId}`);
+    // Refuse at once, before generating images, if the stage cannot fit.
+    if (!stageFits()) {
+      const message = STRINGS.stageNotVisible(viewport.width, viewport.height);
+      status.textContent = STRINGS.statusFailed(message);
+      throw new Error(message);
+    }
     setBusy(true);
     output.textContent = runOptions.capture === true ? STRINGS.capturesNote : "";
     try {

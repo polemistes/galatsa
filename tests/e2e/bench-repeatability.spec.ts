@@ -60,8 +60,11 @@ test("the meter repeats for the empty and the synthetic engine", async ({
   // syntheticBusyMs).
   for (const result of outputs["noop"]!.results) {
     const t = result.verdictInputs.targets;
-    expect(t.frames16_7.count).toBe(0);
-    expect(t.frames33.count).toBe(0);
+    // An isolated frame may be delayed by the browser (24 to 35 ms seen in headless
+    // runs, with under 1 ms of work); it counts, as it should, but stays rare.
+    expect(t.frames16_7.ratio).toBeLessThanOrEqual(0.002);
+    expect(t.frames33.ratio).toBeLessThanOrEqual(0.002);
+    expect(t.frames16_7.workOver).toBe(0);
     expect(t.stalls.count).toBe(0);
     expect(t.textSharp.pass).toBe(true);
   }
