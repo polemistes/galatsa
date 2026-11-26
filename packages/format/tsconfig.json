@@ -1,0 +1,9 @@
+{
+  // Environment-agnostic: no Node types and no DOM library (see tsconfig.base.json).
+  // Test files are included, so tests follow the same rule as the code they test.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.mts", "src/**/*.cts"]
+}
