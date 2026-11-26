@@ -24,6 +24,15 @@ export const ENTRY = {
   assetsPrefix: "assets/",
 } as const;
 
+/**
+ * Size limits that the writer keeps and the reader's defaults allow, so that a
+ * file the writer writes is always one the default reader opens (section 9.7).
+ * Only document.json and ydoc.bin are compressed; everything else is stored and
+ * costs a reader no memory beyond the file.
+ */
+export const MAX_DOCUMENT_SIZE = 256 * 1024 ** 2;
+export const MAX_YDOC_SIZE = 256 * 1024 ** 2;
+
 /** The only Yjs encoding version 1 files use. */
 export const YDOC_ENCODING = "yjs-update-v1";
 

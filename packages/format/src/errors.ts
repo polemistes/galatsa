@@ -47,6 +47,8 @@ export type FileWarningCode =
   | "asset-damaged"
   /** An element that is not deleted refers to an asset whose bytes are not in the file. */
   | "asset-missing"
+  /** Visible content refers to an asset the document has no description of. */
+  | "asset-undescribed"
   /** The thumbnail is missing although the manifest lists it. */
   | "thumbnail-missing";
 

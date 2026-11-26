@@ -17,7 +17,8 @@ import {
   inspectDocument,
   lineageOf,
   neededVersion,
-  roots,
+  raiseVersions,
+  savedState,
   toSnapshot,
   trackWork,
 } from "@galatsa/core/ydoc";
@@ -26,6 +27,8 @@ import { FileFormatError, type FileWarning } from "./errors.ts";
 import { canonicalJson, jsonEqual, utf8 } from "./json.ts";
 import {
   ENTRY,
+  MAX_DOCUMENT_SIZE,
+  MAX_YDOC_SIZE,
   MIMETYPE,
   YDOC_ENCODING,
   assetsToWrite,
@@ -33,14 +36,6 @@ import {
 } from "./layout.ts";
 import { newerVersion, readAssets, readParts, type ReadOptions } from "./parts.ts";
 import { writeZip, type ZipEntryInput } from "./zip.ts";
-
-/** Media types that are already compressed and are stored, not deflated. */
-function isCompressed(mediaType: string): boolean {
-  return (
-    /^(image\/(png|jpeg|webp|gif|avif)|video\/|audio\/)/.test(mediaType) ||
-    /zip|compressed|font\/woff2?/.test(mediaType)
-  );
-}
 
 export interface WriteOptions {
   /** Name and version of the writing program, for diagnosis. */
@@ -54,11 +49,16 @@ export interface WriteOptions {
    * ydoc.bin is written, so nothing deleted travels with the file.
    */
   forSharing?: boolean;
+  /**
+   * Size limits, for tests. The defaults are what the default reader opens
+   * (section 9.7): 256 MiB each for document.json and ydoc.bin, 4 GiB in all.
+   */
+  limits?: { maxDocumentSize?: number; maxYdocSize?: number; maxFileSize?: number };
 }
 
 export interface WriteResult {
   bytes: Uint8Array;
-  /** "ydoc-not-written" if the Yjs state could not be stored. */
+  /** "ydoc-not-written" if the Yjs state could not be stored, or is too large to be. */
   warnings: FileWarning[];
 }
 
@@ -68,10 +68,14 @@ export type AssetSource = (id: AssetId) => Uint8Array | undefined;
 /**
  * Writes a document (a Y.Doc, or a snapshot without merge identity) to file
  * bytes. What it writes can always be read back: the document goes through the
- * same grammar the reader uses. Writing a Y.Doc never fails because of its
- * content. Throws InvalidDocumentError for a snapshot that is not valid, and
- * FileFormatError ("newer-version") for a document that needs a newer version of
- * the format than this code knows, because saving it here would lose content.
+ * same grammar the reader uses, and the sizes are within what the default
+ * reader accepts. Writing a Y.Doc never fails because of what is in it.
+ *
+ * Throws InvalidDocumentError for a snapshot that is not valid, and
+ * FileFormatError for a document that needs a newer version of the format than
+ * this code knows ("newer-version": saving it here would lose content), or that
+ * does not fit in a file ("too-large": the document itself over 256 MiB, or the
+ * file over 4 GiB, which needs zip64 and so a later version of the format).
  */
 export function writeGalatsaFile(
   source: Y.Doc | DocumentSnapshot,
@@ -96,14 +100,22 @@ export function writeGalatsaFile(
   const lineage = doc ? lineageOf(doc) : "";
   let ydoc: Uint8Array | null = null;
   if (doc !== null && !options.forSharing && options.includeYdoc !== false) {
-    try {
-      if (lineage === "") throw new Error("the document has no lineage");
-      ydoc = Y.encodeStateAsUpdate(doc);
-    } catch (error) {
+    const notWritten = (why: string) =>
       warnings.push({
         code: "ydoc-not-written",
-        message: `The editing history could not be stored (${String(error)}); the file will not merge with other copies.`,
+        message: `The state for merging could not be stored (${why}); the file will not merge with other copies.`,
       });
+    try {
+      if (lineage === "") throw new Error("the document has no lineage");
+      // Without the content of what was deleted (text typed and removed, for
+      // example), which the running program keeps for undo.
+      ydoc = savedState(doc);
+      if (ydoc.length > (options.limits?.maxYdocSize ?? MAX_YDOC_SIZE)) {
+        ydoc = null;
+        notWritten("it is larger than a reader accepts");
+      }
+    } catch (error) {
+      notWritten(String(error));
     }
   }
 
@@ -116,27 +128,31 @@ export function writeGalatsaFile(
   if (ydoc) manifest.ydoc = { encoding: YDOC_ENCODING, lineage };
   if (options.thumbnail) manifest.thumbnail = { mediaType: "image/png" };
 
+  const document = utf8(canonicalJson(snapshot));
+  if (document.length > (options.limits?.maxDocumentSize ?? MAX_DOCUMENT_SIZE)) {
+    throw new FileFormatError(
+      "too-large",
+      "The file cannot be written: the document itself is larger than a reader accepts.",
+    );
+  }
+  // Only the document and the Yjs state are compressed. Assets are stored as
+  // they are: most are compressed already, and a reader then needs no memory
+  // for them beyond the file, whatever their type and size.
   const entries: ZipEntryInput[] = [
     { name: ENTRY.mimetype, data: utf8(MIMETYPE), compress: false },
-    { name: ENTRY.manifest, data: utf8(canonicalJson(manifest)), compress: true },
-    { name: ENTRY.document, data: utf8(canonicalJson(snapshot)), compress: true },
+    { name: ENTRY.manifest, data: utf8(canonicalJson(manifest)), compress: false },
+    { name: ENTRY.document, data: document, compress: true },
   ];
   if (ydoc) entries.push({ name: ENTRY.ydoc, data: ydoc, compress: true });
   for (const id of assetsToWrite(snapshot)) {
-    if (snapshot.assets[id]?.external) continue;
+    if (Object.hasOwn(snapshot.assets, id) && snapshot.assets[id]?.external) continue;
     const bytes = assets(id);
-    if (!bytes) continue;
-    const mediaType = snapshot.assets[id]?.mediaType ?? "application/octet-stream";
-    entries.push({
-      name: ENTRY.assetsPrefix + id,
-      data: bytes,
-      compress: !isCompressed(mediaType),
-    });
+    if (bytes) entries.push({ name: ENTRY.assetsPrefix + id, data: bytes, compress: false });
   }
   if (options.thumbnail) {
     entries.push({ name: ENTRY.thumbnail, data: options.thumbnail, compress: false });
   }
-  return { bytes: writeZip(entries), warnings };
+  return { bytes: writeZip(entries, options.limits?.maxFileSize), warnings };
 }
 
 export interface ReadResult {
@@ -198,27 +214,20 @@ export async function readGalatsaFile(
   try {
     if (parts.ydoc) {
       const candidate = decodeYdoc(parts.ydoc.bytes, parts.ydoc.lineage);
+      // What the Yjs state itself says it needs counts, whatever the manifest says.
+      if (candidate && neededVersion(candidate) > parts.readerVersion) {
+        throw newerVersion(neededVersion(candidate), parts.readerVersion);
+      }
       const inspection = candidate ? inspectDocument(candidate) : null;
       if (candidate && inspection && snapshot) {
         if (jsonEqual(withoutVersions(inspection.snapshot), withoutVersions(snapshot))) {
           doc = candidate;
           mergeIdentityKept = true;
-          const meta = roots(candidate).meta;
-          if (
-            meta.get("schemaVersion") !== snapshot.schemaVersion ||
-            meta.get("minReaderVersion") !== snapshot.minReaderVersion
-          ) {
-            candidate.transact(() => {
-              meta.set("schemaVersion", snapshot!.schemaVersion);
-              meta.set("minReaderVersion", snapshot!.minReaderVersion);
-            }, ORIGIN.load);
-          }
+          // A compatible upgrade may have raised the versions; they never go down.
+          raiseVersions(candidate, snapshot, ORIGIN.load);
         }
       } else if (candidate && inspection) {
-        // document.json is unusable: the editing history is all there is.
-        if (neededVersion(candidate) > parts.readerVersion) {
-          throw newerVersion(neededVersion(candidate), parts.readerVersion);
-        }
+        // document.json is unusable: the Yjs state is all there is.
         doc = candidate;
         mergeIdentityKept = true;
         snapshot = inspection.snapshot;

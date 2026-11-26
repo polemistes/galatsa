@@ -109,6 +109,21 @@ export function syncDocs(a: Y.Doc, b: Y.Doc): void {
 }
 
 /**
+ * The document's Yjs state as it is saved and as another replica holds it:
+ * without the content of what was deleted. The running program keeps deleted
+ * content for undo (text that was typed and removed, values that were
+ * overwritten); passing the state through a fresh Y.Doc drops it, as every
+ * replica that receives the state does. What merges stays the same.
+ */
+export function savedState(doc: Y.Doc): Uint8Array {
+  const clean = new Y.Doc();
+  Y.applyUpdate(clean, Y.encodeStateAsUpdate(doc));
+  const state = Y.encodeStateAsUpdate(clean);
+  clean.destroy();
+  return state;
+}
+
+/**
  * Calls `onNewer` when the document starts to need a newer format version than
  * this code reads, which can happen while co-editing with a newer client. From
  * then on this replica must stop editing and saving the document: operations

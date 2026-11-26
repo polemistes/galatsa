@@ -7,7 +7,7 @@
 // declared size, and one damaged entry does not make the others unreadable.
 // Sections 9.1, 9.7 and 9.8 of docs/adr/0001-document-model-and-file-format.md.
 
-import { Inflate, zipSync, type Zippable } from "fflate";
+import { Inflate, deflateSync } from "fflate";
 import { FileFormatError } from "./errors.ts";
 
 // ---------------------------------------------------------------------------
@@ -43,21 +43,101 @@ export interface ZipEntryInput {
   compress: boolean;
 }
 
-/** A fixed timestamp, so the same content always gives the same bytes. */
-const FIXED_TIME = new Date(1980, 0, 1, 0, 0, 0);
+/** Largest archive, and largest entry count, that zip can hold without zip64. */
+export const MAX_ZIP_SIZE = 0xffffffff;
+export const MAX_ZIP_ENTRIES = 0xfffe;
 
-/** Writes entries in the given order. */
-export function writeZip(entries: readonly ZipEntryInput[]): Uint8Array {
-  const files: Zippable = {};
-  for (const entry of entries) {
-    if (Object.hasOwn(files, entry.name))
-      throw new Error(`Duplicate zip entry ${entry.name}`);
-    files[entry.name] = [
-      entry.data,
-      { level: entry.compress ? 6 : 0, mtime: FIXED_TIME },
-    ];
+const SIG_LOCAL = 0x04034b50;
+const SIG_CENTRAL = 0x02014b50;
+const SIG_END = 0x06054b50;
+
+/** MS-DOS date of 1980-01-01: a fixed time, so equal content gives equal bytes. */
+const FIXED_DATE = 0x0021;
+
+function tooLarge(detail: string): FileFormatError {
+  return new FileFormatError(
+    "too-large",
+    `The file cannot be written: ${detail}. Very large media can be kept in a file next to the presentation.`,
+  );
+}
+
+/**
+ * Writes entries in the given order, in the strict subset of zip that Galatsa
+ * files use (section 9.1): no flags, no extra fields, no comment, nothing
+ * between the entries, the same sizes and checksum in each local header as in
+ * the directory. Zip without zip64 ends at 4 GiB and 65 534 entries; an archive
+ * that would not fit is refused (FileFormatError "too-large") instead of being
+ * written with offsets that wrap around.
+ */
+export function writeZip(
+  entries: readonly ZipEntryInput[],
+  maxSize: number = MAX_ZIP_SIZE,
+): Uint8Array {
+  const limit = Math.min(maxSize, MAX_ZIP_SIZE);
+  if (entries.length > MAX_ZIP_ENTRIES) {
+    throw tooLarge(`it would have ${entries.length} entries, more than zip allows`);
   }
-  return zipSync(files);
+  const names = new Set<string>();
+  const overhead = (name: string) => 30 + name.length + 46 + name.length;
+  // Before compressing anything: what is stored as it is must fit already.
+  let total = 22;
+  for (const entry of entries) {
+    if (!isSafeEntryName(entry.name)) throw new Error(`Unsafe zip entry name ${entry.name}`);
+    if (names.has(entry.name)) throw new Error(`Duplicate zip entry ${entry.name}`);
+    names.add(entry.name);
+    total += overhead(entry.name) + (entry.compress ? 0 : entry.data.length);
+    if (total > limit) throw tooLarge("it would be larger than 4 GiB");
+  }
+  const parts = entries.map((entry) => {
+    const stored = entry.compress ? deflateSync(entry.data, { level: 6 }) : entry.data;
+    total += entry.compress ? stored.length : 0;
+    if (total > limit) throw tooLarge("it would be larger than 4 GiB");
+    return { entry, stored, crc: crc32(entry.data) };
+  });
+
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  const header = (at: number, part: (typeof parts)[number]): number => {
+    view.setUint16(at, 20, true); // version needed: 2.0
+    view.setUint16(at + 2, 0, true); // flags: none
+    view.setUint16(at + 4, part.entry.compress ? 8 : 0, true);
+    view.setUint16(at + 6, 0, true); // time
+    view.setUint16(at + 8, FIXED_DATE, true);
+    view.setUint32(at + 10, part.crc, true);
+    view.setUint32(at + 14, part.stored.length, true);
+    view.setUint32(at + 18, part.entry.data.length, true);
+    view.setUint16(at + 22, part.entry.name.length, true);
+    view.setUint16(at + 24, 0, true); // extra field: none
+    return at + 26;
+  };
+  const name = (at: number, text: string): number => {
+    for (let i = 0; i < text.length; i++) out[at + i] = text.charCodeAt(i);
+    return at + text.length;
+  };
+  let at = 0;
+  const offsets: number[] = [];
+  for (const part of parts) {
+    offsets.push(at);
+    view.setUint32(at, SIG_LOCAL, true);
+    at = name(header(at + 4, part), part.entry.name);
+    out.set(part.stored, at);
+    at += part.stored.length;
+  }
+  const directory = at;
+  parts.forEach((part, i) => {
+    view.setUint32(at, SIG_CENTRAL, true);
+    view.setUint16(at + 4, 20, true); // version made by
+    const rest = header(at + 6, part);
+    // comment length, disk, internal and external attributes: all zero
+    view.setUint32(rest + 10, offsets[i]!, true);
+    at = name(rest + 14, part.entry.name);
+  });
+  view.setUint32(at, SIG_END, true);
+  view.setUint16(at + 8, parts.length, true);
+  view.setUint16(at + 10, parts.length, true);
+  view.setUint32(at + 12, at - directory, true);
+  view.setUint32(at + 16, directory, true);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,12 +157,8 @@ export interface ZipLimits {
 
 export const DEFAULT_ZIP_LIMITS: ZipLimits = {
   maxInflatedSize: 512 * 1024 ** 2,
-  maxEntries: 100_000,
+  maxEntries: MAX_ZIP_ENTRIES,
 };
-
-const SIG_LOCAL = 0x04034b50;
-const SIG_CENTRAL = 0x02014b50;
-const SIG_END = 0x06054b50;
 const SIG_END64_LOCATOR = 0x07064b50;
 /** Header id of the zip64 extra field. */
 const EXTRA_ZIP64 = 0x0001;
@@ -153,10 +229,10 @@ export interface ZipContents {
  * Opens an archive. Entries for which `accept` returns false are checked
  * structurally but not decompressed or kept. Throws FileFormatError for anything
  * that is not a complete zip archive in the subset this format uses: an archive
- * comment or bytes after the archive, gaps or overlapping entries, names that
- * differ between the local header and the directory, unsafe or duplicate names,
- * encryption, zip64 (reported as needing a newer version), and archives over the
- * limits. An entry whose own data is damaged is reported in `damaged`; the
+ * comment or bytes after the archive, gaps or overlapping entries, local
+ * headers that differ from the directory in name, sizes, checksum, method or
+ * flags, sizes kept after the data, unsafe or duplicate names, encryption, zip64
+ * (reported as needing a newer version), and archives over the limits. An entry whose own data is damaged is reported in `damaged`; the
  * others are still read.
  */
 export function openZip(
@@ -216,7 +292,6 @@ export function openZip(
 
   interface Pending {
     name: string;
-    flags: number;
     method: number;
     crc: number;
     size: number;
@@ -259,6 +334,9 @@ export function openZip(
 
     if (flags & 0x1)
       throw new FileFormatError("unsupported", "Encrypted files are not supported.");
+    // Sizes after the data ("data descriptor") are not used: a local header
+    // then says nothing, and a reader that trusts it finds something else.
+    if (flags & 0x8) throw damaged(`the entry ${name} keeps its size after its data`);
     if (!isSafeEntryName(name)) {
       throw damaged(`an entry has an unsafe name (${JSON.stringify(name)})`);
     }
@@ -283,6 +361,17 @@ export function openZip(
     ) {
       throw damaged(`the entry ${name} has a different name in its local header`);
     }
+    // The local header says the same as the directory, so that a reader which
+    // goes by local headers finds the same archive.
+    if (
+      u16(localOffset + 6) !== flags ||
+      u16(localOffset + 8) !== method ||
+      u32(localOffset + 14) !== crc ||
+      u32(localOffset + 18) !== compressedSize ||
+      u32(localOffset + 22) !== size
+    ) {
+      throw damaged(`the entry ${name} is described differently in its local header`);
+    }
     const dataStart = localOffset + 30 + localNameLength + u16(localOffset + 28);
     if (dataStart + compressedSize > cdOffset)
       throw damaged(`the entry ${name} is cut short`);
@@ -297,7 +386,6 @@ export function openZip(
     }
     pending.push({
       name,
-      flags,
       method,
       crc,
       size,
@@ -310,24 +398,16 @@ export function openZip(
 
   // Every byte of the file belongs to exactly one entry, the directory or the
   // end record: entries do not overlap, and there is nothing before, between or
-  // after them (apart from the data descriptor some zip writers add). So a file
-  // cannot hold a second archive that another reader would find instead.
+  // after them. So a file cannot hold a second archive that another reader
+  // would find instead.
   const ranges = [...pending].sort((a, b) => a.start - b.start);
   let expected = 0;
-  let descriptor = false;
   for (const entry of ranges) {
-    const gap = entry.start - expected;
-    if (gap < 0) throw damaged(`the entry ${entry.name} overlaps another entry`);
-    if (gap > 0 && !(descriptor && (gap === 12 || gap === 16))) {
-      throw damaged("the archive holds bytes that belong to no entry");
-    }
+    if (entry.start < expected) throw damaged(`the entry ${entry.name} overlaps another entry`);
+    if (entry.start > expected) throw damaged("the archive holds bytes that belong to no entry");
     expected = entry.dataStart + entry.compressedSize;
-    descriptor = (entry.flags & 0x8) !== 0;
   }
-  const gap = cdOffset - expected;
-  if (gap > 0 && !(descriptor && (gap === 12 || gap === 16))) {
-    throw damaged("the archive holds bytes that belong to no entry");
-  }
+  if (expected !== cdOffset) throw damaged("the archive holds bytes that belong to no entry");
 
   const contents: ZipContents = { entries: new Map(), damaged: new Set() };
   for (const entry of pending) {

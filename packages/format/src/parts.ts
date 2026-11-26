@@ -10,7 +10,14 @@ import { readSnapshot, type AssetId, type DocumentSnapshot } from "@galatsa/core
 import { FileFormatError, type FileWarning } from "./errors.ts";
 import { assetIdOf, isAssetId } from "./hash.ts";
 import { fromUtf8 } from "./json.ts";
-import { ENTRY, MIMETYPE, YDOC_ENCODING, assetsInUse, isKnownEntry } from "./layout.ts";
+import {
+  ENTRY,
+  MAX_YDOC_SIZE,
+  MIMETYPE,
+  YDOC_ENCODING,
+  assetsInUse,
+  isKnownEntry,
+} from "./layout.ts";
 import {
   MIGRATIONS,
   migrate,
@@ -222,7 +229,7 @@ export function readParts(bytes: Uint8Array, options: ReadOptions = {}): FilePar
     const ydocBytes = entries.get(ENTRY.ydoc);
     const described = isObject(manifest.ydoc) ? manifest.ydoc : null;
     if ((ydocBytes || broken.has(ENTRY.ydoc)) && !migrated) {
-      const maxYdoc = options.maxYdocSize ?? 256 * 1024 ** 2;
+      const maxYdoc = options.maxYdocSize ?? MAX_YDOC_SIZE;
       if (
         ydocBytes &&
         described?.encoding === YDOC_ENCODING &&
@@ -283,7 +290,14 @@ export async function readAssets(
     assets.set(id, data);
   }
   for (const id of assetsInUse(snapshot)) {
-    if (!assets.has(id) && !snapshot.assets[id]?.external) {
+    const described = Object.hasOwn(snapshot.assets, id);
+    if (!described) {
+      warnings.push({
+        code: "asset-undescribed",
+        message: `The document refers to the asset ${id} but does not describe it.`,
+      });
+    }
+    if (!assets.has(id) && !(described && snapshot.assets[id]?.external)) {
       warnings.push({
         code: "asset-missing",
         message: `The asset ${id} is not in the file.`,
