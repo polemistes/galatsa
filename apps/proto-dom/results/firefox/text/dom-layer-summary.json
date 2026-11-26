@@ -1,0 +1,43 @@
+{
+  "variant": "dom-layer",
+  "project": "firefox",
+  "still-0.1": {
+    "sharpness": 0.024934727126221034,
+    "reportedSharpAfterMs": 39.48000000000002
+  },
+  "still-1": {
+    "sharpness": 1.4279787284557814,
+    "reportedSharpAfterMs": 47.860000000000014
+  },
+  "still-8": {
+    "sharpness": 2.199845730195295,
+    "reportedSharpAfterMs": 39.60000000000002
+  },
+  "still-40": {
+    "sharpness": 0.8982386564027935,
+    "reportedSharpAfterMs": 39.68000000000001
+  },
+  "still-fine-40": {
+    "sharpness": 0.9836766162716197
+  },
+  "move-1-to-8": {
+    "sharpness": {
+      "during": 2.199845730195295,
+      "after1": 2.199845730195295,
+      "after2": 2.199845730195295,
+      "afterSharp": 2.199845730195295,
+      "afterHalfSecond": 2.199845730195295
+    },
+    "reportedSharpAfterMs": 49.93999999999983
+  },
+  "move-8-to-40": {
+    "sharpness": {
+      "during": 0.8982386564027935,
+      "after1": 0.8982386564027935,
+      "after2": 0.8982386564027935,
+      "afterSharp": 0.8982386564027935,
+      "afterHalfSecond": 0.8982386564027935
+    },
+    "reportedSharpAfterMs": 48.23999999999978
+  }
+}

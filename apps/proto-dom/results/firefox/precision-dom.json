@@ -1,0 +1,106 @@
+{
+  "variant": "dom",
+  "project": "firefox",
+  "report": {
+    "glyph": [
+      {
+        "zoom": 10,
+        "positions": [639.938, 638.938, 637.938, 636.938],
+        "moves": [1, 1, 1],
+        "expected": null
+      },
+      {
+        "zoom": 100,
+        "positions": [639.832, 638.832, 637.832, 636.832],
+        "moves": [1, 1, 1],
+        "expected": null
+      },
+      {
+        "zoom": 1000,
+        "positions": [639.085, 638.085, 637.085, 636.085],
+        "moves": [1, 1, 1],
+        "expected": null
+      },
+      {
+        "zoom": 10000,
+        "positions": [640.727, 639.727, 638.727, 637.727],
+        "moves": [1, 1, 1],
+        "expected": null
+      },
+      {
+        "zoom": 100000,
+        "positions": [639.125, 638.125, 637.125, 636.125],
+        "moves": [1, 1, 1],
+        "expected": null
+      },
+      {
+        "zoom": 1000000,
+        "positions": [640.928, 639.928, 638.928, 637.928],
+        "moves": [1, 1, 1],
+        "expected": null
+      },
+      {
+        "zoom": 10000000,
+        "positions": [638, 637, 636, 635],
+        "moves": [1, 1, 1],
+        "expected": null
+      },
+      {
+        "zoom": 100000000,
+        "positions": [640, 640, 640, 640],
+        "moves": [0, 0, 0],
+        "expected": null
+      }
+    ],
+    "rect": [
+      {
+        "zoom": 10,
+        "positions": [640, 639, 638, 637],
+        "moves": [1, 1, 1],
+        "expected": 640
+      },
+      {
+        "zoom": 100,
+        "positions": [640, 639, 638, 637],
+        "moves": [1, 1, 1],
+        "expected": 640
+      },
+      {
+        "zoom": 1000,
+        "positions": [640, 639, 638, 637],
+        "moves": [1, 1, 1],
+        "expected": 640
+      },
+      {
+        "zoom": 10000,
+        "positions": [640, 639, 638, 637],
+        "moves": [1, 1, 1],
+        "expected": 640
+      },
+      {
+        "zoom": 100000,
+        "positions": [640, 639, 638, 637],
+        "moves": [1, 1, 1],
+        "expected": 640
+      },
+      {
+        "zoom": 1000000,
+        "positions": [640, 639, 638, 637],
+        "moves": [1, 1, 1],
+        "expected": 640
+      },
+      {
+        "zoom": 10000000,
+        "positions": [640, 639, 638, 637],
+        "moves": [1, 1, 1],
+        "expected": 640
+      },
+      {
+        "zoom": 100000000,
+        "positions": [640, 639, 638, 637],
+        "moves": [1, 1, 1],
+        "expected": 640
+      }
+    ]
+  }
+}

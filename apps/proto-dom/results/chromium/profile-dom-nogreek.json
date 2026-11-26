@@ -1,0 +1,29 @@
+{
+  "renamedFrom": "profile-dom",
+  "variant": "profile-dom-nogreek",
+  "project": "chromium",
+  "note": "Milliseconds summed over one camera run, per thread and event (nested events overlap: Paint includes nothing of Layout, but RasterTask includes image decodes on the same thread)",
+  "traceStartedAtMs": 1795707871513.12,
+  "runMs": 68931,
+  "renderScriptMs": 3082,
+  "totals": {
+    "CrRendererMain": {
+      "UpdateLayoutTree": 3066,
+      "Layout": 3106,
+      "PrePaint": 935,
+      "Paint": 1509,
+      "Layerize": 2165,
+      "Commit": 259,
+      "UpdateLayer": 43,
+      "MajorGC": 246,
+      "FireAnimationFrame": 3797,
+      "MinorGC": 34
+    },
+    "ThreadPoolForegroundWorker": {
+      "RasterTask": 143652,
+      "V8.GC_MC_BACKGROUND_MARKING": 893,
+      "Decode Image": 33908,
+      "ImageDecodeTask": 2316
+    }
+  }
+}
