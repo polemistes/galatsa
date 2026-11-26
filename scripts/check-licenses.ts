@@ -11,8 +11,9 @@
 //
 // Usage: node scripts/check-licenses.ts   (or `pnpm check:licenses`)
 // Exits with 1 if a license is not acceptable, if nothing is installed, if a lockfile
-// package is missing from the report, if a link: or file: dependency leaves the
-// workspace, or if the classification disagrees with pnpm's own.
+// package is missing from the report, if a package does not come from the npm
+// registry, if a link: or file: dependency leaves the workspace, or if the
+// classification disagrees with pnpm's own.
 //
 // The script runs main() unconditionally (no "is this the main module" guard), so it
 // behaves the same when started through a symlink or another path spelling.
@@ -29,6 +30,7 @@ import {
 } from "./lib/licenses.ts";
 import {
   classifyPackages,
+  describeSource,
   parseLockfile,
   resolveTarget,
   type Lockfile,
@@ -98,6 +100,24 @@ function main(): void {
   const { production, development, problems } = classifyPackages(lockfile);
   if (problems.length > 0) {
     fail(["License check failed:", ...problems.map((problem) => `  - ${problem}`)]);
+  }
+
+  // pnpm reports a package from git, a tarball or a folder under the version in its
+  // package.json, not under its lockfile id, so it could not be matched below. Such
+  // packages also have no registry publish date for the release-age check.
+  const outsideRegistry = [...lockfile.packageIds].flatMap((id) => {
+    const source = lockfile.sources.get(id);
+    const description = source === undefined ? undefined : describeSource(id, source);
+    return description === undefined ? [] : [description];
+  });
+  if (outsideRegistry.length > 0) {
+    fail([
+      `License check failed: ${outsideRegistry.length} package(s) do not come from the npm registry.`,
+      ...outsideRegistry.map((line) => `  - ${line}`),
+      "Only registry packages are supported, because the license and release-age checks",
+      'rely on registry metadata. Use "workspace:*" for the project\'s own packages and a',
+      "published registry version for third-party packages.",
+    ]);
   }
 
   const all = flattenReport(readLicenseReport(""));

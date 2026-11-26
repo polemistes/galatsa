@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Checks the project's own workspace packages: license fields, required files and
-// fields, no dependency on the AGPL server package, no undeclared imports, and no
-// .tsx reachable from code that Node runs from source. Rules are in
-// scripts/lib/workspace.ts; docs/new-package.md explains them.
+// fields, nothing reaching the AGPL server package (by name, alias, path or a link
+// in pnpm-lock.yaml), no undeclared imports and no relative paths out of a package
+// (scripts, stylesheets and HTML), and no .tsx reachable from code that Node runs
+// from source. Rules are in scripts/lib/workspace.ts; docs/new-package.md explains
+// them.
 //
 // Usage: node scripts/check-workspace.ts   (or `pnpm check:workspace`)
 
@@ -11,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseLockfile, type Lockfile } from "./lib/lockfile.ts";
 import { checkWorkspace, type Manifest, type WorkspacePackage } from "./lib/workspace.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -64,6 +67,18 @@ function listFiles(): string[] {
     .filter((file) => file.length > 0);
 }
 
+/** The lockfile, for link: targets that the manifests alone do not show (overrides). */
+function readLockfile(): Lockfile {
+  try {
+    return parseLockfile(readFileSync(join(root, "pnpm-lock.yaml"), "utf8"));
+  } catch (error) {
+    fail([
+      `Workspace check could not read pnpm-lock.yaml: ${String(error)}`,
+      "Run pnpm install first.",
+    ]);
+  }
+}
+
 function main(): void {
   const paths = listPackagePaths();
   if (!paths.includes("."))
@@ -97,7 +112,7 @@ function main(): void {
     };
   });
 
-  const problems = checkWorkspace(packages);
+  const problems = checkWorkspace(packages, readLockfile());
   if (problems.length > 0) {
     fail([
       `Workspace check failed: ${problems.length} problem(s).`,

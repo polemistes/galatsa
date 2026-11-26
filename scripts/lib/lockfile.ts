@@ -16,6 +16,10 @@
 //
 // Reachability follows the lockfile's "snapshots" section (each package's own
 // dependencies and optionalDependencies, which include its resolved peers).
+//
+// Paths in the lockfile: a "link:" version of an importer is relative to that
+// importer's folder; a "link:" version inside a snapshot (written there by an
+// override) and every "file:" version are relative to the repository root.
 
 import { posix } from "node:path";
 import { parseAllDocuments } from "yaml";
@@ -41,10 +45,25 @@ export interface Importer {
   readonly dependencies: readonly DirectDependency[];
 }
 
+/**
+ * Where a package in the lockfile comes from. Only "registry" packages have a
+ * publish date and a name@version that `pnpm licenses list` reports unchanged.
+ */
+export type PackageSource =
+  | { readonly kind: "registry" }
+  | { readonly kind: "tarball" | "git" | "directory"; readonly location: string };
+
 export interface Lockfile {
   readonly importers: readonly Importer[];
   /** "name@version" of every package in the "packages" section, all platforms. */
   readonly packageIds: ReadonlySet<string>;
+  /**
+   * "name@version" of every package in the boot document: pnpm itself, pinned by
+   * "packageManager", and its platform binaries. Not part of any importer.
+   */
+  readonly bootPackageIds: ReadonlySet<string>;
+  /** Source of every package in either document, by package id. */
+  readonly sources: ReadonlyMap<string, PackageSource>;
   /** Snapshot key -> the snapshot keys or link targets it depends on, as name/version pairs. */
   readonly snapshots: ReadonlyMap<string, ReadonlyArray<readonly [string, string]>>;
   /** True if the boot document lists pnpm config dependencies. */
@@ -91,6 +110,13 @@ export function parseLockfile(text: string): Lockfile {
   );
 
   const packageIds = new Set(Object.keys(asMap(project["packages"])).map(packageIdOf));
+  const bootPackageIds = new Set(Object.keys(asMap(boot["packages"])).map(packageIdOf));
+  const sources = new Map<string, PackageSource>();
+  for (const section of [boot["packages"], project["packages"]]) {
+    for (const [key, value] of Object.entries(asMap(section))) {
+      sources.set(packageIdOf(key), sourceOf(asMap(asMap(value)["resolution"])));
+    }
+  }
 
   const snapshots = new Map<string, Array<readonly [string, string]>>();
   for (const [key, value] of Object.entries(asMap(project["snapshots"]))) {
@@ -108,7 +134,60 @@ export function parseLockfile(text: string): Lockfile {
     (importer) => Object.keys(asMap(asMap(importer)["configDependencies"])).length > 0,
   );
 
-  return { importers, packageIds, snapshots, hasConfigDependencies };
+  return {
+    importers,
+    packageIds,
+    bootPackageIds,
+    sources,
+    snapshots,
+    hasConfigDependencies,
+  };
+}
+
+/** The npm registry. Tarball URLs on it still count as registry packages. */
+const REGISTRY_TARBALL = /^https:\/\/registry\.npmjs\.org\//;
+
+/** Reads a "resolution" entry of the lockfile (https://pnpm.io/lockfile). */
+function sourceOf(resolution: YamlMap): PackageSource {
+  const type = resolution["type"];
+  if (type === "git") {
+    return {
+      kind: "git",
+      location: `${String(resolution["repo"])}#${String(resolution["commit"])}`,
+    };
+  }
+  if (type === "directory") {
+    return { kind: "directory", location: String(resolution["directory"]) };
+  }
+  const tarball = resolution["tarball"];
+  if (typeof tarball === "string" && resolution["gitHosted"] === true) {
+    // "github:owner/repo": pnpm downloads a tarball of the commit from the host.
+    return { kind: "git", location: tarball };
+  }
+  if (typeof tarball === "string" && !REGISTRY_TARBALL.test(tarball)) {
+    return { kind: "tarball", location: tarball };
+  }
+  if (type !== undefined || typeof resolution["integrity"] !== "string") {
+    // Anything else that is not a plain registry entry: say what the lockfile has.
+    return { kind: "tarball", location: JSON.stringify(resolution) };
+  }
+  return { kind: "registry" };
+}
+
+/** Describes a package that does not come from the registry, for error messages. */
+export function describeSource(id: string, source: PackageSource): string | undefined {
+  switch (source.kind) {
+    case "registry":
+      return undefined;
+    case "git":
+      return `${id} comes from a git repository (${source.location})`;
+    case "directory":
+      return `${id} comes from the local folder ${source.location}`;
+    case "tarball":
+      return source.location.startsWith("file:")
+        ? `${id} comes from the local tarball ${source.location.slice("file:".length)}`
+        : `${id} comes from the tarball ${source.location}`;
+  }
 }
 
 /** "name@version(peer@1)(peer@2)" -> "name@version". */
@@ -122,22 +201,23 @@ export type DependencyTarget =
 
 /**
  * Turns a name and a lockfile version into what it points at. "link:" versions are
- * relative to the importer's folder; the result is relative to the repository root,
- * or absolute when the link was absolute. Aliased versions ("other@1.0.0") are
- * already a snapshot key.
+ * relative to `base`: the importer's folder for an importer's dependencies, the
+ * repository root (".") for a snapshot's dependencies. The result is relative to
+ * the repository root, or absolute when the link was absolute. Aliased versions
+ * ("other@1.0.0") are already a snapshot key.
  */
 export function resolveTarget(
-  importerPath: string,
+  base: string,
   name: string,
   version: string,
 ): DependencyTarget {
   if (version.startsWith("link:")) {
     const target = version.slice("link:".length).replace(/\\/g, "/");
     if (isAbsolute(target)) return { kind: "link", path: target };
-    return { kind: "link", path: posix.normalize(posix.join(importerPath, target)) };
+    return { kind: "link", path: posix.normalize(posix.join(base, target)) };
   }
-  const base = version.replace(/\(.*$/, "");
-  if (!base.startsWith("file:") && base.lastIndexOf("@") > 0) {
+  const plain = version.replace(/\(.*$/, "");
+  if (!plain.startsWith("file:") && plain.lastIndexOf("@") > 0) {
     return { kind: "package", key: version };
   }
   return { kind: "package", key: `${name}@${version}` };
@@ -170,13 +250,16 @@ export function classifyPackages(lockfile: Lockfile): Classification {
   const productionRoots: string[] = [];
   const developmentRoots: string[] = [];
 
+  // `from` names the importer folder or the snapshot key, for messages; `base` is
+  // the folder that link: versions are relative to.
   const addTarget = (
     from: string,
+    base: string,
     name: string,
     version: string,
     roots: string[],
   ): void => {
-    const target = resolveTarget(from, name, version);
+    const target = resolveTarget(base, name, version);
     if (target.kind === "link") {
       // A link must point at another workspace package. Anything else (outside the
       // repository, or a folder that is not a workspace package) is never installed
@@ -208,6 +291,7 @@ export function classifyPackages(lockfile: Lockfile): Classification {
         importer.path === "." && dependency.field === "devDependencies";
       addTarget(
         importer.path,
+        importer.path,
         dependency.name,
         dependency.version,
         developmentOnly ? developmentRoots : productionRoots,
@@ -228,7 +312,7 @@ export function classifyPackages(lockfile: Lockfile): Classification {
         problems.push(`pnpm-lock.yaml has no snapshot for ${key}.`);
         continue;
       }
-      for (const [name, version] of children) addTarget(key, name, version, queue);
+      for (const [name, version] of children) addTarget(key, ".", name, version, queue);
     }
     return ids;
   };
@@ -238,4 +322,40 @@ export function classifyPackages(lockfile: Lockfile): Classification {
     [...walk(developmentRoots)].filter((id) => !production.has(id)),
   );
   return { production, development, problems: [...new Set(problems)] };
+}
+
+export interface LinkReference {
+  /** The importer folder or snapshot key that has the link. */
+  readonly from: string;
+  readonly name: string;
+  readonly version: string;
+}
+
+/**
+ * Every link: dependency, in an importer or a snapshot, whose target is `path` or
+ * lies inside it. `path` is relative to the repository root. Importers at or inside
+ * `path` are skipped: a package may link to its own subfolders.
+ */
+export function linksInto(lockfile: Lockfile, path: string): LinkReference[] {
+  const inside = (target: string): boolean =>
+    target === path || target.startsWith(`${path}/`);
+  const found: LinkReference[] = [];
+  for (const importer of lockfile.importers) {
+    if (inside(importer.path)) continue;
+    for (const { name, version } of importer.dependencies) {
+      const target = resolveTarget(importer.path, name, version);
+      if (target.kind === "link" && inside(target.path)) {
+        found.push({ from: importer.path, name, version });
+      }
+    }
+  }
+  for (const [key, children] of lockfile.snapshots) {
+    for (const [name, version] of children) {
+      const target = resolveTarget(".", name, version);
+      if (target.kind === "link" && inside(target.path)) {
+        found.push({ from: key, name, version });
+      }
+    }
+  }
+  return found;
 }
