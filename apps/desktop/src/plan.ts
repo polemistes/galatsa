@@ -18,7 +18,7 @@ export type RunMode = "capture" | "timing";
 export const RUNS_PER_ENGINE: readonly RunMode[] = ["capture", "timing", "timing"];
 
 /** Rough minutes per engine on a typical laptop, for the hint on the start screen. */
-export const MINUTES_PER_ENGINE = 5;
+export const MINUTES_PER_ENGINE = 6;
 
 export interface RunPlan {
   /** Session folder name (see start_session in the Rust code). */
@@ -37,6 +37,8 @@ export function planToQuery(plan: RunPlan): string {
     session: plan.session,
     engines: plan.engines.join(","),
     index: String(plan.index),
+    // Selects the engine in the harness's own controls (shown during the run).
+    engine: plan.engines[plan.index] ?? "",
     // The harness's own memory API needs cross-origin isolation, which the app
     // does not set up; skip it instead of waiting for it to fail.
     memory: "0",
