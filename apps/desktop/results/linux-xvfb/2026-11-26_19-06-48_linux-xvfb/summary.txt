@@ -1,0 +1,23 @@
+Galatsa-måling 2026-11-26_19-06-48_linux-xvfb
+Maskin: Linux (Arch Linux), AMD Ryzen 7 PRO 7840U w/ Radeon 780M Graphics, nettlesermotor WebKitGTK 2.54.3
+
+Konva
+  Kjøring 1 (oppvarming med bilder): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 5 938 MiB: ikke bestått
+  Kjøring 1 kan ikke brukes til valget: capture run: the run paused at each hold to take images
+  Kjøring 2 (tidsmåling): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 5 979 MiB: ikke bestått
+  Kjøring 3 (tidsmåling): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 6 203 MiB: ikke bestått
+  De to tidsmålingene gir samme dom.
+
+Egen canvas-tegning
+  Kjøring 1 (oppvarming med bilder): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 6 265 MiB: ikke bestått
+  Kjøring 1 kan ikke brukes til valget: capture run: the run paused at each hold to take images
+  Kjøring 2 (tidsmåling): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 6 283 MiB: ikke bestått
+  Kjøring 3 (tidsmåling): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 6 374 MiB: ikke bestått
+  De to tidsmålingene gir samme dom.
+
+Nettleserens egne elementer (DOM)
+  Kjøring 1 (oppvarming med bilder): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 1 445 MiB: ikke bestått
+  Kjøring 1 kan ikke brukes til valget: capture run: the run paused at each hold to take images
+  Kjøring 2 (tidsmåling): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 1 930 MiB: ikke bestått
+  Kjøring 3 (tidsmåling): skjerm 61 Hz, 16,7 ms: ikke bestått, 33 ms: ikke bestått, ingen stopp over 100 ms: ikke bestått, skarp tekst: bestått, minne 2 207 MiB: ikke bestått
+  De to tidsmålingene gir samme dom.

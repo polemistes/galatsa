@@ -1,0 +1,381 @@
+{
+  "format": "galatsa-bench-shell-summary",
+  "version": 1,
+  "session": "2026-11-26_19-06-48_linux-xvfb",
+  "platform": "linux-xvfb",
+  "host": {
+    "os": "linux",
+    "osName": "Arch Linux",
+    "osVersion": null,
+    "osLongVersion": "Linux (Arch Linux)",
+    "kernelVersion": "7.3.5-arch1-1",
+    "arch": "x86_64",
+    "cpu": "AMD Ryzen 7 PRO 7840U w/ Radeon 780M Graphics",
+    "logicalCpus": 16,
+    "physicalCores": 8,
+    "totalMemoryBytes": 32264155136,
+    "gpus": [
+      "c3:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Phoenix1 (rev dd) [1002:15BF] (driver amdgpu)"
+    ],
+    "power": {
+      "onMains": true,
+      "batteryPercent": 100,
+      "lowPowerMode": false,
+      "details": "BAT0: battery 100% Full; AC: mains online=1; platform_profile: performance"
+    },
+    "webview": {
+      "engine": "WebKitGTK",
+      "version": "2.54.3"
+    },
+    "tauriVersion": "2.12.5",
+    "appVersion": "0.1.0",
+    "displayServer": "DISPLAY=:99 GDK_BACKEND=x11"
+  },
+  "engines": [
+    {
+      "engine": "konva",
+      "runs": [
+        {
+          "run": 1,
+          "mode": "capture",
+          "file": "linux-xvfb-konva-1-capture.json",
+          "valid": false,
+          "problems": ["capture run: the run paused at each hold to take images"],
+          "refreshRateHz": 61.27703398558188,
+          "frames": 2762,
+          "frames16_7": {
+            "ratio": 0.16944243301955106,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.08254887762490949,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 91,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 129,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 6226295808,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15809,
+          "workP95Ms": 74,
+          "frameP95Ms": 78
+        },
+        {
+          "run": 2,
+          "mode": "timing",
+          "file": "linux-xvfb-konva-2-timing.json",
+          "valid": true,
+          "problems": [],
+          "refreshRateHz": 61.3086038124678,
+          "frames": 2775,
+          "frames16_7": {
+            "ratio": 0.16936936936936936,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.07891891891891892,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 92,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 129,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 6269099008,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15479,
+          "workP95Ms": 74,
+          "frameP95Ms": 77
+        },
+        {
+          "run": 3,
+          "mode": "timing",
+          "file": "linux-xvfb-konva-3-timing.json",
+          "valid": true,
+          "problems": [],
+          "refreshRateHz": 61.21399176954733,
+          "frames": 2775,
+          "frames16_7": {
+            "ratio": 0.17225225225225224,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.07855855855855856,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 93,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 127,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 6504153088,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15608,
+          "workP95Ms": 74,
+          "frameP95Ms": 78
+        }
+      ],
+      "timingRunsAgree": true,
+      "error": null
+    },
+    {
+      "engine": "canvas2d",
+      "runs": [
+        {
+          "run": 1,
+          "mode": "capture",
+          "file": "linux-xvfb-canvas2d-1-capture.json",
+          "valid": false,
+          "problems": ["capture run: the run paused at each hold to take images"],
+          "refreshRateHz": 61.088295687885015,
+          "frames": 2762,
+          "frames16_7": {
+            "ratio": 0.4163649529326575,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.2175959449674149,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 60,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 48,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 6569500672,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15078,
+          "workP95Ms": 54,
+          "frameP95Ms": 61
+        },
+        {
+          "run": 2,
+          "mode": "timing",
+          "file": "linux-xvfb-canvas2d-2-timing.json",
+          "valid": true,
+          "problems": [],
+          "refreshRateHz": 61.18251928020566,
+          "frames": 2775,
+          "frames16_7": {
+            "ratio": 0.4126126126126126,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.2082882882882883,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 59,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 56,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 6588579840,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15314,
+          "workP95Ms": 53,
+          "frameP95Ms": 59
+        },
+        {
+          "run": 3,
+          "mode": "timing",
+          "file": "linux-xvfb-canvas2d-3-timing.json",
+          "valid": true,
+          "problems": [],
+          "refreshRateHz": 61.27703398558188,
+          "frames": 2775,
+          "frames16_7": {
+            "ratio": 0.4144144144144144,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.21657657657657658,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 60,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 45,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 6683157504,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15267,
+          "workP95Ms": 54,
+          "frameP95Ms": 62
+        }
+      ],
+      "timingRunsAgree": true,
+      "error": null
+    },
+    {
+      "engine": "dom",
+      "runs": [
+        {
+          "run": 1,
+          "mode": "capture",
+          "file": "linux-xvfb-dom-1-capture.json",
+          "valid": false,
+          "problems": ["capture run: the run paused at each hold to take images"],
+          "refreshRateHz": 61.3086038124678,
+          "frames": 2762,
+          "frames16_7": {
+            "ratio": 0.2509051412020275,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.20130340333091962,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 344,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 109,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 1515478016,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15461,
+          "workP95Ms": 169,
+          "frameP95Ms": 171
+        },
+        {
+          "run": 2,
+          "mode": "timing",
+          "file": "linux-xvfb-dom-2-timing.json",
+          "valid": true,
+          "problems": [],
+          "refreshRateHz": 61.151079136690655,
+          "frames": 2775,
+          "frames16_7": {
+            "ratio": 0.25117117117117116,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.20252252252252254,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 363,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 125,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 2023862272,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15493,
+          "workP95Ms": 176,
+          "frameP95Ms": 176
+        },
+        {
+          "run": 3,
+          "mode": "timing",
+          "file": "linux-xvfb-dom-3-timing.json",
+          "valid": true,
+          "problems": [],
+          "refreshRateHz": 61.11967128916282,
+          "frames": 2775,
+          "frames16_7": {
+            "ratio": 0.25045045045045045,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "frames33": {
+            "ratio": 0.20108108108108108,
+            "pass": false,
+            "judgedBy": "work and display"
+          },
+          "stalls": {
+            "count": 349,
+            "pass": false
+          },
+          "textSharp": {
+            "maxMs": 110,
+            "missing": 0,
+            "pass": true
+          },
+          "memory": {
+            "peakBytes": 2314219520,
+            "pass": false
+          },
+          "memoryProblems": [],
+          "loadMs": 15588,
+          "workP95Ms": 174,
+          "frameP95Ms": 176
+        }
+      ],
+      "timingRunsAgree": true,
+      "error": null
+    }
+  ]
+}
