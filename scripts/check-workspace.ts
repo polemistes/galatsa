@@ -10,8 +10,8 @@
 // Usage: node scripts/check-workspace.ts   (or `pnpm check:workspace`)
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseLockfile, type Lockfile } from "./lib/lockfile.ts";
 import { checkWorkspace, type Manifest, type WorkspacePackage } from "./lib/workspace.ts";
@@ -53,7 +53,16 @@ function listPackagePaths(): string[] {
   ) as Array<{
     path: string;
   }>;
-  return listed.map((entry) => relative(root, entry.path).split(sep).join("/") || ".");
+  // Compare real paths: the repository may be reached through a symlink, or on
+  // Windows through a short (8.3) name, and pnpm may report the other spelling.
+  const realRoot = realpathSync.native(root);
+  return listed.map((entry) => {
+    const path = relative(realRoot, realpathSync.native(entry.path));
+    if (path.startsWith("..") || isAbsolute(path)) {
+      fail([`Workspace check: pnpm listed ${entry.path}, which is outside ${realRoot}.`]);
+    }
+    return path.split(sep).join("/") || ".";
+  });
 }
 
 /** Tracked and untracked, not ignored files; git writes "/" separators everywhere. */

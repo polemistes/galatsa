@@ -51,6 +51,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # `pnpm check` does not need a build: workspace packages are read from source.
+      # Its release-age check asks the npm registry for publish dates; GitHub sets
+      # CI=true, so the check fails instead of skipping when the registry is down.
       - name: Run checks
         run: pnpm check
 
