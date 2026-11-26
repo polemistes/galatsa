@@ -14,7 +14,7 @@ import {
   zoomToFit,
 } from "./geometry.ts";
 import { newId } from "./ids.ts";
-import { compareCodeUnits, keyAt, keyBetween, sortOrdered } from "./order.ts";
+import { compareCodeUnits, isValidOrderKey, keyAt, keyBetween, sortOrdered } from "./order.ts";
 import { Resolver, lookupFromRecord } from "./resolve.ts";
 import {
   hiddenAt,
@@ -32,7 +32,7 @@ import {
   type Element,
   type Stop,
 } from "./types.ts";
-import { validateSnapshot } from "./validate.ts";
+import { nestingDepth, validateSnapshot } from "./validate.ts";
 
 function seeded(seed: number): () => number {
   let s = seed;
@@ -42,9 +42,7 @@ function seeded(seed: number): () => number {
   };
 }
 
-function el(
-  partial: Partial<Element> & { type?: string; parent?: string | null },
-): Element {
+function el(partial: Record<string, unknown>): Element {
   return {
     type: "test.shapes/box",
     typeVersion: 1,
@@ -54,13 +52,16 @@ function el(
     rebase: null,
     name: "",
     locked: false,
-    assets: [],
-    removed: null,
+    rev: "r0",
+    deleted: null,
+    dissolved: false,
+    refs: [],
+    ext: {},
     data: {},
     size: { w: 10, h: 10 },
     rot: 0,
     ...partial,
-  } as Element;
+  } as unknown as Element;
 }
 
 describe("order keys", () => {
@@ -173,7 +174,7 @@ describe("resolution", () => {
       rebased: el({
         parent: "F",
         pos: { x: 10, y: 10, space: null },
-        rebase: { from: null, to: "F", dx: -100, dy: -100 },
+        rebase: { to: "F", base: null, shifts: [{ from: null, dx: -100, dy: -100 }] },
       }),
       stale: el({ parent: "F", pos: { x: 10, y: 10, space: "G" } }),
       selfInside: el({
@@ -194,22 +195,31 @@ describe("resolution", () => {
     expect(r.localPosition("selfInside")).toEqual({ x: 7, y: 8 });
   });
 
-  it("hides deleted subtrees, draws through dissolved containers, and stacks per container", () => {
+  it("hides deleted elements, draws through gone containers, and stacks per container", () => {
     const elements = {
       F: el({ type: FRAME_TYPE, order: "a1" }),
       a: el({ parent: "F", order: "a1" }),
       b: el({ parent: "F", order: "a0" }),
       top: el({ order: "a2" }),
       back: el({ order: "a0" }),
-      Gr: el({ type: GROUP_TYPE, order: "a3", removed: "dissolve" }),
+      Gr: el({ type: GROUP_TYPE, order: "a3", dissolved: true }),
       g1: el({ parent: "Gr" }),
-      D: el({ type: GROUP_TYPE, order: "a4", removed: "delete" }),
-      d1: el({ parent: "D" }),
+      D: el({ type: GROUP_TYPE, order: "a4", deleted: { action: "k", root: "D", rev: "r0" } }),
+      d1: el({ parent: "D", deleted: { action: "k", root: "D", rev: "r0" } }),
+      // Added to D after the delete (no mark): survives in D's slot.
+      d2: el({ parent: "D", order: "a1" }),
+      // Marked, but changed since (different rev): survives.
+      d3: el({ parent: "D", order: "a2", rev: "r1", deleted: { action: "k", root: "D", rev: "r0" } }),
     };
     const r = new Resolver(lookupFromRecord(elements));
-    expect(r.drawOrder()).toEqual(["back", "F", "b", "a", "top", "g1"]);
+    expect(r.drawOrder()).toEqual(["back", "F", "b", "a", "top", "g1", "d2", "d3"]);
+    expect(r.isDeleted("D")).toBe(true);
     expect(r.isDeleted("d1")).toBe(true);
+    expect(r.isDeleted("d2")).toBe(false);
+    expect(r.isDeleted("d3")).toBe(false);
     expect(r.logicalParentOf("g1")).toBe(null);
+    expect(r.logicalParentOf("d2")).toBe(null);
+    expect(r.logicalChildren(null)).toEqual(["back", "F", "top", "g1", "d2", "d3"]);
   });
 
   it("computes group bounds from live children", () => {
@@ -217,7 +227,11 @@ describe("resolution", () => {
       Gr: el({ type: GROUP_TYPE, pos: { x: 100, y: 100, space: null } }),
       a: el({ parent: "Gr", pos: { x: 0, y: 0, space: "Gr" }, size: { w: 10, h: 10 } }),
       b: el({ parent: "Gr", pos: { x: 20, y: 30, space: "Gr" }, size: { w: 10, h: 10 } }),
-      c: el({ parent: "Gr", pos: { x: 500, y: 500, space: "Gr" }, removed: "delete" }),
+      c: el({
+        parent: "Gr",
+        pos: { x: 500, y: 500, space: "Gr" },
+        deleted: { action: "k", root: "c", rev: "r0" },
+      }),
       Empty: el({ type: GROUP_TYPE }),
     };
     const r = new Resolver(lookupFromRecord(elements));
@@ -233,7 +247,9 @@ function stop(partial: Partial<Stop>): Stop {
     notes: { $y: "text", delta: [] },
     visibility: {},
     transition: null,
-    removed: false,
+    rev: "r0",
+    removed: null,
+    ext: {},
     ...partial,
   };
 }
@@ -245,13 +261,17 @@ describe("routes and visibility", () => {
       s2: stop({ visibility: { title: { action: "hide" } } }),
       s3: stop({ visibility: { chart: { action: "show" } } }),
       s4: stop({ visibility: { chart: { action: "hide" } } }),
-      gone: stop({ removed: true }),
+      gone: stop({ removed: { rev: "r0" } }),
+      // Removed, but changed concurrently: the removal does not apply.
+      kept: stop({ rev: "r1", removed: { rev: "r0" } }),
     },
     routes: {
       full: {
         name: "",
         order: "a0",
-        removed: false,
+        rev: "r0",
+        removed: null,
+        ext: {},
         entries: {
           e1: { stop: "s1", order: "a0" },
           e2: { stop: "s2", order: "a1" },
@@ -259,20 +279,23 @@ describe("routes and visibility", () => {
           e4: { stop: "s4", order: "a3" },
           ex: { stop: "gone", order: "a4" },
           ey: { stop: "missing", order: "a5" },
+          ez: { stop: "kept", order: "a6" },
         },
       },
       short: {
         name: "",
         order: "a1",
-        removed: false,
+        rev: "r0",
+        removed: null,
+        ext: {},
         entries: { e1: { stop: "s1", order: "a0" }, e4: { stop: "s4", order: "a1" } },
       },
-      old: { name: "", order: "Zz", removed: true, entries: {} },
+      old: { name: "", order: "Zz", rev: "r0", removed: { rev: "r0" }, ext: {}, entries: {} },
     },
   };
 
   it("plays entries in order, skipping removed and missing stops", () => {
-    expect(routeSteps(doc, "full").map((s) => s.stop)).toEqual(["s1", "s2", "s3", "s4"]);
+    expect(routeSteps(doc, "full").map((s) => s.stop)).toEqual(["s1", "s2", "s3", "s4", "kept"]);
     expect(routeSteps(doc, "old")).toEqual([]);
     expect(liveRoutes(doc)).toEqual(["full", "short"]);
   });
@@ -326,15 +349,18 @@ describe("routes and visibility", () => {
 describe("validation", () => {
   const valid: DocumentSnapshot = {
     schemaVersion: SCHEMA_VERSION,
+    minReaderVersion: 1,
     id: "doc1",
     title: "",
     settings: {},
     elements: {
       a: el({
         data: {
-          text: { $y: "text", delta: [{ insert: "x" }] },
+          text: { $y: "text", delta: [{ insert: "x" }], attributes: { dir: "rtl" } },
           plain: { nested: { $y: "anything" } },
+          bin: { $y: "any", value: { b: "AQI=" } },
         },
+        ext: { "core.alt": "A box" },
       }),
     },
     stops: { s: stop({}) },
@@ -342,7 +368,9 @@ describe("validation", () => {
       r: {
         name: "",
         order: "a0",
-        removed: false,
+        rev: "r0",
+        removed: null,
+        ext: {},
         entries: { e: { stop: "s", order: "a0" } },
       },
     },
@@ -358,18 +386,55 @@ describe("validation", () => {
       DocumentSnapshot;
     const a = broken.elements.a as unknown as Record<string, unknown>;
     a.pos = { x: "1", y: 0, space: null };
-    a.removed = "dissolve";
+    a.dissolved = true;
+    a.smuggled = 1;
     (a.data as Record<string, unknown>).bad = { $y: "nope" };
     broken.assets = {
       "sha256-xyz": { mediaType: "png", byteLength: -1 },
     } as DocumentSnapshot["assets"];
     const problems = validateSnapshot(broken);
     expect(problems.some((p) => p.includes("pos.x"))).toBe(true);
-    expect(
-      problems.some((p) => p.includes("only frames and groups can be dissolved")),
-    ).toBe(true);
+    expect(problems.some((p) => p.includes("only frames and groups can be dissolved"))).toBe(
+      true,
+    );
+    expect(problems.some((p) => p.includes("smuggled: unknown field"))).toBe(true);
     expect(problems.some((p) => p.includes("unknown shared type"))).toBe(true);
     expect(problems.some((p) => p.includes("invalid asset id"))).toBe(true);
     expect(validateSnapshot(null)).toEqual(["document: must be an object"]);
+  });
+
+  it("rejects order keys outside the syntax, and __proto__ as an id", () => {
+    for (const bad of ["", "a", "Z", "abc0", "0", "a1 ", "A" + "0".repeat(26)]) {
+      expect(isValidOrderKey(bad)).toBe(false);
+      const doc = JSON.parse(JSON.stringify(valid)) as DocumentSnapshot;
+      (doc.elements.a as { order: string }).order = bad;
+      expect(validateSnapshot(doc).some((p) => p.includes("order key"))).toBe(true);
+    }
+    for (const good of ["a0", "a1V", "Zz", "b00", "a0ab1"]) expect(isValidOrderKey(good)).toBe(true);
+    const doc = JSON.parse(JSON.stringify(valid)) as DocumentSnapshot;
+    Object.defineProperty(doc.elements, "__proto__", {
+      value: doc.elements.a,
+      enumerable: true,
+    });
+    expect(validateSnapshot(doc).some((p) => p.includes("invalid id"))).toBe(true);
+  });
+
+  it("generates keys even next to invalid ones, without throwing", () => {
+    for (const bad of ["", "a", "abc0", "Z", "0", "a1 "]) {
+      expect(() => keyBetween(bad, null)).not.toThrow();
+      expect(isValidOrderKey(keyBetween(bad, null))).toBe(true);
+    }
+    const k = keyAt([{ id: "x", order: "" }, { id: "y", order: "abc0" }, { id: "z", order: "a5" }], 2);
+    expect(isValidOrderKey(k)).toBe(true);
+    expect(compareCodeUnits(k, "a5")).toBeLessThan(0);
+  });
+
+  it("refuses very deep nesting without overflowing the stack", () => {
+    let deep: unknown = 1;
+    for (let i = 0; i < 100_000; i++) deep = [deep];
+    const doc = JSON.parse(JSON.stringify(valid)) as DocumentSnapshot;
+    (doc.elements.a!.data as Record<string, unknown>).deep = deep;
+    expect(nestingDepth(doc)).toBeGreaterThan(256);
+    expect(validateSnapshot(doc)[0]).toContain("nested deeper");
   });
 });

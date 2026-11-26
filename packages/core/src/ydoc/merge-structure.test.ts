@@ -157,7 +157,7 @@ function close(actual: Point, expected: Point): void {
 
 /** Root children in drawing order, removed ones excluded. */
 function rootOrder(r: Resolver): string[] {
-  return r.children(null).filter((id) => !r.get(id)?.removed);
+  return r.children(null).filter((id) => !r.isGone(id));
 }
 
 describe("z-order (section 4.3)", () => {
@@ -309,21 +309,71 @@ describe("frames and reparenting (section 5.7)", () => {
     );
   });
 
-  it("deleting a frame while someone adds to it: hidden with it, back on restore", () => {
+  it("deleting a frame while someone moves an element into it: the element survives in place", () => {
     scenario(
       (a, b) => {
         deleteElements(a, ["F"]);
         reparent(b, "X", "F");
       },
       ({ a, resolver }) => {
-        expect(resolver.isDeleted("X")).toBe(true);
-        expect(resolver.drawOrder()).not.toContain("X");
+        expect(resolver.isDeleted("F")).toBe(true);
+        expect(resolver.isDeleted("X")).toBe(false);
+        expect(resolver.drawOrder()).toContain("X");
+        // Shown where the frame was, in the frame's parent, at the same place.
+        expect(resolver.logicalParentOf("X")).toBe(null);
+        close(resolver.worldOrigin("X"), { x: 200, y: 200 });
+        // Restoring F brings the frame back with X inside it.
         restoreElement(a, "F");
         const after = new Resolver(yLookup(a));
-        expect(after.drawOrder()).toContain("X");
+        expect(after.logicalParentOf("X")).toBe("F");
         close(after.worldOrigin("X"), { x: 200, y: 200 });
       },
     );
+  });
+
+  it("deleting a frame while someone edits an element inside it: that element survives", () => {
+    scenario(
+      (a, b) => {
+        deleteElements(a, ["F"]);
+        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, "!"), { touch: ["T"] });
+      },
+      ({ resolver, snapshot }) => {
+        expect(resolver.isDeleted("F")).toBe(true);
+        expect(resolver.isDeleted("T")).toBe(false);
+        expect(resolver.logicalParentOf("T")).toBe(null);
+        close(resolver.worldOrigin("T"), { x: 1010, y: 1010 });
+        expect(JSON.stringify(snapshot.elements.T!.data.text)).toContain("Hi!");
+      },
+    );
+  });
+
+  it("deleting a frame with nobody working inside it deletes everything in it", () => {
+    const a = base();
+    deleteElements(a, ["F"]);
+    const r = new Resolver(yLookup(a));
+    expect(r.isDeleted("F")).toBe(true);
+    expect(r.isDeleted("T")).toBe(true);
+    expect(r.drawOrder()).not.toContain("T");
+    restoreElement(a, "F");
+    expect(new Resolver(yLookup(a)).drawOrder()).toContain("T");
+  });
+
+  it("three replicas: A moves X into G, B deletes G, C moves X: X survives in every order", () => {
+    for (const ids of [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]] as const) {
+      const start = base();
+      const [a, b, c] = ids.map((id) => forkDoc(start, id)) as [Y.Doc, Y.Doc, Y.Doc];
+      reparent(a, "X", "G");
+      deleteElements(b, ["G"]);
+      moveElement(c, "X", 300, 300);
+      syncDocs(a, b);
+      syncDocs(b, c);
+      syncDocs(a, c);
+      expect(toSnapshot(a)).toEqual(toSnapshot(c));
+      const r = new Resolver(yLookup(a));
+      expect(r.isDeleted("X")).toBe(false);
+      expect(r.drawOrder()).toContain("X");
+      close(r.worldOrigin("X"), { x: 300, y: 300 });
+    }
   });
 });
 
@@ -393,24 +443,39 @@ describe("groups (section 5.7)", () => {
 });
 
 describe("deletion and locking (section 5.7)", () => {
-  it("delete + concurrent edit: deleted, and the edit is back on restore", () => {
+  it("delete + concurrent edit of the same element: the edit wins, the element stays", () => {
     scenario(
       (a, b) => {
         deleteElements(a, ["T"]);
-        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " there"));
+        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " there"), {
+          touch: ["T"],
+        });
         moveElement(b, "T", 20, 30);
       },
-      ({ a, snapshot, resolver }) => {
-        expect(resolver.isDeleted("T")).toBe(true);
+      ({ snapshot, resolver }) => {
+        expect(resolver.isDeleted("T")).toBe(false);
         expect(JSON.stringify(snapshot.elements.T!.data.text)).toContain("Hi there");
-        restoreElement(a, "T");
-        const after = new Resolver(yLookup(a));
-        expect(after.drawOrder()).toContain("T");
-        close(after.localPosition("T"), { x: 20, y: 30 });
+        close(resolver.localPosition("T"), { x: 20, y: 30 });
       },
     );
   });
 
+  it("delete + concurrent dissolve of the same group: dissolve wins, children kept", () => {
+    scenario(
+      (a, b) => {
+        dissolve(a, "Gr");
+        deleteElements(b, ["Gr"]);
+      },
+      ({ resolver }) => {
+        expect(resolver.isDissolved("Gr")).toBe(true);
+        for (const id of ["M1", "M2"]) {
+          expect(resolver.isDeleted(id)).toBe(false);
+          expect(resolver.drawOrder()).toContain(id);
+        }
+        close(resolver.worldOrigin("M2"), { x: 3050, y: 3000 });
+      },
+    );
+  });
   it("lock + concurrent move: locked and moved", () => {
     scenario(
       (a, b) => {
@@ -438,7 +503,7 @@ describe("shared stops and routes (section 6.5)", () => {
     scenario(
       (a, b) => {
         renameStop(a, "S", "Opening");
-        edit(b, () => stopNotes(b, "S").insert(0, "Say hello"));
+        edit(b, () => stopNotes(b, "S").insert(0, "Say hello"), { touch: ["S"] });
       },
       ({ snapshot }) => {
         const stop = snapshot.stops.S!;
@@ -494,40 +559,37 @@ describe("shared stops and routes (section 6.5)", () => {
     );
   });
 
-  it("remove a stop + concurrent edit: removed, edit kept for restore", () => {
+  it("remove a stop + concurrent edit: the edit wins, the stop stays", () => {
     scenario(
       (a, b) => {
         removeStop(a, "S");
         renameStop(b, "S", "Kept");
       },
-      ({ a, snapshot }) => {
-        expect(routeSteps(snapshot, "R1").map((s) => s.stop)).toEqual(["S2"]);
-        restoreStop(a, "S");
-        const after = toSnapshot(a);
-        expect(after.stops.S!.name).toBe("Kept");
-        expect(routeSteps(after, "R1").map((s) => s.stop)).toEqual(["S", "S2"]);
+      ({ snapshot }) => {
+        expect(snapshot.stops.S!.name).toBe("Kept");
+        expect(routeSteps(snapshot, "R1").map((s) => s.stop)).toEqual(["S", "S2"]);
       },
     );
   });
 
-  it("remove a stop + concurrent insert into another route: skipped until restored", () => {
+  it("remove a stop with nobody working on it: skipped in every route until restored", () => {
+    const a = base();
+    removeStop(a, "S");
+    expect(routeSteps(toSnapshot(a), "R1").map((s) => s.stop)).toEqual(["S2"]);
+    restoreStop(a, "S");
+    expect(routeSteps(toSnapshot(a), "R1").map((s) => s.stop)).toEqual(["S", "S2"]);
+  });
+  it("remove a stop + concurrent insert into a route: the stop stays (it was used)", () => {
     scenario(
       (a, b) => {
         removeStop(a, "S2");
         insertRouteEntry(b, "R2", "S2", { id: "e5" });
       },
-      ({ a, snapshot }) => {
-        expect(routeSteps(snapshot, "R2").map((s) => s.stop)).toEqual(["S"]);
-        restoreStop(a, "S2");
-        expect(routeSteps(toSnapshot(a), "R2").map((s) => s.stop)).toEqual([
-          "S2",
-          "S",
-          "S2",
-        ]);
+      ({ snapshot }) => {
+        expect(routeSteps(snapshot, "R2").map((s) => s.stop)).toEqual(["S2", "S", "S2"]);
       },
     );
   });
-
   it("two inserts at the same place in a route: both kept, same order", () => {
     scenario(
       (a, b) => {
