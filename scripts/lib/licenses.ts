@@ -16,15 +16,21 @@
 //   no-derivatives Creative Commons licenses, SSPL, BUSL, Commons Clause,
 //   proprietary, and unknown or missing licenses.
 //
-// IMPORTANT: the license lists below (PRODUCTION_LICENSES, DEVELOPMENT_FREE_LICENSES,
-// ACCEPTED_EXCEPTIONS and NON_FREE_PATTERN) were written from
-// memory. They will be checked against the license texts, the SPDX license list and
-// the FSF compatibility list in package F0-02. Until then, treat every entry as
-// unverified.
+// Sources: every entry in PRODUCTION_LICENSES and DEVELOPMENT_FREE_LICENSES, and the
+// WITH exceptions, were checked against the FSF license list, the GPL FAQ, the SPDX
+// license list and Fedora's list of allowed licenses. The findings, with links, are
+// in docs/adr/0002-kontroll-av-forutsetninger.md (part 2, and the corrections in
+// part 7). The comments below give the short reason for each group. NON_FREE_PATTERN
+// is a safety net that only rejects; it is not part of that review.
+//
+// Still unconfirmed: whether BlueOak-1.0.0 is compatible with GPL-3.0. Until a source
+// confirms it, it is accepted for development only.
 
 /** Licenses accepted for production dependencies. */
 export const PRODUCTION_LICENSES: ReadonlySet<string> = new Set([
-  // Permissive. Compatible with GPL-3.0-or-later.
+  // Permissive. Compatible with GPL-3.0-or-later according to the FSF license list
+  // (https://www.gnu.org/licenses/license-list.html). CC0-1.0 gives no patent
+  // license, and the FSF advises against it for software, but it is compatible.
   "MIT",
   "MIT-0",
   "ISC",
@@ -33,36 +39,58 @@ export const PRODUCTION_LICENSES: ReadonlySet<string> = new Set([
   "0BSD",
   "Unlicense",
   "CC0-1.0",
-  "BlueOak-1.0.0",
-  "Python-2.0",
   "Zlib",
-  "Unicode-3.0",
   "Artistic-2.0",
-  // Permissive with a patent grant. One-way compatible with GPL-3.0.
+  "X11",
+  "BSL-1.0",
+  "WTFPL",
+  // Unicode data files license. The FSF lists both as compatible; that its older
+  // entry covers exactly the 2016 version is a judgment.
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  // The SPDX id Python-2.0 is the overall Python license (PSF license plus the older
+  // BeOpen, CNRI and CWI terms, https://spdx.org/licenses/Python-2.0.html). The FSF
+  // calls the license of "Python 2.0.1, 2.1.1, and newer versions" compatible
+  // (https://www.gnu.org/licenses/license-list.html#Python); the license of Python
+  // 1.6b1 to 2.0 and 2.1 is not, but that is a different license despite the name.
+  // PSF-2.0 alone stays on the development list on purpose: the FSF statement is
+  // about the overall Python license, not about the PSF part by itself.
+  "Python-2.0",
+  // Permissive with a patent grant. Compatible with GPL-3.0, not with GPL-2.0-only.
   "Apache-2.0",
-  // Attribution-only Creative Commons. Accepted for data, not code.
+  // Attribution-only Creative Commons. Compatible, but accepted for data, not code:
+  // the FSF advises against Creative Commons licenses for software.
   "CC-BY-4.0",
-  // Weak copyleft. MPL-2.0 has a Secondary License clause for GPL-3.0; LGPL is
-  // designed to be linked from GPL code.
+  // Compatible through the Secondary License clause (section 3.3), except for files
+  // marked "Incompatible With Secondary Licenses" (Exhibit B). This check cannot see
+  // that notice, so review every MPL-2.0 production package by hand. Checked:
+  // lightningcss 1.33.0 (all platform packages) has no such notice.
   "MPL-2.0",
+  // LGPL 2.0 can be converted to the ordinary GPL, version 2 or later, by its section 3
+  // (https://www.gnu.org/licenses/old-licenses/lgpl-2.0.html).
   "LGPL-2.0-only",
   "LGPL-2.0-or-later",
   "LGPL-2.0",
   "LGPL-2.0+",
+  // LGPL 2.1 allows relicensing under any version of the GPL since 2 (GPL FAQ).
   "LGPL-2.1-only",
   "LGPL-2.1-or-later",
   "LGPL-2.1",
   "LGPL-2.1+",
+  // LGPL 3.0 is compatible with GPL-3.0.
   "LGPL-3.0-only",
   "LGPL-3.0-or-later",
   "LGPL-3.0",
   "LGPL-3.0+",
-  // GPL family. Same family as this project.
+  // GPL family. "Version 2 or later" includes version 3.
   "GPL-2.0-or-later",
   "GPL-2.0+",
+  // GPL-3.0-only code can be combined with this project, but while such code is
+  // included, the whole program can in practice only be distributed under GPL
+  // version 3, not a later version.
   "GPL-3.0-only",
-  "GPL-3.0-or-later",
   "GPL-3.0",
+  "GPL-3.0-or-later",
   "GPL-3.0+",
 ]);
 
@@ -72,6 +100,8 @@ export const PRODUCTION_LICENSES: ReadonlySet<string> = new Set([
  */
 export const DEVELOPMENT_FREE_LICENSES: ReadonlySet<string> = new Set([
   ...PRODUCTION_LICENSES,
+  // Free according to the SPDX list (OSI approved or FSF free), but not compatible
+  // with GPL-3.0, or (AGPL) only as separate modules.
   "GPL-2.0-only",
   "GPL-2.0",
   "AGPL-3.0-only",
@@ -80,12 +110,18 @@ export const DEVELOPMENT_FREE_LICENSES: ReadonlySet<string> = new Set([
   "EPL-1.0",
   "EPL-2.0",
   "CDDL-1.0",
+  "CC-BY-SA-4.0",
+  // Free (OSI, FSF); the FSF says nothing about GPL compatibility. Fonts shipped
+  // with the program need their own decision.
+  "OFL-1.1",
+  // Free (OSI, Fedora); GPL compatibility is unconfirmed (see the note at the top).
+  "BlueOak-1.0.0",
+  // Free according to Fedora's list of allowed licenses
+  // (https://docs.fedoraproject.org/en-US/legal/allowed-licenses/); neither OSI nor
+  // FSF in the SPDX list.
   "CC-BY-3.0",
   "CC-BY-SA-3.0",
-  "CC-BY-SA-4.0",
   "PSF-2.0",
-  "WTFPL",
-  "OFL-1.1",
 ]);
 
 /** Exceptions accepted after WITH, for example "GPL-3.0-only WITH GCC-exception-3.1". */
