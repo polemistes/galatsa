@@ -98,8 +98,20 @@ describe("license policies", () => {
       "Unicode-3.0",
       "Artistic-2.0",
       "CC-BY-4.0",
+      "X11",
+      "BSL-1.0",
+      "Unicode-DFS-2016",
+      "WTFPL",
+      "Python-2.0",
     ]) {
       expect(isAcceptable(license, "production"), license).toBe(true);
+    }
+  });
+
+  it("accepts BlueOak-1.0.0, PSF-2.0 and OFL-1.1 only in development", () => {
+    for (const license of ["BlueOak-1.0.0", "PSF-2.0", "OFL-1.1"]) {
+      expect(isAcceptable(license, "production"), license).toBe(false);
+      expect(isAcceptable(license, "development"), license).toBe(true);
     }
   });
 

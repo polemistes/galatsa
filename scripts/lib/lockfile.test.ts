@@ -3,7 +3,9 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyPackages,
+  describeSource,
   isOutsideRepository,
+  linksInto,
   packageIdOf,
   parseLockfile,
   resolveTarget,
@@ -260,5 +262,84 @@ describe("classifyPackages", () => {
     expect(result.problems).toEqual([
       "pnpm-lock.yaml has no snapshot for missing@1.0.0.",
     ]);
+  });
+});
+
+describe("links in snapshots", () => {
+  // pnpm writes a link: from an override relative to the repository root.
+  const withOverride = (target: string): string =>
+    lockfile().replace(
+      "  vite@8.3.8(yaml@2.9.1):\r\n    dependencies:\r\n      rolldown: 1.2.19",
+      `  vite@8.3.8(yaml@2.9.1):\r\n    dependencies:\r\n      rolldown: 1.2.19\r\n      overridden: link:${target}`,
+    );
+
+  it("resolves a snapshot link from the repository root", () => {
+    const result = classifyPackages(parseLockfile(withOverride("packages/core")));
+    expect(result.problems).toEqual([]);
+  });
+
+  it("names the right folder when a snapshot link is not a workspace package", () => {
+    const result = classifyPackages(parseLockfile(withOverride("vendor/x")));
+    expect(result.problems).toEqual([
+      'vite@8.3.8(yaml@2.9.1) depends on overridden through "link:vendor/x", which is not a workspace package. link: dependencies must point at a workspace package.',
+    ]);
+  });
+
+  it("finds links into a folder from importers and snapshots", () => {
+    const parsed = parseLockfile(withOverride("packages/core/src"));
+    expect(linksInto(parsed, "packages/core")).toEqual([
+      { from: "packages/web", name: "@galatsa/core", version: "link:../core" },
+      {
+        from: "vite@8.3.8(yaml@2.9.1)",
+        name: "overridden",
+        version: "link:packages/core/src",
+      },
+    ]);
+    expect(linksInto(parsed, "packages/server")).toEqual([]);
+  });
+});
+
+describe("package sources", () => {
+  it("reads the boot document's packages separately", () => {
+    const parsed = parseLockfile(lockfile());
+    expect([...parsed.bootPackageIds]).toEqual(["pnpm@12.19.0"]);
+    expect(parsed.packageIds.has("pnpm@12.19.0")).toBe(false);
+    expect(parsed.sources.get("pnpm@12.19.0")).toEqual({ kind: "registry" });
+  });
+
+  it("tells registry packages from git, tarball and folder packages", () => {
+    const text = lockfile()
+      .replace(
+        "  blowfish-js@1.0.0:\r\n    resolution: {integrity: sha512-x}",
+        "  blowfish-js@file:vendor/b.tgz:\r\n    resolution: {integrity: sha512-x, tarball: file:vendor/b.tgz}",
+      )
+      .replace(
+        "  string-width@4.2.3:\r\n    resolution: {integrity: sha512-x}",
+        "  string-width@https://codeload.github.com/o/r/tar.gz/abc:\r\n    resolution: {gitHosted: true, integrity: sha512-x, tarball: https://codeload.github.com/o/r/tar.gz/abc}",
+      )
+      .replace(
+        "  yaml@2.9.1:\r\n    resolution: {integrity: sha512-x}",
+        "  yaml@2.9.1:\r\n    resolution: {integrity: sha512-x, tarball: https://registry.npmjs.org/yaml/-/yaml-2.9.1.tgz}",
+      )
+      .replace(
+        "  rolldown@1.2.19:\r\n    resolution: {integrity: sha512-x}",
+        "  rolldown@1.2.19:\r\n    resolution: {directory: vendor/rolldown, type: directory}",
+      );
+    const parsed = parseLockfile(text);
+    const sourceText = (id: string): string | undefined => {
+      const source = parsed.sources.get(id);
+      return source === undefined ? "missing" : describeSource(id, source);
+    };
+    expect(sourceText("yaml@2.9.1")).toBeUndefined();
+    expect(sourceText("vite@8.3.8")).toBeUndefined();
+    expect(sourceText("blowfish-js@file:vendor/b.tgz")).toBe(
+      "blowfish-js@file:vendor/b.tgz comes from the local tarball vendor/b.tgz",
+    );
+    expect(sourceText("string-width@https://codeload.github.com/o/r/tar.gz/abc")).toBe(
+      "string-width@https://codeload.github.com/o/r/tar.gz/abc comes from a git repository (https://codeload.github.com/o/r/tar.gz/abc)",
+    );
+    expect(sourceText("rolldown@1.2.19")).toBe(
+      "rolldown@1.2.19 comes from the local folder vendor/rolldown",
+    );
   });
 });
