@@ -1,0 +1,23 @@
+{
+  "name": "@galatsa/proto-dom",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Throwaway prototype of a rendering engine built from DOM elements with CSS transforms, measured with the Galatsa benchmark",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@galatsa/bench": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "vite": "catalog:"
+  }
+}

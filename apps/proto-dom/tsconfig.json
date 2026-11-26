@@ -1,0 +1,11 @@
+{
+  // The engine runs in the browser (DOM); the Playwright tests in e2e/ run in Node
+  // and drive a browser, so both environments are loaded.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "e2e/**/*.ts", "*.ts"]
+}
