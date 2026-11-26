@@ -5,7 +5,7 @@
 
 [package]
 name = "galatsa-bench-shell"
-version = "0.0.0"
+version = "0.1.0"
 description = "Galatsa desktop shell prototype for running the rendering-engine benchmark"
 license = "GPL-3.0-or-later"
 edition = "2021"

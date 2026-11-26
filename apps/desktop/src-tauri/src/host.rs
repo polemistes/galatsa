@@ -149,8 +149,8 @@ fn gpus() -> Vec<String> {
         let slot = field("PCI_SLOT_NAME=");
         let name = slot
             .as_deref()
-            .and_then(|s| output("lspci", &["-mm", "-s", s]))
-            .map(|line| line.replace('"', ""));
+            .and_then(|s| output("lspci", &["-s", s]))
+            .filter(|line| !line.is_empty());
         out.push(match (name, pci_id) {
             (Some(n), Some(id)) => format!("{n} [{id}] (driver {driver})"),
             (None, Some(id)) => format!("PCI {id} (driver {driver})"),
@@ -203,18 +203,23 @@ fn power() -> Power {
             match read("type").as_deref() {
                 Some("Mains") => {
                     let online = read("online");
-                    details.push(format!("{name}: mains online={online:?}"));
+                    details.push(format!("{name}: mains online={}", online.as_deref().unwrap_or("?")));
                     if online.as_deref() == Some("1") {
                         on_mains = Some(true);
                     } else if on_mains.is_none() {
                         on_mains = Some(false);
                     }
                 }
-                Some("Battery") => {
+                // Batteries of mice and other devices have the scope "Device".
+                Some("Battery") if read("scope").as_deref() != Some("Device") => {
                     let capacity = read("capacity");
                     let status = read("status");
-                    details.push(format!("{name}: battery {capacity:?}% {status:?}"));
-                    battery_percent = capacity.and_then(|c| c.parse().ok());
+                    details.push(format!(
+                        "{name}: battery {}% {}",
+                        capacity.as_deref().unwrap_or("?"),
+                        status.as_deref().unwrap_or("?")
+                    ));
+                    battery_percent = battery_percent.or(capacity.and_then(|c| c.parse().ok()));
                 }
                 _ => {}
             }

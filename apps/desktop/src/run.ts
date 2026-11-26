@@ -21,6 +21,7 @@ import {
   type EngineId,
   type RunPlan,
 } from "./plan.ts";
+import { captureStageCanvases } from "./stage-capture.ts";
 import {
   emptySummary,
   type EngineSummary,
@@ -111,6 +112,7 @@ async function main(): Promise<void> {
   (root.querySelector(".panel") ?? root).prepend(progress);
   const recorder = new MemoryRecorder(source, host.memorySample);
   api.setMemorySampler(recorder.sampler);
+  window.galatsaBenchHostCapture = captureStageCanvases;
   const hostInfo = await host.hostInfo().catch(() => null);
 
   const results: BenchResult[] = [];
