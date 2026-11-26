@@ -17,14 +17,16 @@
     "format:check": "prettier --check .",
     "check:spdx": "node scripts/check-spdx.ts",
     "check:licenses": "node scripts/check-licenses.ts",
+    "check:i18n": "node --conditions=@galatsa/source scripts/check-i18n.ts",
     "test": "vitest run",
     "e2e": "pnpm --filter @galatsa/e2e run e2e",
-    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run check:spdx && pnpm run check:workspace && pnpm run test && pnpm run check:licenses",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run check:spdx && pnpm run check:workspace && pnpm run check:i18n && pnpm run test && pnpm run check:licenses",
     "check:workspace": "node scripts/check-workspace.ts"
   },
   "devDependencies": {
     "@eslint/compat": "2.1.1",
     "@eslint/js": "10.0.1",
+    "@galatsa/i18n": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "10.14.0",
     "globals": "17.14.0",
