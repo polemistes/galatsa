@@ -303,6 +303,28 @@ describe("review 2: undo and delete", () => {
     });
   }
 
+  for (const [ca, cb] of ORDERS) {
+    it(`undoing a move that won over a concurrent move puts the element back, not at the origin (${ca}/${cb})`, () => {
+      const [a, b] = pair(base(), ca, cb);
+      const undo = createUndoManager(a, { captureTimeout: 0 });
+      moveElement(a, "X", 20, 20);
+      reparent(a, "Y", null);
+      moveElement(b, "X", 30, 30);
+      reparent(b, "Y", null);
+      syncDocs(a, b);
+      undo.undo();
+      undo.undo();
+      syncDocs(a, b);
+      // Yjs alone leaves the keys without any value here when A's write had won.
+      expect(inspectDocument(a).problems).toEqual([]);
+      expect(toSnapshot(a)).toEqual(toSnapshot(b));
+      const at = R(a).localPosition("X");
+      expect([10, 30]).toContain(at.x);
+      expect(["F", null]).toContain(R(a).parentOf("Y"));
+      expect(R(a).worldOrigin("Y")).toEqual({ x: 1050, y: 1010 });
+    });
+  }
+
   it("redo of a delete deletes again although the element was edited in between", () => {
     const [a, b] = pair(base(), 1, 2);
     const undo = createUndoManager(a, { captureTimeout: 0 });

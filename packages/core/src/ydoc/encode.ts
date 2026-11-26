@@ -180,8 +180,14 @@ function escaped(json: Json): unknown {
     : json;
 }
 
-/** A plain value read from a shared map or array, in the JSON form. */
-function plainFromY(value: unknown): unknown {
+/**
+ * A plain value read from a shared map or array, in the JSON form. Two values
+ * that only a hand-made update can put directly into a shared type, and that
+ * Yjs's own interface cannot store there, read as null: a big integer, and
+ * undefined in an array.
+ */
+function plainFromY(value: unknown, inArray = false): unknown {
+  if (typeof value === "bigint" || (inArray && value === undefined)) return null;
   const tree = toAnyTree(value);
   const json = jsonOfTree(tree);
   return json === undefined ? { $y: "any", value: tree } : escaped(json);
@@ -333,7 +339,11 @@ export function rawFromY(value: unknown, depth = 0): unknown {
       $y: "array",
       items: (value as Y.Array<unknown>)
         .toArray()
-        .map((item) => rawFromY(item, depth + 1)),
+        .map((item) =>
+          item instanceof Y.AbstractType
+            ? rawFromY(item, depth + 1)
+            : plainFromY(item, true),
+        ),
     };
   }
   return { $y: "unsupported", note: "unknown shared type" };

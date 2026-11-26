@@ -359,6 +359,10 @@ function anyTreeIsJson(tree: AnyTree): boolean {
   return false;
 }
 
+function isUndefinedTree(tree: unknown): boolean {
+  return isPlainObject(tree) && tree.u === 1;
+}
+
 function isMarker(raw: unknown): raw is Raw {
   if (!isPlainObject(raw) || own(raw, "$y") !== "unsupported") return false;
   if (typeof own(raw, "note") !== "string") return false;
@@ -541,6 +545,8 @@ function readTagged(raw: Raw, tag: unknown, p: Problems, level: number): DataVal
       const tree = readAnyTree(own(raw, "value"), level + 1);
       if (tree === undefined) break;
       if (anyTreeIsJson(tree)) break;
+      // Yjs cannot hold a big integer directly in a shared type, only nested.
+      if (typeof tree === "object" && tree !== null && "i" in tree) break;
       return { $y: "any", value: tree };
     }
     case "unsupported": {
@@ -574,7 +580,17 @@ function readTagged(raw: Raw, tag: unknown, p: Problems, level: number): DataVal
       return {
         $y: "array",
         items: p.at("items", () =>
-          items.map((item, i) => p.at(String(i), () => readValue(item, p, level + 2))),
+          items.map((item, i) =>
+            p.at(String(i), () => {
+              const value = readValue(item, p, level + 2);
+              // A shared array cannot hold undefined directly.
+              if (isPlainObject(value) && value.$y === "any" && isUndefinedTree(value.value)) {
+                p.add("undefined in a shared array, read as null");
+                return null;
+              }
+              return value;
+            }),
+          ),
         ),
       };
     }

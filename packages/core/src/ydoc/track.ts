@@ -214,10 +214,35 @@ export function noteWork(doc: Y.Doc, record: Y.Map<unknown>, evenIfDeleted = fal
 }
 
 /**
+ * Finishes an undo or redo step that Yjs left half done. When the step has to
+ * bring back a map entry (the value a key had before the change being undone),
+ * Yjs refuses if a concurrent change by someone else to the same key is on
+ * record, even when that change lost and is long gone. The key is then left with
+ * no value at all: a position or a parent would silently read as its default.
+ * This puts the value back, but only where the key has no value, so nothing
+ * anyone wrote is overwritten.
+ */
+function fillHoles(doc: Y.Doc, deletions: unknown): void {
+  doc.transact((tr) => {
+    Y.iterateDeletedStructs(tr, deletions as Parameters<typeof Y.iterateDeletedStructs>[1], (struct) => {
+      if (!(struct instanceof Y.Item) || struct.parentSub === null) return;
+      const parent = struct.parent;
+      if (!(parent instanceof Y.Map) || parent.has(struct.parentSub)) return;
+      if (parent._item !== null && parent._item.deleted) return;
+      // A shared type cannot be brought back this way; plain values can.
+      if (struct.content instanceof Y.ContentType) return;
+      const values = struct.content.getContent() as unknown[];
+      if (values.length === 1) (parent as Y.Map<unknown>).set(struct.parentSub, values[0]);
+    });
+  }, ORIGIN.track);
+}
+
+/**
  * The undo manager configuration that keeps the guarantees of section 10: it
  * undoes transactions of the local user (ORIGIN.local and the origins given, for
  * example an editor binding), never remote changes, loading, record creation,
- * tidy up or the recording of work.
+ * tidy up or the recording of work; and an undo never leaves a key without a
+ * value (see fillHoles).
  */
 export function createUndoManager(
   doc: Y.Doc,
@@ -225,8 +250,12 @@ export function createUndoManager(
 ): Y.UndoManager {
   trackWork(doc);
   const r = roots(doc);
-  return new Y.UndoManager([r.elements, r.stops, r.routes, r.settings, r.meta], {
+  const manager = new Y.UndoManager([r.elements, r.stops, r.routes, r.settings, r.meta], {
     trackedOrigins: new Set<unknown>([ORIGIN.local, ...(options.origins ?? [])]),
     captureTimeout: options.captureTimeout ?? 500,
   });
+  manager.on("stack-item-popped", (event: { stackItem: { deletions: unknown } }) =>
+    fillHoles(doc, event.stackItem.deletions),
+  );
+  return manager;
 }

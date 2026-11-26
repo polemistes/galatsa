@@ -309,3 +309,6 @@ export function buildSampleDocument(doc: Y.Doc = new Y.Doc(), seed = 1): Y.Doc {
   insertRouteEntry(doc, SAMPLE.route2, SAMPLE.stop2, { ...o, id: "e3" });
   return doc;
 }
+
+export { BINDING_ORIGIN, runScenario } from "./scenario.ts";
+export type { ScenarioOptions, ScenarioResult } from "./scenario.ts";
