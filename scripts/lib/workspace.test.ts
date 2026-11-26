@@ -373,6 +373,92 @@ describe("references", () => {
     ]);
   });
 
+  it("finds both branches of a computed import and the base of a glob", () => {
+    const text = [
+      'void import(Math.random() > 2 ? "../../server/b.ts" : "./x.ts");',
+      'void import(name || "../up/y.ts");',
+      'import.meta.glob("./*.ts", { base: "../../../packages/server/src", eager: true });',
+      "import.meta.glob(`./*.ts`, options);",
+    ].join("\n");
+    const refs = referencesOf("src/x.ts", text);
+    expect(refs).toContainEqual({ specifier: "../../server/b.ts", kind: "module" });
+    expect(refs).toContainEqual({ specifier: "./x.ts", kind: "module" });
+    expect(refs).toContainEqual({ specifier: "../up/y.ts", kind: "module" });
+    expect(refs).toContainEqual({
+      specifier: "../../../packages/server/src/",
+      kind: "prefix",
+    });
+    expect(refs).toContainEqual(
+      expect.objectContaining({ kind: "unchecked", specifier: "options" }),
+    );
+  });
+
+  it("finds CSS Modules and Tailwind references", () => {
+    const text = [
+      '.a { composes: b c from "../../server/s.css"; }',
+      '@value primary, secondary from "./colors.css";',
+      '@config "../tailwind.config.js";',
+      '@plugin "@tailwindcss/typography";',
+      '@source "../../server/src";',
+      '@reference "../app.css";',
+    ].join("\n");
+    expect(referencesOf("src/x.module.css", text).map((r) => r.specifier)).toEqual([
+      "../../server/s.css",
+      "./colors.css",
+      "../tailwind.config.js",
+      "@tailwindcss/typography",
+      "../../server/src",
+      "../app.css",
+    ]);
+  });
+
+  it("reads HTML attributes with > inside quotes, and unquoted values", () => {
+    const text = [
+      '<script type="module" data-note="a>b" src="../server/b.ts"></script>',
+      "<script type=module src=../server/c.ts></script>",
+      '<script data-x="a>b">import "../server/d.ts";</script>',
+    ].join("\n");
+    expect(referencesOf("index.html", text).map((r) => r.specifier)).toEqual([
+      "../server/b.ts",
+      "../server/c.ts",
+      "../server/d.ts",
+    ]);
+  });
+
+  it("finds aliases under quoted or computed keys, and path options of Vite configs", () => {
+    const text = [
+      'import { resolve } from "node:path";',
+      "export default {",
+      '  resolve: { ["alias"]: { "@x": "../packages/server/src/a.ts" } },',
+      '  publicDir: "../packages/server/public",',
+      '  root: "web",',
+      '  build: { rollupOptions: { input: { main: resolve(import.meta.dirname, "index.html"), srv: resolve(import.meta.dirname, "../srv.ts") } } },',
+      "  other: { publicDir: false },",
+      "};",
+    ].join("\n");
+    const refs = referencesOf("vite.config.ts", text).filter((r) => r.kind !== "module");
+    expect(refs).toEqual([
+      { specifier: "../packages/server/src/a.ts", kind: "path" },
+      { specifier: "../packages/server/public", kind: "path" },
+      { specifier: "./web", kind: "path" },
+      { specifier: "./index.html", kind: "path" },
+      { specifier: "../srv.ts", kind: "path" },
+    ]);
+  });
+
+  it("rejects . and .. in a package path", () => {
+    const lib = pkg(
+      "packages/lib",
+      { ...goodLibrary, dependencies: { fake: "1.0.0" } },
+      {
+        "src/index.ts": `${header}import "fake/../../server/src/a.ts";\nimport "fake/sub/x.ts";\n`,
+      },
+    );
+    expect(checkImports(lib)).toEqual([
+      'packages/lib/src/index.ts: "fake/../../server/src/a.ts" has a "." or ".." segment, which can lead out of the package.',
+    ]);
+  });
+
   it("finds tsconfig paths, relative to baseUrl", () => {
     const text = JSON.stringify({
       compilerOptions: {

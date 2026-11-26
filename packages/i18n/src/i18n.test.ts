@@ -308,4 +308,90 @@ describe("translator during rendering", () => {
     expect(i18n.translator(reloaded)("tool.name")).toBe("New name");
     expect(i18n.translator(shapes)("tool.name")).toBe("Shapes");
   });
+
+  /**
+   * Simulates a component that calls translator() with whatever bundle `pick`
+   * returns on each render, and renders again on every notification, as React
+   * would. Returns the number of notifications once things settle (or the limit).
+   */
+  async function renderLoop(
+    i18n: ReturnType<typeof createI18n>,
+    pick: (render: number) => Parameters<typeof i18n.translator>[0],
+  ): Promise<number> {
+    let renders = 0;
+    let notifications = 0;
+    const render = (): void => {
+      renders += 1;
+      i18n.translator(pick(renders))("tool.name");
+    };
+    i18n.subscribe(() => {
+      notifications += 1;
+      if (notifications < 50) render();
+    });
+    render();
+    for (let i = 0; i < 60; i += 1) await Promise.resolve();
+    return notifications;
+  }
+
+  it("settles when a component creates its bundle on every render", async () => {
+    const { i18n, warnings } = setup({ dev: true, locale: "en" });
+    const notifications = await renderLoop(i18n, () =>
+      // A new object with the same content each time, as defineMessages() inside a
+      // component would give.
+      defineMessages("ext.shapes", {
+        nb: { ...shapes.messages.nb },
+        en: { ...shapes.messages.en },
+      }),
+    );
+    expect(notifications).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
+  it("settles and warns once when two copies of a bundle take turns", async () => {
+    const { i18n, warnings } = setup({ dev: true, locale: "en", bundles: [] });
+    // Two copies of a package with different texts, rendered side by side.
+    const copyA = defineMessages("ext.shapes", {
+      nb: { "tool.name": "A" },
+      en: { "tool.name": "A" },
+    });
+    const copyB = defineMessages("ext.shapes", {
+      nb: { "tool.name": "B" },
+      en: { "tool.name": "B" },
+    });
+    const notifications = await renderLoop(i18n, (render) =>
+      render % 2 === 0 ? copyA : copyB,
+    );
+    expect(notifications).toBeLessThanOrEqual(2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(
+      /Two different bundles for message namespace "ext.shapes"/,
+    );
+    // Each copy still reads its own text, and t() reads the registered one.
+    expect(i18n.translator(copyA)("tool.name")).toBe("A");
+    expect(i18n.translator(copyB)("tool.name")).toBe("B");
+    expect(["A", "B"]).toContain(i18n.t("ext.shapes:tool.name"));
+  });
+
+  it("does not notify when register() gets a bundle with the same content", () => {
+    const { i18n } = setup({ dev: false, locale: "en" });
+    const before = i18n.version;
+    i18n.register(
+      defineMessages("ext.shapes", {
+        nb: { ...shapes.messages.nb },
+        en: { ...shapes.messages.en },
+      }),
+    );
+    expect(i18n.version).toBe(before);
+  });
+
+  it("lets register() put back a bundle that was replaced", () => {
+    const { i18n } = setup({ dev: false, locale: "en" });
+    const reloaded = defineMessages("ext.shapes", {
+      nb: { "tool.name": "Nytt navn" },
+      en: { "tool.name": "New name" },
+    });
+    i18n.register(reloaded);
+    i18n.register(shapes);
+    expect(i18n.t("ext.shapes:tool.name")).toBe("Shapes");
+  });
 });

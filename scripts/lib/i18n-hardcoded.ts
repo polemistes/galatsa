@@ -11,6 +11,7 @@
 //
 //   1. JSX text:                         <button>Save</button>
 //   2. JSX children in braces:           <p>{busy ? "Saving" : "Saved"}</p>
+//      Not inside <style> and <script>, whose content is CSS or code.
 //   3. JSX attributes that hold text: the names in TEXT_ATTRIBUTES (alt,
 //      aria-label, title, ...), names that hold text by convention (isTextName:
 //      text, confirmLabel, emptyText, ...), the children prop, and value on
@@ -24,6 +25,8 @@
 //   6. Arguments of DOM and browser APIs that show text (TEXT_CALLS):
 //                                        alert("Saved"), ctx.fillText("Hi", 0, 0),
 //                                        el.setAttribute("title", "Close")
+//      and text options of such APIs (TEXT_OPTIONS):
+//                                        new Notification(title, { body: "Done" })
 //
 // A value in one of these places is followed through the file where that is cheap
 // and certain: both sides of ?:, &&, ||, ?? and +, array elements, string methods
@@ -32,8 +35,20 @@
 // (text={names.save} with const names = { save: "Save" }), and the return values of
 // a local function (<span>{status()}</span>).
 //
-// Not user text: strings without letters ("–", "100", "·"), and message keys in the
-// form "namespace:key" (for example "editor:toolbar.save").
+// Not user text: strings without letters ("–", "100", "·"), message keys in the
+// form "namespace:key" (for example "editor:toolbar.save"), and strings that are
+// only a URL or an e-mail address ("https://example.com/x.png").
+//
+// Names are only a guess. A name that holds text by convention (places 3 to 5 with
+// a name like errorMessage, plainText or sortDescription, as opposed to the fixed
+// attribute and property names such as title or textContent) often holds a code
+// instead: "ENOENT", "text/plain", "ascending". For those names a value that looks
+// like a code is not reported (looksLikeCode): one ASCII word without spaces that
+// is all lower case, all upper case (three letters or more), camelCase, or
+// contains a digit or one of / _ . : + = # @ -. A capitalised word ("Save"), anything
+// with a space and anything with letters outside ASCII ("Lagre…", "søk") is still
+// text. In the fixed text places (JSX text, title, aria-label, textContent, ...)
+// every value with a letter is reported, codes included.
 //
 // Opting out: a comment `i18n-ignore: <reason>` on the same line or alone on the
 // line above skips that line, and `i18n-ignore-file: <reason>` in a comment skips
@@ -99,6 +114,12 @@ const TEXT_PROPERTIES: readonly string[] = [
   "ariaValueText",
 ];
 
+/**
+ * Standard DOM and React props whose names end like a text name but which hold a
+ * fixed keyword, not text.
+ */
+const NOT_TEXT_NAMES: readonly string[] = ["enterKeyHint", "enterkeyhint"];
+
 /** <input> types whose value attribute is the button's visible label. */
 const BUTTON_INPUT_TYPES: readonly string[] = ["submit", "button", "reset"];
 
@@ -107,11 +128,41 @@ const BUTTON_INPUT_TYPES: readonly string[] = ["submit", "button", "reset"];
  * names ending in Label, Title, Text, Message and so on (saveLabel, emptyMessage).
  */
 export function isTextName(name: string): boolean {
-  if (TEXT_PROPERTIES.includes(name) || TEXT_ATTRIBUTES.includes(name)) return true;
-  if (/^(?:text|ariaLabel)$/.test(name)) return true;
+  return textNameKind(name) !== undefined;
+}
+
+/**
+ * "fixed" for the attribute and property names that always hold text, "convention"
+ * for names that hold text by their ending (saveLabel, emptyMessage), undefined
+ * otherwise.
+ */
+export function textNameKind(name: string): "fixed" | "convention" | undefined {
+  if (TEXT_PROPERTIES.includes(name) || TEXT_ATTRIBUTES.includes(name)) return "fixed";
+  if (/^(?:text|ariaLabel)$/.test(name)) return "fixed";
+  if (NOT_TEXT_NAMES.includes(name)) return undefined;
   return /[a-z0-9](?:Label|Title|Tooltip|Placeholder|Caption|Heading|Description|Message|Text|Hint)$/.test(
     name,
-  );
+  )
+    ? "convention"
+    : undefined;
+}
+
+/**
+ * True if a string looks like a code, a keyword or an identifier rather than
+ * words: one ASCII word without spaces that contains a digit or one of
+ * / _ . : + = # @ -, or is all lower case, all upper case (three letters or more) or
+ * camelCase. "ENOENT", "text/plain", "ascending", "en-US", "fooBar" are codes;
+ * "Save", "OK", "Sign-in", "Saved." and "søk" are not.
+ */
+export function looksLikeCode(text: string): boolean {
+  const word = text.trim();
+  if (!/^[\x21-\x7e]+$/.test(word) || !/[A-Za-z]/.test(word)) return false;
+  if (/^[A-Z][a-z]*(?:-[A-Za-z]+)*[.!?:]?$/.test(word)) return false; // Save, Sign-in, Done.
+  if (/[0-9/_.:+=#@-]/.test(word)) return true;
+  const letters = word.replace(/[^A-Za-z]/g, "");
+  if (letters === letters.toLowerCase()) return true;
+  if (letters === letters.toUpperCase()) return letters.length >= 3;
+  return /[a-z][A-Z]/.test(word);
 }
 
 /** Calls whose arguments are shown to users: function name to argument positions. */
@@ -126,6 +177,7 @@ const TEXT_CALLS: ReadonlyMap<string, readonly number[] | "all"> = new Map<
   ["fillText", [0]],
   ["strokeText", [0]],
   ["insertAdjacentText", [1]],
+  ["showNotification", [0]],
   // DOM methods that insert strings as text nodes. FormData, URLSearchParams and
   // Headers also have an append(name, value); see isNameValueReceiver.
   ["append", "all"],
@@ -152,6 +204,18 @@ const NAME_VALUE_RECEIVER =
 /** Constructors whose first argument is shown to users. */
 const TEXT_CONSTRUCTORS: readonly string[] = ["Notification", "Option"];
 
+/**
+ * Calls and constructors with an options object whose properties are shown to
+ * users: name to the argument position and the property names.
+ */
+const TEXT_OPTIONS: ReadonlyMap<string, readonly [number, readonly string[]]> = new Map<
+  string,
+  readonly [number, readonly string[]]
+>([
+  ["Notification", [1, ["body"]]],
+  ["showNotification", [1, ["body"]]],
+]);
+
 /** String methods whose result contains the text of the string they are called on. */
 const STRING_METHODS: readonly string[] = [
   "concat",
@@ -174,12 +238,15 @@ const STRING_METHODS: readonly string[] = [
 ];
 
 const MESSAGE_KEY = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*:[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+/** A string that is only a URL or an e-mail address. */
+const URL_ONLY =
+  /^(?:[a-z][a-z0-9+.-]*:\/\/\S+|(?:mailto|tel|data|blob):\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)$/i;
 const ENTITY = /&(?:[A-Za-z]+|#\d+|#x[0-9A-Fa-f]+);/g;
 
 /** True if the text would be read as words by a user. */
 export function isUserText(text: string): boolean {
   const trimmed = text.trim();
-  if (MESSAGE_KEY.test(trimmed)) return false;
+  if (MESSAGE_KEY.test(trimmed) || URL_ONLY.test(trimmed)) return false;
   return /\p{L}/u.test(trimmed.replace(ENTITY, " "));
 }
 
@@ -332,25 +399,29 @@ export function findHardcodedText(
 
   // Strings in an expression that end up as the expression's value. `seen` stops
   // cycles through constants and functions that refer to each other.
+  // `lenient`: the place is a text place only by a name's convention, so values
+  // that look like codes are not reported (see looksLikeCode).
   const checkValue = (
     expression: ts.Expression,
     reason: string,
+    lenient = false,
     seen: Set<ts.Node> = new Set(),
   ): void => {
     if (seen.has(expression)) return;
     seen.add(expression);
-    const again = (next: ts.Expression): void => checkValue(next, reason, seen);
+    const again = (next: ts.Expression): void => checkValue(next, reason, lenient, seen);
+    const shown = (text: string): boolean =>
+      isUserText(text) && !(lenient && looksLikeCode(text));
     if (
       ts.isStringLiteral(expression) ||
       ts.isNoSubstitutionTemplateLiteral(expression)
     ) {
-      if (isUserText(expression.text))
-        report(expression.getStart(), expression.text, reason);
+      if (shown(expression.text)) report(expression.getStart(), expression.text, reason);
     } else if (ts.isTemplateExpression(expression)) {
       const literal =
         expression.head.text +
         expression.templateSpans.map((s) => ` ${s.literal.text}`).join("");
-      if (isUserText(literal)) report(expression.getStart(), literal, reason);
+      if (shown(literal)) report(expression.getStart(), literal, reason);
       for (const span of expression.templateSpans) again(span.expression);
     } else if (ts.isConditionalExpression(expression)) {
       again(expression.whenTrue);
@@ -423,39 +494,72 @@ export function findHardcodedText(
     }
   };
 
+  // Text properties of an options argument: new Notification(title, { body }).
+  const checkOptions = (
+    name: string,
+    args: readonly ts.Expression[],
+    what: string,
+  ): void => {
+    const rule = TEXT_OPTIONS.get(name);
+    const argument = rule === undefined ? undefined : args[rule[0]];
+    if (rule === undefined || argument === undefined) return;
+    const object = literalObjectOf(argument);
+    for (const property of rule[1]) {
+      const value = propertyValue(object, property);
+      if (value !== undefined) {
+        checkValue(value, `text in the "${property}" option of ${what}`);
+      }
+    }
+  };
+
   const visit = (node: ts.Node): void => {
     if (ts.isJsxText(node)) {
-      if (isUserText(node.text)) {
+      if (isUserText(node.text) && !inRawJsxElement(node)) {
         const offset = node.text.search(/\S/);
         report(node.getStart() + Math.max(offset, 0), node.text, "text in JSX");
       }
     } else if (ts.isJsxExpression(node) && node.expression !== undefined) {
-      if (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent)) {
+      if (
+        (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent)) &&
+        !inRawJsxElement(node)
+      ) {
         checkValue(node.expression, "text in JSX");
       }
     } else if (ts.isJsxAttribute(node)) {
       const name = jsxAttributeName(node.name);
-      const shown =
+      const fixed =
         attributes.has(name) ||
-        isTextName(name) ||
+        textNameKind(name) === "fixed" ||
         name === "children" ||
         (name === "value" && isButtonInput(node));
+      const shown = fixed || textNameKind(name) === "convention";
       if (shown && node.initializer !== undefined) {
         const reason = `text in the "${name}" attribute`;
-        if (ts.isStringLiteral(node.initializer)) checkValue(node.initializer, reason);
-        else if (ts.isJsxExpression(node.initializer) && node.initializer.expression) {
-          checkValue(node.initializer.expression, reason);
+        if (ts.isStringLiteral(node.initializer)) {
+          checkValue(node.initializer, reason, !fixed);
+        } else if (ts.isJsxExpression(node.initializer) && node.initializer.expression) {
+          checkValue(node.initializer.expression, reason, !fixed);
         }
       }
     } else if (ts.isPropertyAssignment(node)) {
       const name = nameOf(node.name);
-      if (name !== undefined && isTextName(name)) {
-        checkValue(node.initializer, `text in the "${name}" property`);
+      const kind = name === undefined ? undefined : textNameKind(name);
+      if (kind !== undefined) {
+        checkValue(
+          node.initializer,
+          `text in the "${name}" property`,
+          kind === "convention",
+        );
       }
     } else if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
       const name = nameOf(node.name);
-      if (name !== undefined && isTextName(name)) {
-        checkValue(node.initializer, `text in the "${name}" variable`);
+      const kind = name === undefined ? undefined : textNameKind(name);
+      if (kind !== undefined) {
+        checkValue(
+          node.initializer,
+          `text in the "${name}" variable`,
+          kind === "convention",
+        );
       }
     } else if (
       (ts.isPropertyDeclaration(node) ||
@@ -472,8 +576,13 @@ export function findHardcodedText(
         ts.isObjectBindingPattern(key) || ts.isArrayBindingPattern(key)
           ? undefined
           : nameOf(key);
-      if (name !== undefined && isTextName(name)) {
-        checkValue(node.initializer, `text in the "${name}" default value`);
+      const kind = name === undefined ? undefined : textNameKind(name);
+      if (kind !== undefined) {
+        checkValue(
+          node.initializer,
+          `text in the "${name}" default value`,
+          kind === "convention",
+        );
       }
     } else if (
       ts.isBinaryExpression(node) &&
@@ -488,8 +597,9 @@ export function findHardcodedText(
               ts.isStringLiteral(target.argumentExpression)
             ? target.argumentExpression.text
             : undefined;
-      if (name !== undefined && isTextName(name)) {
-        checkValue(node.right, `text assigned to "${name}"`);
+      const kind = name === undefined ? undefined : textNameKind(name);
+      if (kind !== undefined) {
+        checkValue(node.right, `text assigned to "${name}"`, kind === "convention");
       }
     } else if (ts.isCallExpression(node)) {
       const name = calleeName(node.expression);
@@ -516,6 +626,7 @@ export function findHardcodedText(
             }
           });
         }
+        checkOptions(name, node.arguments, `${name}()`);
       }
     } else if (ts.isNewExpression(node)) {
       const name = calleeName(node.expression);
@@ -523,13 +634,15 @@ export function findHardcodedText(
       if (name !== undefined && TEXT_CONSTRUCTORS.includes(name) && first !== undefined) {
         checkValue(first, `text passed to new ${name}()`);
       }
+      if (name !== undefined) checkOptions(name, node.arguments ?? [], `new ${name}()`);
     }
     // Functions, methods and getters named like text: what they return is text.
     const fnName = textFunctionName(node);
     if (fnName !== undefined) {
       const fn = node as ts.FunctionLikeDeclaration;
+      const lenient = textNameKind(fnName) === "convention";
       for (const value of returnedValues(fn)) {
-        checkValue(value, `text returned by "${fnName}"`);
+        checkValue(value, `text returned by "${fnName}"`, lenient);
       }
     }
     ts.forEachChild(node, visit);
@@ -541,6 +654,18 @@ export function findHardcodedText(
 
 function sorted(findings: readonly Finding[]): Finding[] {
   return [...findings].sort((a, b) => a.line - b.line || a.column - b.column);
+}
+
+/** Elements whose JSX children are CSS or code, not text. */
+const RAW_JSX_ELEMENTS: readonly string[] = ["style", "script"];
+
+/** True if a JSX child is directly inside <style> or <script>. */
+function inRawJsxElement(node: ts.Node): boolean {
+  const parent = node.parent;
+  return (
+    ts.isJsxElement(parent) &&
+    RAW_JSX_ELEMENTS.includes(parent.openingElement.tagName.getText())
+  );
 }
 
 /** True if a JSX "value" attribute belongs to <input type="submit|button|reset">. */
@@ -723,6 +848,11 @@ function isNameValueReceiver(receiver: ts.Expression): boolean {
     return name !== undefined && NAME_VALUE_TYPES.includes(name);
   }
   if (ts.isPropertyAccessExpression(receiver)) {
+    // document.body, frame.contentDocument.body: DOM nodes, not request bodies.
+    const owner = calleeName(receiver.expression);
+    if (owner !== undefined && /^(?:document|ownerDocument)$|Document$/.test(owner)) {
+      return false;
+    }
     return (
       NAME_VALUE_RECEIVER.test(receiver.name.text) ||
       receiver.name.text === "searchParams"
@@ -895,7 +1025,7 @@ export function findBundleProblems(
   source: string,
   rules: BundleRules,
 ): Finding[] {
-  if (!source.includes("defineMessages")) return [];
+  if (!source.includes("defineMessages") && !source.includes("namespace")) return [];
   const file = ts.createSourceFile(
     fileName,
     source,
@@ -938,6 +1068,13 @@ export function findBundleProblems(
   }
 
   const visit = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node) && isHandWrittenBundle(node)) {
+      add(
+        node,
+        shorten(node.getText(file)),
+        `a message bundle written by hand; create it with defineMessages() in ${rules.messages}/index.ts, where the check compares the languages`,
+      );
+    }
     const name = ts.isCallExpression(node) ? calleeName(node.expression) : undefined;
     if (ts.isCallExpression(node) && name !== undefined && defineNames.has(name)) {
       if (!inMessages) {
@@ -998,4 +1135,26 @@ export function findBundleProblems(
 
   visit(file);
   return findings;
+}
+
+/**
+ * True for an object literal that looks like a message bundle: a "namespace" given
+ * as a string and a "messages" property. defineMessages() builds its result from
+ * variables ({ namespace, messages }), which does not count.
+ */
+function isHandWrittenBundle(node: ts.ObjectLiteralExpression): boolean {
+  let namespace = false;
+  let messages = false;
+  for (const property of node.properties) {
+    const name = property.name === undefined ? undefined : nameOf(property.name);
+    if (
+      name === "namespace" &&
+      ts.isPropertyAssignment(property) &&
+      ts.isStringLiteralLike(property.initializer)
+    ) {
+      namespace = true;
+    }
+    if (name === "messages") messages = true;
+  }
+  return namespace && messages;
 }
