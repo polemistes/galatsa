@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
-import { hasSpdxHeader, needsHeader, SPDX_IDENTIFIER } from "./spdx.ts";
+import { expectedHeader, hasSpdxHeader, needsHeader, SPDX_IDENTIFIER } from "./spdx.ts";
 
 const line = `// ${SPDX_IDENTIFIER}`;
 const BOM = String.fromCharCode(0xfeff);
@@ -88,5 +88,16 @@ describe("hasSpdxHeader", () => {
 
   it("returns false for file types that do not need a header", () => {
     expect(hasSpdxHeader("README.md", `${line}\n`)).toBe(false);
+  });
+
+  it("expects the AGPL header under packages/server and GPL elsewhere", () => {
+    const agpl = "// SPDX-License-Identifier: AGPL-3.0-or-later";
+    expect(hasSpdxHeader("packages/server/src/index.ts", `${agpl}\n`)).toBe(true);
+    expect(hasSpdxHeader("packages/server/src/index.ts", `${line}\n`)).toBe(false);
+    expect(hasSpdxHeader("packages/core/src/index.ts", `${agpl}\n`)).toBe(false);
+    expect(hasSpdxHeader("packages/server-tools/src/index.ts", `${line}\n`)).toBe(true);
+    expect(expectedHeader("packages/server/public/index.html")).toBe(
+      "<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->",
+    );
   });
 });

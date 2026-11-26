@@ -17,7 +17,7 @@
 //   proprietary, and unknown or missing licenses.
 //
 // IMPORTANT: the license lists below (PRODUCTION_LICENSES, DEVELOPMENT_FREE_LICENSES,
-// ACCEPTED_EXCEPTIONS, WORKSPACE_LICENSES and NON_FREE_PATTERN) were written from
+// ACCEPTED_EXCEPTIONS and NON_FREE_PATTERN) were written from
 // memory. They will be checked against the license texts, the SPDX license list and
 // the FSF compatibility list in package F0-02. Until then, treat every entry as
 // unverified.
@@ -235,32 +235,4 @@ export function flattenReport(
     }
   }
   return result;
-}
-
-/**
- * Licenses accepted for the project's own workspace packages. The program is
- * GPL-3.0-or-later. The sync server (packages/server, phase 4) will be
- * AGPL-3.0-or-later.
- */
-export const WORKSPACE_LICENSES: ReadonlySet<string> = new Set([
-  "GPL-3.0-or-later",
-  "AGPL-3.0-or-later",
-]);
-
-/** One workspace package, as listed by `pnpm ls --recursive --depth -1 --json`. */
-export interface WorkspacePackage {
-  readonly name: string;
-  /** Path of the package folder, relative to the repository root, with "/" separators. */
-  readonly path: string;
-  /** The "license" field of its package.json, if any. */
-  readonly license: string | undefined;
-}
-
-/** Returns the workspace packages whose license field is not in WORKSPACE_LICENSES. */
-export function findWorkspaceViolations(
-  packages: readonly WorkspacePackage[],
-): WorkspacePackage[] {
-  return packages.filter(
-    (pkg) => pkg.license === undefined || !WORKSPACE_LICENSES.has(pkg.license),
-  );
 }

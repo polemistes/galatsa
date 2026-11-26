@@ -6,7 +6,6 @@ import {
   findViolations,
   flattenReport,
   isAcceptable,
-  findWorkspaceViolations,
   type PackageLicense,
 } from "./licenses.ts";
 
@@ -204,23 +203,6 @@ describe("report helpers", () => {
       { id: "a@1.0.0", license: "MIT" },
       { id: "a@2.0.0", license: "MIT" },
       { id: "b@3.0.0", license: "(MIT AND CC-BY-3.0)" },
-    ]);
-  });
-});
-
-describe("workspace packages", () => {
-  it("accepts GPL-3.0-or-later and AGPL-3.0-or-later, and nothing else", () => {
-    const violations = findWorkspaceViolations([
-      { name: "galatsa", path: ".", license: "GPL-3.0-or-later" },
-      { name: "@galatsa/server", path: "packages/server", license: "AGPL-3.0-or-later" },
-      { name: "@galatsa/a", path: "packages/a", license: "GPL-2.0-only" },
-      { name: "@galatsa/b", path: "packages/b", license: "MIT" },
-      { name: "@galatsa/c", path: "packages/c", license: undefined },
-    ]);
-    expect(violations.map((v) => v.name)).toEqual([
-      "@galatsa/a",
-      "@galatsa/b",
-      "@galatsa/c",
     ]);
   });
 });

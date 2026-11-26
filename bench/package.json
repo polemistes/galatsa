@@ -1,0 +1,19 @@
+{
+  "name": "@galatsa/bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Performance measurements for Galatsa",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "start": "node --conditions=@galatsa/source src/main.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vitest": "catalog:"
+  }
+}

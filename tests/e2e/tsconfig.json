@@ -1,0 +1,12 @@
+{
+  // Playwright runs the tests in Node and drives a browser, so both Node types and
+  // the DOM library are available.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "playwright-report", "test-results"]
+}

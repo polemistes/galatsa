@@ -18,21 +18,21 @@
     "check:spdx": "node scripts/check-spdx.ts",
     "check:licenses": "node scripts/check-licenses.ts",
     "test": "vitest run",
-    "e2e": "playwright test",
-    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run check:spdx && pnpm run test && pnpm run check:licenses"
+    "e2e": "pnpm --filter @galatsa/e2e run e2e",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run check:spdx && pnpm run check:workspace && pnpm run test && pnpm run check:licenses",
+    "check:workspace": "node scripts/check-workspace.ts"
   },
   "devDependencies": {
     "@eslint/compat": "2.1.1",
     "@eslint/js": "10.0.1",
-    "@playwright/test": "1.65.0",
-    "@types/node": "26.6.6",
+    "@types/node": "catalog:",
     "eslint": "10.14.0",
     "globals": "17.14.0",
     "prettier": "3.10.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.2",
     "vite": "8.3.8",
-    "vitest": "5.1.0",
+    "vitest": "catalog:",
     "yaml": "2.9.1"
   }
 }

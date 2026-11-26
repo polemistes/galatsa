@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Checks that every source file in the repository carries the GPL-3.0-or-later SPDX
-// header. The files are listed with git, so ignored files (node_modules, dist, and
+// Checks that every source file in the repository carries the SPDX license header:
+// AGPL-3.0-or-later under packages/server, GPL-3.0-or-later everywhere else. The files are listed with git, so ignored files (node_modules, dist, and
 // agent worktrees under .claude/) are skipped, and no list of exclusions is needed.
 // Rules for each file type are in scripts/lib/spdx.ts.
 //
@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hasSpdxHeader, needsHeader, SPDX_IDENTIFIER } from "./lib/spdx.ts";
+import { expectedHeader, hasSpdxHeader, needsHeader } from "./lib/spdx.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -57,10 +57,10 @@ function main(): void {
     console.error(
       `SPDX check failed: ${missing.length} file(s) do not start with the license header:`,
     );
-    console.error(
-      `  // ${SPDX_IDENTIFIER}  (or the /* */, <!-- --> form for .css and .html)`,
-    );
-    for (const file of missing) console.error(`  - ${file}`);
+    for (const file of missing) {
+      console.error(`  - ${file}`);
+      console.error(`      expected first line: ${expectedHeader(file)}`);
+    }
     process.exit(1);
   }
 

@@ -2,9 +2,22 @@ packages:
   - "packages/*"
   - "packages/extensions/*"
   - "apps/*"
+  - "bench"
+  - "tests/e2e"
+
+# Shared versions. A package that needs one of these lists it as "catalog:", so every
+# package uses the same version. Versions follow the project rule: at least two weeks
+# old when chosen.
+catalog:
+  "@playwright/test": 1.65.0
+  "@types/node": 26.6.6
+  vitest: 5.1.0
 
 # Install the optional platform packages (native and wasm binaries) for every
 # platform, not only the current one, so that the license check sees all of them.
+# The check still fails if a lockfile package is not installed (fail-safe), so a new
+# platform that is missing here shows up as an error, not as a silent gap.
+# Values are Node's process.platform, process.arch and the libc names pnpm uses.
 supportedArchitectures:
   os:
     - current
@@ -12,17 +25,27 @@ supportedArchitectures:
     - darwin
     - win32
     - freebsd
+    - openbsd
     - netbsd
+    - sunos
+    - aix
     - android
     - openharmony
   cpu:
     - current
     - x64
+    - ia32
     - arm64
     - arm
     - ppc64
+    - ppc
     - s390x
+    - s390
     - riscv64
+    - loong64
+    - mips64el
+    - mips
+    - mipsel
     - wasm32
   libc:
     - current
