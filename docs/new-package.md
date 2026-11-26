@@ -39,3 +39,12 @@ Put this in a `package.json` script (see `bench/package.json`). Node cannot load
 ## Headers
 
 Every source file starts with `// SPDX-License-Identifier: GPL-3.0-or-later` (`/* ... */` in CSS, `<!-- ... -->` in HTML). Under `packages/server` the identifier is `AGPL-3.0-or-later`.
+
+## Text and translations
+
+User interface text never appears in code; it comes from message files. `pnpm check` runs `scripts/check-i18n.ts`, which enforces this. The design is in [docs/adr/0003-translations.md](adr/0003-translations.md).
+
+- Put the package's text in `src/messages/nb.ts` and `src/messages/en.ts` (default export: key to message text, same keys in both), and create the bundle in `src/messages/index.ts` with `defineMessages("<namespace>", { nb, en })` from `@galatsa/i18n`. Extensions use their extension id as the namespace.
+- Look text up with `i18n.translator(bundle)` or `i18n.t("namespace:key", values)`.
+- Every `.tsx` and `.jsx` file is checked for hard-coded text. A package that builds its interface without JSX (with the DOM, like the player) lists those files in its `package.json`: `"galatsa": { "i18n": { "uiFiles": ["src/**/*.ts"] } }`. The other settings (`messages`, `textAttributes`, `textCalls`) are described in `scripts/lib/i18n-config.ts`.
+- Text that must not be translated (a product name, a code sample) is marked with `// i18n-ignore: <reason>` on the line or alone on the line above (`{/* i18n-ignore: <reason> */}` in JSX).
