@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   checkSettings,
   evaluateAges,
+  isRetryableStatus,
   MINIMUM_AGE_MINUTES,
   packumentUrl,
   publishTimeOf,
+  retryDelayMs,
   splitPackageId,
   type ReleaseAgeException,
 } from "./release-age.ts";
@@ -125,5 +127,25 @@ describe("checkSettings", () => {
     expect(checkSettings(settings("x"), exceptions)).toEqual([
       "pnpm-workspace.yaml: minimumReleaseAgeExclude must be a list.",
     ]);
+  });
+});
+
+describe("retries", () => {
+  it("retries rate limits and server errors only", () => {
+    expect([408, 429, 500, 502, 503].every(isRetryableStatus)).toBe(true);
+    expect([400, 401, 403, 404, 410].some(isRetryableStatus)).toBe(false);
+  });
+
+  it("backs off exponentially with jitter, and honours Retry-After", () => {
+    const none = (): number => 0;
+    const most = (): number => 1;
+    expect(retryDelayMs(1, null, 0, none)).toBe(1000);
+    expect(retryDelayMs(2, null, 0, none)).toBe(2000);
+    expect(retryDelayMs(3, null, 0, most)).toBe(5000);
+    expect(retryDelayMs(1, "7", 0, none)).toBe(7000);
+    expect(retryDelayMs(1, "Thu, 01 Jan 1970 00:00:12 GMT", 2000, none)).toBe(10_000);
+    expect(retryDelayMs(1, "3600", 0, none)).toBe(30_000); // capped
+    expect(retryDelayMs(10, null, 0, none)).toBe(30_000);
+    expect(retryDelayMs(1, "soon", 0, none)).toBe(1000); // unreadable header
   });
 });

@@ -14,6 +14,12 @@
 // Without network access the check fails. Locally, --offline (or the environment
 // variable GALATSA_CHECK_OFFLINE=1) checks only the cached times and skips the rest
 // with a warning. In CI (the CI environment variable is set) offline mode is refused.
+//
+// The two-week rule covers the dependencies the project chooses and bundles, not
+// the system libraries a Linux distribution provides. A distribution package build
+// (PKGBUILD, deb, rpm) sets GALATSA_DISTRIBUTION_BUILD=1 to skip this check, and
+// pnpm_config_minimum_release_age=0 to turn off pnpm's own rule. Both are refused
+// in CI.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,8 +30,10 @@ import {
   checkSettings,
   evaluateAges,
   MINIMUM_AGE_DAYS,
+  isRetryableStatus,
   packumentUrl,
   publishTimeOf,
+  retryDelayMs,
   splitPackageId,
   type ReleaseAgeSettings,
 } from "./lib/release-age.ts";
@@ -102,20 +110,36 @@ function writeCache(times: ReadonlyMap<string, string>): void {
   }
 }
 
+/** An answer from the registry that asking again will not change. */
+class FinalError extends Error {}
+
 async function fetchPackument(name: string): Promise<unknown> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
+    let retryAfter: string | null = null;
     try {
       const response = await fetch(packumentUrl(name), {
         headers: { accept: "application/json", "user-agent": USER_AGENT },
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
-      if (response.status === 404) throw new Error("not found in the registry (404)");
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (response.status === 404) {
+        throw new FinalError("not found in the registry (404)");
+      }
+      if (!response.ok) {
+        retryAfter = response.headers.get("retry-after");
+        const message = `HTTP ${response.status}`;
+        throw isRetryableStatus(response.status)
+          ? new Error(message)
+          : new FinalError(message);
+      }
       return await response.json();
     } catch (error) {
       lastError = error;
-      if (String(error).includes("404")) break;
+      if (error instanceof FinalError) break;
+    }
+    // Network errors, timeouts, rate limits and server errors: wait, then retry.
+    if (attempt < ATTEMPTS) {
+      await new Promise((done) => setTimeout(done, retryDelayMs(attempt, retryAfter)));
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -169,6 +193,22 @@ async function main(): Promise<void> {
     process.argv.slice(2).includes("--offline") ||
     isSet(process.env["GALATSA_CHECK_OFFLINE"]);
   const ci = isSet(process.env["CI"]);
+  if (isSet(process.env["GALATSA_DISTRIBUTION_BUILD"])) {
+    if (ci) {
+      fail([
+        "Release-age check: GALATSA_DISTRIBUTION_BUILD is not allowed in CI (the CI environment variable is set).",
+      ]);
+    }
+    console.log(
+      "Release-age check skipped: GALATSA_DISTRIBUTION_BUILD is set (a distribution package build).",
+    );
+    return;
+  }
+  if (ci && process.env["pnpm_config_minimum_release_age"] !== undefined) {
+    fail([
+      "Release-age check: pnpm_config_minimum_release_age is set, which overrides pnpm's own two-week rule. It is not allowed in CI.",
+    ]);
+  }
   if (offline && ci) {
     fail([
       "Release-age check: offline mode is not allowed in CI (the CI environment variable is set).",

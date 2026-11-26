@@ -164,3 +164,36 @@ export function checkSettings(
   }
   return problems;
 }
+
+/** True for registry answers worth asking again: rate limits and server errors. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * How long to wait before attempt `attempt + 1` after attempt `attempt` failed
+ * (attempt counts from 1): exponential backoff from one second, with up to a
+ * quarter of random jitter so parallel workers do not retry in step. A
+ * Retry-After header from the registry (seconds, or an HTTP date) is honoured
+ * when it asks for longer. Never more than 30 seconds.
+ */
+export function retryDelayMs(
+  attempt: number,
+  retryAfter: string | null = null,
+  now: number = Date.now(),
+  random: () => number = Math.random,
+): number {
+  const MAX = 30_000;
+  const backoff = 1000 * 2 ** (attempt - 1);
+  const jittered = backoff * (1 + random() / 4);
+  let asked = 0;
+  if (retryAfter !== null) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) asked = seconds * 1000;
+    else {
+      const date = Date.parse(retryAfter);
+      if (Number.isFinite(date)) asked = date - now;
+    }
+  }
+  return Math.round(Math.min(MAX, Math.max(jittered, asked)));
+}
