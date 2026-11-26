@@ -31,13 +31,20 @@ async function shoot(page: Page, id: string, zoom: number, file: string): Promis
         return;
       }
       // Put the start of the first line 24 px from the view's left edge and its
-      // middle half a line plus 24 px from the top.
+      // middle half a line plus 24 px from the top. If the line is taller than the
+      // view, look at the middle of the first letter instead.
       api.setCamera({ x: e.x, y: e.y, zoom });
       const p = api.engine.caretScreenPoint(id, 0)!;
       const lineHalf = (e.fontSize * e.lineHeight * zoom) / 2;
       const pose = {
-        x: e.x + (p.x - width / 2) / zoom + (width / 2 - 24) / zoom,
-        y: e.y + (p.y - height / 2) / zoom + (height / 2 - 24 - lineHalf) / zoom,
+        x:
+          e.x +
+          (p.x - width / 2) / zoom +
+          (2 * lineHalf > height ? 0.3 * e.fontSize : (width / 2 - 24) / zoom),
+        y:
+          e.y +
+          (p.y - height / 2) / zoom +
+          (height / 2 - Math.min(24 + lineHalf, height / 2)) / zoom,
         zoom,
       };
       api.setCamera(pose);
@@ -54,14 +61,14 @@ for (const dpr of [1, 2]) {
       viewport: { width: WIDTH + 40, height: HEIGHT + 80 },
     });
 
-    test(`text at zoom ${ZOOMS.join(", ")}`, async ({ page, browserName }) => {
+    test(`text at zoom ${ZOOMS.join(", ")}`, async ({ page }, testInfo) => {
       await page.goto(`/demo.html?width=${WIDTH}&height=${HEIGHT}`);
       await page.waitForFunction(() => window.protoCanvas !== undefined);
       await page.evaluate(() => window.protoCanvas!.ready);
       for (const [name, id] of Object.entries(TEXTS)) {
         for (const zoom of ZOOMS) {
           const file = new URL(
-            `../results/text-${name}-${id}-zoom${zoom}-dpr${dpr}-${browserName}.png`,
+            `../results/text-${name}-${id}-zoom${zoom}-dpr${dpr}-${testInfo.project.name}.png`,
             import.meta.url,
           ).pathname;
           await shoot(page, id, zoom, file);

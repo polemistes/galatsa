@@ -38,10 +38,10 @@ async function settle(page: Page): Promise<void> {
   );
 }
 
-async function shot(page: Page, name: string, browserName: string): Promise<Buffer> {
+async function shot(page: Page, name: string, project: string): Promise<Buffer> {
   await settle(page);
   return page.locator("#stage canvas").screenshot({
-    path: new URL(`../results/edit-${name}-${browserName}.png`, import.meta.url).pathname,
+    path: new URL(`../results/edit-${name}-${project}.png`, import.meta.url).pathname,
   });
 }
 
@@ -66,12 +66,13 @@ test("type, move, select, paste, undo and compose in a canvas text", async ({
   page,
   browserName,
   context,
-}) => {
+}, testInfo) => {
+  const project = testInfo.project.name;
   const original = await page.evaluate(
     (id) => window.protoCanvas!.engine.textElement(id)!.text,
     TEXT,
   );
-  const before = await shot(page, "0-before", browserName);
+  const before = await shot(page, "0-before", project);
 
   // Double-click in the first word starts editing with the caret there.
   const p = await pagePoint(page, 3);
@@ -90,7 +91,7 @@ test("type, move, select, paste, undo and compose in a canvas text", async ({
   s = await state(page);
   expect(s?.text).toBe(`${original} Hei på deg, Ørnulf!`);
   expect(s?.selectionStart).toBe(s!.text.length);
-  const typed = await shot(page, "1-typed", browserName);
+  const typed = await shot(page, "1-typed", project);
   expect(typed.equals(before)).toBe(false);
 
   // Caret movement: left by graphemes, word-wise (the browser's own), up a line
@@ -123,7 +124,7 @@ test("type, move, select, paste, undo and compose in a canvas text", async ({
     end,
     "backward",
   ]);
-  await shot(page, "2-selected", browserName);
+  await shot(page, "2-selected", project);
   await page.keyboard.type("Åse!");
   s = await state(page);
   expect(s?.text.endsWith("Hei på deg, Åse!")).toBe(true);
@@ -139,7 +140,7 @@ test("type, move, select, paste, undo and compose in a canvas text", async ({
   s = await state(page);
   expect(s?.selectionStart).toBe(0);
   expect(s?.selectionEnd).toBe(original.indexOf(" ", original.indexOf(" ") + 1));
-  await shot(page, "3-mouse-selection", browserName);
+  await shot(page, "3-mouse-selection", project);
 
   // Paste over the selection, from the system clipboard.
   if (browserName === "chromium") {
@@ -149,7 +150,7 @@ test("type, move, select, paste, undo and compose in a canvas text", async ({
     s = await state(page);
     expect(s?.text.startsWith("Limt inn ")).toBe(true);
     expect(s?.selectionStart).toBe("Limt inn".length);
-    await shot(page, "4-pasted", browserName);
+    await shot(page, "4-pasted", project);
 
     // Undo is the textarea's own.
     await page.keyboard.press("Control+Z");
@@ -184,13 +185,13 @@ test("type, move, select, paste, undo and compose in a canvas text", async ({
     });
     s = await state(page);
     expect(s?.composition).toEqual({ start: at, end: at + 3 });
-    const composing = await shot(page, "5-composing", browserName);
+    const composing = await shot(page, "5-composing", project);
     await cdp.send("Input.insertText", { text: "日本語" });
     s = await state(page);
     expect(s?.composition).toBeNull();
     expect(s?.text.slice(at, at + 3)).toBe("日本語");
     expect(s?.text).not.toContain("にほ");
-    const committed = await shot(page, "6-committed", browserName);
+    const committed = await shot(page, "6-committed", project);
     // The underline is gone after the commit.
     expect(committed.equals(composing)).toBe(false);
   }
@@ -200,7 +201,7 @@ test("type, move, select, paste, undo and compose in a canvas text", async ({
   await page.keyboard.press("Escape");
   expect(await state(page)).toBeNull();
   expect(await page.evaluate(() => document.querySelector("#stage textarea"))).toBeNull();
-  const after = await shot(page, "7-after", browserName);
+  const after = await shot(page, "7-after", project);
   expect(after.equals(before)).toBe(false);
   expect(await page.evaluate((id) => window.protoCanvas!.engine.textOf(id), TEXT)).toBe(
     final,

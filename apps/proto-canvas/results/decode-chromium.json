@@ -1,31 +1,29 @@
 {
- "count": 24,
- "width": 4000,
- "height": 3000,
- "results": [
-  {
-   "method": "bitmap",
-   "supported": true,
-   "totalMs": 282,
-   "medianMs": 45,
-   "maxMs": 56,
-   "decodedFrameSizes": [],
-   "pssBeforeMiB": 395,
-   "pssPeakMiB": 597,
-   "pssAfter3sMiB": 413
-  },
-  {
-   "method": "imagedecoder",
-   "supported": true,
-   "totalMs": 67,
-   "medianMs": 9,
-   "maxMs": 20,
-   "decodedFrameSizes": [
-    "500x375"
-   ],
-   "pssBeforeMiB": 473,
-   "pssPeakMiB": 489,
-   "pssAfter3sMiB": 487
-  }
- ]
+  "count": 24,
+  "width": 4000,
+  "height": 3000,
+  "results": [
+    {
+      "method": "bitmap",
+      "supported": true,
+      "totalMs": 282,
+      "medianMs": 45,
+      "maxMs": 56,
+      "decodedFrameSizes": [],
+      "pssBeforeMiB": 395,
+      "pssPeakMiB": 597,
+      "pssAfter3sMiB": 413
+    },
+    {
+      "method": "imagedecoder",
+      "supported": true,
+      "totalMs": 67,
+      "medianMs": 9,
+      "maxMs": 20,
+      "decodedFrameSizes": ["500x375"],
+      "pssBeforeMiB": 473,
+      "pssPeakMiB": 489,
+      "pssAfter3sMiB": 487
+    }
+  ]
 }
