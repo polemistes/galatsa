@@ -19,6 +19,12 @@
 //     in a useTranslator hook). If it has to register the bundle, lookups see the
 //     bundle at once, but the version bump and the notification wait for a
 //     microtask, after the render, so a render never changes the store it reads.
+//   - A bundle object created anew on every render (defineMessages() inside a
+//     component), or two copies of one package passing different bundles for the
+//     same namespace, must not make renders and notifications chase each other.
+//     A bundle with the same content as the registered one changes nothing, and a
+//     bundle that was already replaced once is not put back by translator(); in
+//     development that case logs a warning.
 
 import type { BundleKey, MessageBundle } from "./catalog.ts";
 import { NAMESPACE_PATTERN } from "./catalog.ts";
@@ -87,10 +93,14 @@ export interface I18n {
   /** Looks up "namespace:key" and fills in the values. */
   t(fullKey: string, values?: MessageValues): string;
   /**
-   * A typed lookup for one bundle's keys. Registers the bundle if needed (or if a
-   * different bundle holds the namespace, as after a hot reload). Safe to call
-   * during a React render: lookups see the bundle at once, while the version bump
-   * and the notification of subscribers are deferred to a microtask.
+   * A typed lookup for one bundle's keys, in that bundle. Registers the bundle if
+   * needed (or if a bundle with other content holds the namespace, as after a hot
+   * reload). Safe to call during a React render: lookups see the bundle at once,
+   * while the version bump and the notification of subscribers are deferred to a
+   * microtask. A bundle with the same content as the registered one changes
+   * nothing. A bundle that an earlier translator() or register() call replaced is
+   * not registered again, so two bundles for one namespace cannot replace each
+   * other on every render; development logs a warning once.
    */
   translator<B extends MessageBundle>(bundle: B): Translate<BundleKey<B>>;
   /**
@@ -112,6 +122,29 @@ export interface I18n {
 /** How a missing message or value is shown during development. */
 export function missingMarker(name: string): string {
   return `⟦${name}⟧`;
+}
+
+/** True if two bundles have the same namespace and the same messages. */
+function sameContent(a: MessageBundle, b: MessageBundle): boolean {
+  if (a.namespace !== b.namespace) return false;
+  const catalogs = (bundle: MessageBundle): Array<[string, unknown]> =>
+    Object.entries(bundle.messages as Record<string, unknown>);
+  const first = catalogs(a);
+  const second = new Map(catalogs(b));
+  if (first.length !== second.size) return false;
+  for (const [lang, catalog] of first) {
+    const other = second.get(lang);
+    if (catalog === other) continue;
+    if (catalog === null || other === null) return false;
+    if (typeof catalog !== "object" || typeof other !== "object") return false;
+    const entries = Object.entries(catalog);
+    if (entries.length !== Object.keys(other as object).length) return false;
+    for (const [key, text] of entries) {
+      if (!Object.hasOwn(other as object, key)) return false;
+      if ((other as Record<string, unknown>)[key] !== text) return false;
+    }
+  }
+  return true;
 }
 
 /** True if two bundles have at least one key in common (or one has no keys). */
@@ -142,7 +175,10 @@ export function createI18n(options: I18nOptions): I18n {
   };
 
   const bundles = new Map<string, MessageBundle>();
-  const parsed = new Map<string, Message | Error>();
+  // Parsed messages per bundle object, by language and key.
+  const parsed = new WeakMap<MessageBundle, Map<string, Message | Error>>();
+  // Bundles that were registered and later replaced by another bundle.
+  const superseded = new WeakSet<MessageBundle>();
   const listeners = new Set<() => void>();
   let version = 0;
 
@@ -169,30 +205,35 @@ export function createI18n(options: I18nOptions): I18n {
     });
   };
 
-  const forgetParsed = (namespace: string): void => {
-    for (const cacheKey of [...parsed.keys()]) {
-      if (cacheKey.split("\u0000")[1] === namespace) parsed.delete(cacheKey);
+  const parse = (bundle: MessageBundle, lang: Locale, key: string, text: string) => {
+    let cache = parsed.get(bundle);
+    if (cache === undefined) {
+      cache = new Map();
+      parsed.set(bundle, cache);
     }
-  };
-
-  const parse = (lang: Locale, namespace: string, key: string, text: string) => {
-    const cacheKey = `${lang}\u0000${namespace}\u0000${key}`;
-    let result = parsed.get(cacheKey);
+    const cacheKey = `${lang}\u0000${key}`;
+    let result = cache.get(cacheKey);
     if (result === undefined) {
       try {
         result = parseMessage(text);
       } catch (error) {
         result = error instanceof Error ? error : new Error(String(error));
       }
-      parsed.set(cacheKey, result);
+      cache.set(cacheKey, result);
     }
     return result;
   };
 
-  const lookup = (namespace: string, key: string, values?: MessageValues): string => {
+  /** Looks up a key in a bundle; without a bundle, in the registered one. */
+  const lookup = (
+    namespace: string,
+    key: string,
+    values: MessageValues | undefined,
+    bundle: MessageBundle | undefined = bundles.get(namespace),
+  ): string => {
     const fullKey = `${namespace}:${key}`;
     try {
-      return lookupUnsafe(namespace, key, fullKey, values);
+      return lookupUnsafe(bundle, namespace, key, fullKey, values);
     } catch (error) {
       // A last line of defence: formatMessage guards its values, but a malformed
       // bundle passed in from plain JavaScript could still make something throw.
@@ -202,12 +243,12 @@ export function createI18n(options: I18nOptions): I18n {
   };
 
   const lookupUnsafe = (
+    bundle: MessageBundle | undefined,
     namespace: string,
     key: string,
     fullKey: string,
     values: MessageValues | undefined,
   ): string => {
-    const bundle = bundles.get(namespace);
     if (bundle === undefined) {
       warn(`Unknown namespace "${namespace}" (looking up "${fullKey}")`);
       return dev ? missingMarker(fullKey) : fullKey;
@@ -217,7 +258,7 @@ export function createI18n(options: I18nOptions): I18n {
       if (catalog === undefined || !Object.hasOwn(catalog, key)) continue;
       const text = catalog[key];
       if (typeof text !== "string") continue;
-      const message = parse(lang, namespace, key, text);
+      const message = parse(bundle, lang, key, text);
       if (message instanceof Error) {
         warn(`Broken message "${fullKey}" in ${lang}: ${message.message}`);
         if (dev) return missingMarker(fullKey);
@@ -245,28 +286,47 @@ export function createI18n(options: I18nOptions): I18n {
     return dev ? missingMarker(fullKey) : fullKey;
   };
 
-  /** Stores the bundle; returns false if it was already registered. */
-  const store = (bundle: MessageBundle): boolean => {
+  /**
+   * Stores the bundle. `changed` is false if nothing changed: the bundle (or one
+   * with the same content) is registered already, or, from translator(), the
+   * bundle was replaced before. `use` is the bundle to look keys up in: the
+   * registered one when the content is the same, so that a bundle created on
+   * every render shares the parsed messages.
+   */
+  const store = (
+    bundle: MessageBundle,
+    fromTranslator: boolean,
+  ): { changed: boolean; use: MessageBundle } => {
     const existing = bundles.get(bundle.namespace);
-    if (existing === bundle) return false;
+    if (existing === bundle) return { changed: false, use: bundle };
     if (!NAMESPACE_PATTERN.test(bundle.namespace)) {
       throw new Error(`Invalid message namespace "${bundle.namespace}"`);
     }
     if (existing !== undefined) {
+      if (sameContent(existing, bundle)) return { changed: false, use: existing };
+      if (fromTranslator && superseded.has(bundle)) {
+        warn(
+          `Two different bundles for message namespace "${bundle.namespace}" are in use, ` +
+            "and translator() was called with each. The newer one stays registered. " +
+            "A package may be loaded twice, or defineMessages() is called while rendering.",
+        );
+        return { changed: false, use: bundle };
+      }
       if (!sharesKey(existing, bundle)) {
         warn(
           `Message namespace "${bundle.namespace}" was replaced by a bundle with none of the same keys. ` +
             "Two packages may be using the same namespace.",
         );
       }
-      forgetParsed(bundle.namespace);
+      superseded.add(existing);
     }
+    superseded.delete(bundle);
     bundles.set(bundle.namespace, bundle);
-    return true;
+    return { changed: true, use: bundle };
   };
 
   const register = (bundle: MessageBundle): void => {
-    if (store(bundle)) changed();
+    if (store(bundle, false).changed) changed();
   };
 
   for (const bundle of options.bundles ?? []) register(bundle);
@@ -288,7 +348,6 @@ export function createI18n(options: I18nOptions): I18n {
     register,
     unregister(namespace) {
       if (!bundles.delete(namespace)) return;
-      forgetParsed(namespace);
       changed();
     },
     t(fullKey, values) {
@@ -304,8 +363,9 @@ export function createI18n(options: I18nOptions): I18n {
       return lookup(fullKey.slice(0, colon), fullKey.slice(colon + 1), values);
     },
     translator<B extends MessageBundle>(bundle: B): Translate<BundleKey<B>> {
-      if (store(bundle)) changedLater();
-      return (key, values) => lookup(bundle.namespace, key, values);
+      const { changed: replaced, use } = store(bundle, true);
+      if (replaced) changedLater();
+      return (key, values) => lookup(bundle.namespace, key, values, use);
     },
     formatNumber(value, formatOptions) {
       try {

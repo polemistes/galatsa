@@ -13,7 +13,7 @@
 ## package.json
 
 - `"private": true`.
-- `"license"`: `"GPL-3.0-or-later"`. Only `packages/server` uses `"AGPL-3.0-or-later"`, and nothing else may reach it: not by name, not under another name (`"srv": "workspace:@galatsa/server@*"`), not through a `link:`, `file:` or `workspace:` path, not through an override in `pnpm-workspace.yaml`, and not with a relative import.
+- `"license"`: `"GPL-3.0-or-later"`. Only `packages/server` uses `"AGPL-3.0-or-later"`, and nothing else may reach it: not by name, not under another name (`"srv": "workspace:@galatsa/server@*"`), not through a `link:`, `file:` or `workspace:` path, not through an override in `pnpm-workspace.yaml`, and not with a relative import. Beyond these rules, every Vite build checks what it really bundles; see [Vite and the AGPL guard](#vite-and-the-agpl-guard).
 - Scripts: `typecheck` (`tsc -p tsconfig.json`) in every package; `build` in libraries and apps.
 - Libraries: `exports` with `"@galatsa/source": "./src/index.ts"` as the first condition of every entry, then `types` and `default` pointing at `dist/`. The source condition lets other packages, tests and Node scripts use the package without building it first. The one entry without it is `"./package.json": "./package.json"`, which is allowed.
 - Targets in `exports` and `imports` (`"#name"` mappings) are `./` paths inside the package. A package named in `imports` must be declared like any other dependency.
@@ -26,22 +26,50 @@
 The check reads every script (`.ts`, `.tsx`, `.js` and the like), stylesheet (`.css`, `.scss`, `.less` and the like) and HTML file of the package:
 
 - imports, `export ... from`, `import()` and `require()`;
-- `@import`, `@use` and `url()` in stylesheets, `@font-face` sources included;
-- `src` and `href` of `script`, `link`, `img` and media elements in HTML, and inline scripts and styles;
-- `new URL("...", import.meta.url)` and `import.meta.glob("...")`.
+- `@import`, `@use` and `url()` in stylesheets, `@font-face` sources included, CSS Modules' `composes: ... from "..."` and `@value ... from "..."`, and Tailwind's `@config`, `@plugin`, `@reference` and `@source`;
+- `src` and `href` of `script`, `link`, `img` and media elements in HTML (quoted or not), and inline scripts and styles;
+- `new URL("...", import.meta.url)` and `import.meta.glob("...")`, with its `base` option.
 
 Each reference must be one of these:
 
 - a file inside the package's own folder. A relative path that leaves the folder (`../../shared/x.ts`) fails, even if the file exists, and so does a path into another workspace package. Share code through a workspace package instead. The check compares real paths: a symbolic link inside the package that points out of it fails by itself, and so does any path through it, also when git ignores the link.
-- a package declared in this package's `package.json`. In a stylesheet, a bare name (`@import "x.css"`) is a file next to the stylesheet if there is one, otherwise a package; `~name` is always a package.
+- a package declared in this package's `package.json`, without `.` or `..` in the path after the name (`"pkg/../server/x.ts"` fails: a package without `exports` lets such a path leave it). In a stylesheet, a bare name (`@import "x.css"`) is a file next to the stylesheet if there is one, otherwise a package; `~name` is always a package.
 - a Node built-in with the `node:` prefix (`node:fs`). Without the prefix, `events` or `buffer` is the npm package of that name and must be declared.
 - a URL (`https:`, `data:`) or a `#name` mapping that the package declares in its `imports` field. An undeclared `#name` fails, also if a Vite alias or tsconfig `paths` would resolve it.
 
 Relative imports name the file with its extension and use `/`: `import { x } from "./x.ts"`. Backslashes, drive letters, `file:` URLs and Vite's `/@fs/` paths fail.
 
-Computed imports are checked by their fixed start. ``import(`./locales/${lang}.ts`)`` may reach every file in `./locales/`, so that folder must be inside the package and must not contain another workspace package. An `import()` or `require()` whose fixed start names no folder (``import(`${base}/x.ts`)``) fails, because a bundler may still follow it. An `import()` of a plain variable is not followed by bundlers and is allowed.
+Computed imports are checked by their fixed start. ``import(`./locales/${lang}.ts`)`` may reach every file in `./locales/`, so that folder must be inside the package and must not contain another workspace package. An `import()` or `require()` whose fixed start names no folder (``import(`${base}/x.ts`)``) fails, because a bundler may still follow it. Each branch of a choice is checked: `import(fast ? "./a.ts" : "../../server/b.ts")` fails. An `import()` of a plain variable is not followed by bundlers and is allowed.
 
-Aliases are references too. The targets in `"paths"` of a tsconfig file, and in `resolve.alias` of `vite.config.*` and `vitest.config.*`, follow the same rules. An alias target is understood if it is a string, or `path.resolve`, `path.join` or `fileURLToPath(new URL(..., import.meta.url))` of strings, `import.meta.dirname`, `__dirname` and `process.cwd()` (taken as the package folder). Any other alias fails, because the check cannot see where it points.
+Aliases are references too. The targets in `"paths"` of a tsconfig file, and in `resolve.alias` of `vite.config.*` and `vitest.config.*` (also written as `"alias"` or `["alias"]`), follow the same rules, as do `publicDir`, `root` and the build `input` entries of those configs. An alias target is understood if it is a string, or `path.resolve`, `path.join` or `fileURLToPath(new URL(..., import.meta.url))` of strings, `import.meta.dirname`, `__dirname` and `process.cwd()` (taken as the package folder). Any other alias fails, because the check cannot see where it points.
+
+These rules read the files and can be outwitted, by a plugin, a glob or something nobody thought of. They are the first line of defence; the second is in the build itself, below.
+
+## Vite and the AGPL guard
+
+Every Vite and Vitest config in the workspace contains the AGPL guard from `vite.shared.ts` (code in `scripts/lib/agpl-guard.ts`). It fails a build when anything under `packages/server` would end up in it: a module, a file the build reads (stylesheets, assets, anything a plugin reads), `publicDir`, a build input, a sourcemap source, or code that carries an AGPL license identifier. Web workers get the guard too. While Vite serves (the dev server, Vitest), it fails an import from outside `packages/server` that leads into it. The server's own build is exempt.
+
+- A config without plugins of its own spreads the shared settings:
+
+  ```ts
+  import { defineConfig } from "vite";
+  import { workspaceSourceResolve } from "../../vite.shared.ts";
+
+  export default defineConfig({ ...workspaceSourceResolve, build: { outDir: "dist" } });
+  ```
+
+- A config with plugins of its own wraps its settings in `workspaceConfig()`, which joins the plugin lists. A `plugins` key after the spread would replace the guard:
+
+  ```ts
+  import react from "@vitejs/plugin-react";
+  import { defineConfig } from "vite";
+  import { workspaceConfig } from "../../vite.shared.ts";
+
+  export default defineConfig(workspaceConfig({ plugins: [react()] }));
+  ```
+
+- The workspace check loads every `vite.config.*` and `vitest.config.*` file with Vite, as `vite build` would, plus every file a package script passes to `vite --config`, and fails if the guard is missing or changed. It does not matter how the config is written, only what it amounts to.
+- A package whose scripts run `vite` needs a `vite.config.ts` at its top: without a config file, Vite has no guard. Package scripts must not run other bundlers (Rollup, Rolldown, esbuild, webpack and the like), which the guard does not cover; `tsc` does not bundle and is fine.
 
 ## TypeScript
 
@@ -71,7 +99,16 @@ Aliases are references too. The targets in `"paths"` of a tsconfig file, and in 
   }
   ```
 
-- A package with a `vite.config.ts` spreads `workspaceSourceResolve` from `../../vite.shared.ts` into its config, so Vite also reads workspace packages from source. A config file at the top of a package (`*.config.ts`) is the only place that may import `vite.shared.ts` with a relative path, and the package must then declare `vite` itself.
+- A package with a `vite.config.ts` uses the shared settings from `../../vite.shared.ts` (see [Vite and the AGPL guard](#vite-and-the-agpl-guard)), so Vite also reads workspace packages from source. A config file at the top of a package (`*.config.ts`) is the only place that may import `vite.shared.ts` with a relative path, and the package must then declare `vite` itself.
+- Code that uses Vite's own features (`import.meta.env`, `import.meta.hot`, imports of `.css`, `.module.css`, `.svg` or `?url`) needs Vite's types. Add `src/vite-env.d.ts` to the package:
+
+  ```ts
+  // SPDX-License-Identifier: GPL-3.0-or-later
+
+  /// <reference types="vite/client" />
+  ```
+
+  The root type check (`tsc -p tsconfig.json` in `pnpm check`) reads every file with only Node's types, so `"types": ["vite/client"]` in the package's own `tsconfig.json` is not enough on its own; the file is. The package declares `vite` (`"catalog:"`) in its devDependencies.
 
 ## Tests
 
@@ -110,6 +147,7 @@ User interface text never appears in code; it comes from message files. `pnpm ch
 
 - Put the package's text in `src/messages/nb.ts` and `src/messages/en.ts` (default export: key to message text, same keys in both), and create the bundle in `src/messages/index.ts` with `defineMessages("<namespace>", { nb, en })` from `@galatsa/i18n`. Extensions use their extension id as the namespace.
 - Look text up with `i18n.translator(bundle)` or `i18n.t("namespace:key", values)`.
-- The message files are exactly `src/messages/<language>.ts` for each interface language; other files in the folder are not catalogs. `defineMessages()` belongs in `src/messages/index.ts`, with the catalogs imported from those files.
+- The message files are exactly `src/messages/<language>.ts` for each interface language; other files in the folder are not catalogs. `defineMessages()` belongs in `src/messages/index.ts`, with the catalogs imported from those files. A bundle written by hand (`{ namespace: "editor", messages: { nb, en } }`) fails the check, because its languages would never be compared.
 - User interface code is checked for hard-coded text. In a package that has `.tsx` or `.jsx` files or declares `@galatsa/i18n`, that is every script under `src/`, plus HTML pages; in other packages, `.tsx`, `.jsx` and HTML files. A package can list its own globs in its `package.json`, with `!` to leave files out: `"galatsa": { "i18n": { "uiFiles": ["src/**", "!src/model/**"] } }`. The other settings (`messages`, `textAttributes`, `textCalls`) are described in `scripts/lib/i18n-config.ts`.
+- Names are a guess. For names that hold text only by their ending (`errorMessage`, `plainText`, `sortDescription`), a value that looks like a code is not reported: one ASCII word without spaces that is all lower case (`"ascending"`), all upper case (`"ENOENT"`), camelCase, or has a digit or one of `/ _ . : + = # @ -` (`"text/plain"`, `"en-US"`). A capitalised word (`"Save"`), text with a space and text with letters outside ASCII are reported. In the fixed text places (JSX text, `title`, `aria-label`, `textContent` and so on) every value with a letter is reported. Text that is only a URL or an e-mail address is never reported, and neither is the content of `<style>` and `<script>`.
 - Text that must not be translated (a product name, a code sample) is marked with `// i18n-ignore: <reason>` on the line or alone on the line above (`{/* i18n-ignore: <reason> */}` in JSX, `<!-- i18n-ignore: <reason> -->` in HTML). Only comments count, not the same words in a string.
