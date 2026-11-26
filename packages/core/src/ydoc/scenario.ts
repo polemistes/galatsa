@@ -30,7 +30,7 @@ import { pasteFragment, tidyUp } from "./document-ops.ts";
 import * as ops from "./ops.ts";
 import { fromSnapshot, inspectDocument, toSnapshot, yLookup } from "./snapshot.ts";
 import { forkDoc, syncDocs, syncInto } from "./sync.ts";
-import { seededBytes, seededRandom } from "./testing.ts";
+import { seededBytes, seededRandom } from "./seeded.ts";
 import { createUndoManager } from "./track.ts";
 
 /** The transaction origin the scenario's "editor binding" uses. */
