@@ -4,7 +4,7 @@
 // dependencies and which are development-only. Pure logic: the CLI in
 // scripts/check-licenses.ts reads the file and passes its text in.
 //
-// Classification (decided 2026-11-26, plan/logg/F0-01-review-2.md):
+// Classification (decided 2026-11-26, during review of the tooling setup):
 //
 // - Production: every package reachable from any dependency field (dependencies,
 //   devDependencies, optionalDependencies, and auto-installed peerDependencies) of any

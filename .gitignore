@@ -38,3 +38,6 @@ Thumbs.db
 .env.*
 !.env.example
 *.local
+# Development plan, kept in its own private repository
+PLAN.md
+plan/

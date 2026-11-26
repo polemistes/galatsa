@@ -40,5 +40,4 @@ bench/      performance measurements
 tests/e2e/  end-to-end tests
 docs/adr/   decision records
 scripts/    project checks
-plan/       development plan
 ```
