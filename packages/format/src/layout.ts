@@ -36,7 +36,12 @@ export interface Manifest {
   thumbnail?: { mediaType: "image/png" };
 }
 
-/** True for entry names a reader of this version uses; others are skipped unread. */
+/**
+ * True for entry names a reader of this version uses. Others are skipped unread
+ * and are not written back: an entry that must survive being saved by an older
+ * version cannot be added without raising the minimum reader version
+ * (section 9.4).
+ */
 export function isKnownEntry(name: string): boolean {
   return (
     name === ENTRY.mimetype ||
@@ -67,8 +72,8 @@ export function assetsInUse(snapshot: DocumentSnapshot): AssetId[] {
         kind === "element"
           ? r.isGone(id)
           : kind === "stop"
-            ? isRemoved(snapshot.stops[id]!)
-            : isRemoved(snapshot.routes[id]!),
+            ? isRemoved(id, snapshot.stops[id]!)
+            : isRemoved(id, snapshot.routes[id]!),
     }),
   ].sort();
 }

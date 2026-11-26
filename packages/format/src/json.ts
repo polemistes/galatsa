@@ -12,7 +12,14 @@ function sortKeys(value: unknown): unknown {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value).sort()) {
       const item = (value as Record<string, unknown>)[key];
-      if (item !== undefined) out[key] = sortKeys(item);
+      if (item === undefined) continue;
+      // Not an assignment: a key named "__proto__" must stay an ordinary key.
+      Object.defineProperty(out, key, {
+        value: sortKeys(item),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
     return out;
   }

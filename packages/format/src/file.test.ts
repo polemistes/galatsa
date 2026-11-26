@@ -5,6 +5,9 @@
 
 import {
   FRAME_TYPE,
+  MAX_DEPTH,
+  nestingDepth,
+  validateSnapshot,
   type AssetId,
   type DocumentSnapshot,
   type ElementData,
@@ -24,6 +27,7 @@ import {
   setStopTransition,
   stopNotes,
   syncDocs,
+  tidyUp,
   toSnapshot,
 } from "@galatsa/core/ydoc";
 import { describe, expect, it } from "vitest";
@@ -32,7 +36,12 @@ import { FileFormatError, type FileErrorCode } from "./errors.ts";
 import { assetIdOf } from "./hash.ts";
 import { canonicalJson, fromUtf8, utf8 } from "./json.ts";
 import { FORMAT_VERSION, MIGRATIONS, type MigrationRegistry } from "./migrations.ts";
-import { readGalatsaFile, writeGalatsaFile } from "./file.ts";
+import {
+  readGalatsaFile,
+  writeGalatsaFile as writeFile,
+  type AssetSource,
+  type WriteOptions,
+} from "./file.ts";
 import { MIMETYPE } from "./layout.ts";
 import { readGalatsaSnapshot } from "./read.ts";
 import { readZip, writeZip } from "./zip.ts";
@@ -114,6 +123,15 @@ async function failure(promise: Promise<unknown>): Promise<FileErrorCode | strin
     return error instanceof FileFormatError ? error.code : `other: ${String(error)}`;
   }
   return "no error";
+}
+
+/** Writes a file and returns its bytes. */
+function writeGalatsaFile(
+  source: Y.Doc | DocumentSnapshot,
+  assets: AssetSource,
+  options?: WriteOptions,
+): Uint8Array {
+  return writeFile(source, assets, options).bytes;
 }
 
 /** Rebuilds a file's archive with some entries replaced or removed. */
@@ -206,9 +224,7 @@ describe("file round trip", () => {
     const peer = forkDoc(doc, 77);
     const read = await readGalatsaFile(writeGalatsaFile(doc, (id) => assets.get(id)));
     renameElement(read.doc, SAMPLE.frame, "Renamed offline");
-    edit(peer, () => stopNotes(peer, SAMPLE.stop1).insert(0, "Peer note. "), {
-      touch: [SAMPLE.stop1],
-    });
+    edit(peer, () => stopNotes(peer, SAMPLE.stop1).insert(0, "Peer note. "));
     syncDocs(read.doc, peer);
     const merged = toSnapshot(read.doc);
     expect(toSnapshot(peer)).toEqual(merged);
@@ -382,24 +398,27 @@ describe("damaged and foreign files", () => {
         readGalatsaFile(rewrite(good, (e) => e.set("mimetype", utf8("application/zip")))),
       ),
     ).toBe("not-galatsa");
-    expect(
-      await failure(readGalatsaFile(rewrite(good, (e) => e.delete("document.json")))),
-    ).toBe("damaged");
+    // Without a usable document.json and without ydoc.bin there is no document.
+    const plain = writeGalatsaFile(doc, (id) => assets.get(id), { includeYdoc: false });
+    for (const change of [
+      (e: Map<string, Uint8Array>) => e.delete("document.json"),
+      (e: Map<string, Uint8Array>) => e.set("document.json", utf8("{not json")),
+      (e: Map<string, Uint8Array>) => e.set("document.json", utf8('{"schemaVersion":1}')),
+      (e: Map<string, Uint8Array>) => e.set("document.json", utf8("[]")),
+    ]) {
+      expect(await failure(readGalatsaFile(rewrite(plain, change)))).toBe("damaged");
+      expect(await failure(readGalatsaSnapshot(rewrite(plain, change)))).toBe("damaged");
+      // With ydoc.bin, the document is recovered from it, merge identity included.
+      const recovered = await readGalatsaFile(rewrite(good, change));
+      expect(recovered.snapshot).toEqual(toSnapshot(doc));
+      expect(recovered.mergeIdentityKept).toBe(true);
+      expect(recovered.warnings.map((w) => w.code)).toContain("document-recovered");
+      // The reader without Yjs cannot do that.
+      expect(await failure(readGalatsaSnapshot(rewrite(good, change)))).toBe("damaged");
+    }
     expect(
       await failure(
-        readGalatsaFile(rewrite(good, (e) => e.set("document.json", utf8("{not json")))),
-      ),
-    ).toBe("damaged");
-    expect(
-      await failure(
-        readGalatsaFile(
-          rewrite(good, (e) => e.set("document.json", utf8('{"schemaVersion":1}'))),
-        ),
-      ),
-    ).toBe("invalid-document");
-    expect(
-      await failure(
-        readGalatsaFile(good, { limits: { maxTotalSize: 100, maxEntries: 100 } }),
+        readGalatsaFile(good, { limits: { maxInflatedSize: 100, maxEntries: 100 } }),
       ),
     ).toBe("too-large");
   });
@@ -443,9 +462,6 @@ describe("review findings (format)", () => {
     edit(
       doc,
       () => (dataMap(doc, SAMPLE.text).get("text") as Y.Text).insert(0, "CONFIDENTIAL "),
-      {
-        touch: [SAMPLE.text],
-      },
     );
     deleteElements(doc, [SAMPLE.text]);
     const bytes = writeGalatsaFile(doc, () => undefined, { forSharing: true });
@@ -472,9 +488,6 @@ describe("review findings (format)", () => {
         (dataMap(doc, SAMPLE.text).get("text") as Y.Text).insertEmbed(0, {
           image: inline,
         }),
-      {
-        touch: [SAMPLE.text],
-      },
     );
     const bytesOf = new Map([
       [bg, new Uint8Array([1])],
@@ -485,26 +498,36 @@ describe("review findings (format)", () => {
     for (const id of [bg, sound, inline]) expect(names).toContain(`assets/${id}`);
   });
 
-  it("does not use ydoc.bin that carries content document.json lacks", async () => {
+  it("reports content of ydoc.bin that the format has no place for, and never shares it", async () => {
     const doc = buildSampleDocument(new Y.Doc(), 3);
     doc.getMap("secretRoot").set("payload", "not in document.json");
+    edit(doc, () => {
+      doc.getMap<Y.Map<unknown>>("elements").get(SAMPLE.text)!.set("smuggled", 1);
+      doc.getMap("meta").set("extraMeta", 42);
+    });
     const read = await readGalatsaFile(writeGalatsaFile(doc, () => undefined));
-    expect(read.mergeIdentityKept).toBe(false);
-    expect(read.doc.share.has("secretRoot")).toBe(false);
-
-    const doc2 = buildSampleDocument(new Y.Doc(), 3);
-    edit(doc2, () =>
-      doc2.getMap<Y.Map<unknown>>("elements").get(SAMPLE.text)!.set("smuggled", 1),
-    );
+    // One odd key from a peer must not cost everyone their merge identity, so the
+    // state is kept, and the user is told.
+    expect(read.mergeIdentityKept).toBe(true);
+    const warning = read.warnings.find((w) => w.code === "content-quarantined");
+    expect(warning?.details).toEqual([
+      `elements.${SAMPLE.text}.smuggled: unknown field, left out`,
+      "root secretRoot: unknown root type",
+      "meta.extraMeta: unknown field",
+    ]);
+    expect(JSON.stringify(read.snapshot)).not.toContain("smuggled");
+    // An export for sharing carries only the JSON form.
+    const shared = writeGalatsaFile(doc, () => undefined, { forSharing: true });
+    expect([...readZip(shared).keys()]).not.toContain("ydoc.bin");
     expect(
-      (await readGalatsaFile(writeGalatsaFile(doc2, () => undefined))).mergeIdentityKept,
-    ).toBe(false);
-
-    const doc3 = buildSampleDocument(new Y.Doc(), 3);
-    edit(doc3, () => doc3.getMap("meta").set("extraMeta", 42));
-    expect(
-      (await readGalatsaFile(writeGalatsaFile(doc3, () => undefined))).mergeIdentityKept,
-    ).toBe(false);
+      (await readGalatsaFile(shared)).warnings.map((w) => w.code),
+    ).not.toContain("content-quarantined");
+    // Tidy up removes what can be removed (root types cannot).
+    tidyUp(read.doc);
+    const tidy = await readGalatsaFile(writeGalatsaFile(read.doc, () => undefined));
+    expect(tidy.warnings.find((w) => w.code === "content-quarantined")?.details).toEqual([
+      "root secretRoot: unknown root type",
+    ]);
   });
 
   it("uses ydoc.bin only as the manifest describes it", async () => {
@@ -535,7 +558,7 @@ describe("review findings (format)", () => {
     expect(big.mergeIdentityKept).toBe(false);
   });
 
-  it("reports deep nesting as an invalid document, not a crash", async () => {
+  it("opens a file with absurdly deep nesting: the deep part is cut, the rest is kept", async () => {
     const doc = buildSampleDocument(new Y.Doc(), 3);
     const good = writeGalatsaFile(doc, () => undefined, { includeYdoc: false });
     const depth = 200_000;
@@ -551,7 +574,12 @@ describe("review findings (format)", () => {
       );
       entries.set("document.json", utf8(text));
     });
-    const code = await failure(readGalatsaSnapshot(bytes));
-    expect(["invalid-document", "damaged"]).toContain(code);
+    const read = await readGalatsaSnapshot(bytes);
+    expect(validateSnapshot(read.snapshot)).toEqual([]);
+    expect(nestingDepth(read.snapshot, 1_000_000)).toBeLessThanOrEqual(MAX_DEPTH);
+    expect(read.warnings.map((w) => w.code)).toContain("content-quarantined");
+    expect(Object.keys(read.snapshot.elements)).toEqual(
+      Object.keys(toSnapshot(doc).elements),
+    );
   });
 });

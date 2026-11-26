@@ -100,10 +100,10 @@ describe("zip container", () => {
       { name: "big", data: new Uint8Array(1_000_000), compress: true },
     ]);
     expect(bytes.length).toBeLessThan(10_000);
-    expect(code(() => readZip(bytes, { maxTotalSize: 100_000, maxEntries: 10 }))).toBe(
+    expect(code(() => readZip(bytes, { maxInflatedSize: 100_000, maxEntries: 10 }))).toBe(
       "too-large",
     );
-    expect(code(() => readZip(bytes, { maxTotalSize: 2_000_000, maxEntries: 0 }))).toBe(
+    expect(code(() => readZip(bytes, { maxInflatedSize: 2_000_000, maxEntries: 0 }))).toBe(
       "too-large",
     );
   });
@@ -117,7 +117,7 @@ describe("zip container", () => {
     patched.set(bytes.subarray(0, end), 0);
     patched.set(locator, end);
     patched.set(bytes.subarray(end), end + 20);
-    expect(code(() => readZip(patched))).toBe("unsupported");
+    expect(code(() => readZip(patched))).toBe("newer-version");
   });
 });
 
@@ -229,7 +229,7 @@ describe("zip reader limits (review findings)", () => {
     ]);
     const entries = readZip(
       bytes,
-      { maxTotalSize: 10, maxEntries: 10 },
+      { maxInflatedSize: 10, maxEntries: 10 },
       (n) => n === "keep",
     );
     expect([...entries.keys()]).toEqual(["keep"]);

@@ -11,13 +11,11 @@ export type FileErrorCode =
   | "not-galatsa"
   /** A Galatsa file with a broken archive, checksum or JSON. */
   | "damaged"
-  /** Made by a newer Galatsa with a higher format version. */
+  /** Needs a newer Galatsa: a higher minimum reader version, or zip64. */
   | "newer-version"
-  /** The document does not have the required structure. */
-  | "invalid-document"
   /** Larger than the configured limits. */
   | "too-large"
-  /** Uses an archive feature this version does not support (zip64, encryption). */
+  /** Uses an archive feature this format does not use (encryption, split archives). */
   | "unsupported";
 
 export class FileFormatError extends Error {
@@ -30,10 +28,19 @@ export class FileFormatError extends Error {
   }
 }
 
-/** Something worth telling the user about a file that did open. */
+/** Something worth telling the user about a file that did open, or was written. */
 export type FileWarningCode =
   /** ydoc.bin did not match document.json or could not be decoded; merge identity was lost. */
   | "ydoc-discarded"
+  /** document.json was unreadable; the document was recovered from ydoc.bin. */
+  | "document-recovered"
+  /**
+   * Parts of the document did not fit the format and were read as defaults, left
+   * out, or kept as unsupported values. `details` lists them.
+   */
+  | "content-quarantined"
+  /** The Yjs state could not be written; the file has no merge identity. */
+  | "ydoc-not-written"
   /** The file was upgraded from an older format version; merge identity was lost. */
   | "migrated"
   /** An asset's bytes did not match its id and were ignored. */
@@ -46,4 +53,6 @@ export type FileWarningCode =
 export interface FileWarning {
   code: FileWarningCode;
   message: string;
+  /** For "content-quarantined": what was changed, at most the first 1000. */
+  details?: string[];
 }
