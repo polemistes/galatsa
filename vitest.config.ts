@@ -3,8 +3,20 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    // Resolve workspace packages from their source, see tsconfig.base.json.
+    conditions: ["@galatsa/source"],
+  },
   test: {
-    include: ["packages/*/src/**/*.test.ts"],
+    include: ["**/*.test.{ts,tsx,mts,mjs}"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/coverage/**",
+      "**/.claude/**",
+      "**/tests/e2e/**",
+    ],
     environment: "node",
   },
 });

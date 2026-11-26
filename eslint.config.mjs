@@ -1,25 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { fileURLToPath } from "node:url";
+import { includeIgnoreFile } from "@eslint/compat";
 import js from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
+// Everything that git ignores (node_modules, dist, build, out, agent worktrees under
+// .claude/, and so on) is ignored by ESLint too, so there is one list to maintain.
+const gitignore = includeIgnoreFile(
+  fileURLToPath(new URL(".gitignore", import.meta.url)),
+);
+
 export default tseslint.config(
+  gitignore,
   {
-    ignores: [
-      "**/dist/**",
-      "**/coverage/**",
-      "**/node_modules/**",
-      "**/playwright-report/**",
-      "**/test-results/**",
-      "**/.vite/**",
-      "target/**",
-    ],
+    ignores: ["**/.vite/**", "pnpm-lock.yaml", "target/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["**/*.{js,mjs,cjs,ts,tsx}"],
+    files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
     languageOptions: {
       globals: globals.node,
     },

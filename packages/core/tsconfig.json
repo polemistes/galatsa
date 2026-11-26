@@ -1,0 +1,9 @@
+{
+  // Environment-agnostic: no Node types and no DOM library.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts"]
+}

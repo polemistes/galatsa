@@ -1,3 +1,30 @@
 packages:
   - "packages/*"
+  - "packages/extensions/*"
   - "apps/*"
+
+# Install the optional platform packages (native and wasm binaries) for every
+# platform, not only the current one, so that the license check sees all of them.
+supportedArchitectures:
+  os:
+    - current
+    - linux
+    - darwin
+    - win32
+    - freebsd
+    - netbsd
+    - android
+    - openharmony
+  cpu:
+    - current
+    - x64
+    - arm64
+    - arm
+    - ppc64
+    - s390x
+    - riscv64
+    - wasm32
+  libc:
+    - current
+    - glibc
+    - musl

@@ -1,9 +1,17 @@
 {
+  // Shared strict settings. Environment settings are deliberately absent here:
+  // no "types" (Node or other) and no DOM library. Each package declares its own
+  // environment in its tsconfig.json: browser packages add "DOM" to "lib", Node
+  // code adds "types": ["node"]. @galatsa/core stays environment-agnostic.
   "compilerOptions": {
     "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "jsx": "react-jsx",
+    // Lets a package import another workspace package from its source (src/index.ts)
+    // instead of its built output, so no build step is needed before type checking.
+    "customConditions": ["@galatsa/source"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
