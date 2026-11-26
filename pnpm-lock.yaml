@@ -227,6 +227,38 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
 
+  apps/proto-canvas:
+    dependencies:
+      '@galatsa/bench':
+        specifier: workspace:*
+        version: link:../../bench
+    devDependencies:
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.65.0
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.6
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.8(@types/node@26.6.6)(yaml@2.9.1)
+
+  apps/proto-dom:
+    dependencies:
+      '@galatsa/bench':
+        specifier: workspace:*
+        version: link:../../bench
+    devDependencies:
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.65.0
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.6
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.8(@types/node@26.6.6)(yaml@2.9.1)
+
   apps/proto-konva:
     dependencies:
       '@galatsa/bench':

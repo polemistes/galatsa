@@ -80,9 +80,9 @@ test("camera run", async ({ page }, testInfo) => {
     console.log(
       [
         `${testInfo.project.name} ${variant}: load ${Math.round(result.timings.loadMs)} ms, run ${Math.round(result.timings.runMs)} ms`,
-        `  display interval p95 ${s.interval.p95} max ${s.interval.max} >33 ${s.interval.over["33"]}`,
-        `  wall-clock interval p95 ${s.callbackInterval.p95} max ${s.callbackInterval.max} >33 ${s.callbackInterval.over["33"]} >100 ${s.callbackInterval.over["100"]}`,
-        `  render() mean ${s.script.mean.toFixed(2)} p95 ${s.script.p95} max ${s.script.max}`,
+        `  frame (wall clock) p95 ${s.frameMs.p95} max ${s.frameMs.max}; work p95 ${s.workMs.p95} max ${s.workMs.max}`,
+        `  frames over 33 ms ${result.verdictInputs.targets.frames33.count} (${result.verdictInputs.targets.frames33.judgedBy}), stalls ${result.verdictInputs.targets.stalls.count}`,
+        `  render() mean ${s.renderMs.mean.toFixed(2)} p95 ${s.renderMs.p95} max ${s.renderMs.max}`,
         `  text sharp p50 ${result.textSharp.p50Ms} max ${result.textSharp.maxMs} missing ${result.textSharp.missing}`,
         `  process PSS peak ${((saved.processMemory.peakFromLoadBytes ?? 0) / 2 ** 20).toFixed(0)} MiB`,
         `  engine ${JSON.stringify(engineStats)}`,

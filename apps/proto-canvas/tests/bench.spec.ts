@@ -85,7 +85,7 @@ test("camera run with the canvas engine", async ({ page }, testInfo) => {
   for (const result of output.results) {
     expect(result.environment.hiddenDuringRun).toBe(false);
     expect(result.scene.elements).toBe(2000);
-    expect(result.frames.intervalMs).toHaveLength(result.cameraRun.frames);
+    expect(result.frames.frameMs).toHaveLength(result.cameraRun.frames);
     expect(result.textSharp.missing).toBe(0);
   }
 });

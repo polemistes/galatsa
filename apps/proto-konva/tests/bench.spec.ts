@@ -52,7 +52,7 @@ test("camera run with the Konva engine", async ({ page }, testInfo) => {
 
   const result = output.results[0]!;
   expect(result.environment.hiddenDuringRun).toBe(false);
-  expect(result.stats.interval.count).toBe(result.cameraRun.frames);
+  expect(result.stats.frameMs.count).toBe(result.cameraRun.frames);
   expect(result.scene.elements).toBe(2000);
   expect(result.textSharp.reported).toBeGreaterThan(0);
 });

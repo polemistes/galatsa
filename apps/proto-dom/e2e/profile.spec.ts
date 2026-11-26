@@ -95,7 +95,7 @@ test("profile one camera run", async ({ page, browser, browserName }, testInfo) 
     note: "Milliseconds summed over one camera run, per thread and event (nested events overlap: Paint includes nothing of Layout, but RasterTask includes image decodes on the same thread)",
     traceStartedAtMs: t0,
     runMs: Math.round(result.timings.runMs),
-    renderScriptMs: Math.round(result.frames.scriptMs.reduce((a, b) => a + b, 0)),
+    renderScriptMs: Math.round(result.frames.renderMs.reduce((a, b) => a + b, 0)),
     totals,
   };
   const folder = new URL(`${testInfo.project.name}/`, RESULTS);
