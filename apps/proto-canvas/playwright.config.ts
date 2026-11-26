@@ -43,6 +43,24 @@ export default defineConfig({
       },
     },
     {
+      // Same, with the machine's GPU: headless Chromium otherwise rasterises the
+      // canvas in software ("Canvas: Software only" in chrome://gpu).
+      name: "chromium-gpu",
+      use: {
+        browserName: "chromium",
+        channel: "chromium",
+        viewport: { width: 1400, height: 1000 },
+        launchOptions: {
+          args: [
+            "--enable-precise-memory-info",
+            "--enable-blink-features=ForceEagerMeasureMemory",
+            "--enable-gpu",
+            "--ignore-gpu-blocklist",
+          ],
+        },
+      },
+    },
+    {
       name: "firefox",
       use: {
         browserName: "firefox",

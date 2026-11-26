@@ -1,36 +1,84 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Runs the bench camera run with the canvas engine and saves the result, with the
-// engine's own counters, to results/bench-<browser>.json. Set RUNS=2 for two runs
-// and a comparison.
+// Runs the bench camera run with the canvas engine and saves the result to
+// results/bench-<project>.json, with the engine's own counters, the browser's
+// graphics renderer and the memory of the browser's processes (Linux).
+//
+// The no-op engine runs first. It makes the harness generate the images, and its
+// process memory is the baseline: the page, the browser and the 317 MB of encoded
+// image files, without any engine. Set RUNS=2 for two engine runs and a comparison.
 
 import { writeFileSync } from "node:fs";
 import type { HarnessOutput } from "@galatsa/bench/harness";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import type { EngineStats } from "../src/engine.ts";
+import { ProcessMemorySampler } from "./process-memory.ts";
 
-test("camera run with the canvas engine", async ({ page, browserName }) => {
-  test.setTimeout(20 * 60_000);
+function graphicsRenderer(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const gl = document.createElement("canvas").getContext("webgl");
+    if (gl === null) return "no WebGL";
+    const ext = gl.getExtension("WEBGL_debug_renderer_info");
+    return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+  });
+}
+
+test("camera run with the canvas engine", async ({ page }, testInfo) => {
+  test.setTimeout(30 * 60_000);
   const runs = Number(process.env["RUNS"] ?? "1");
+  const memory = new ProcessMemorySampler();
+  memory.begin(500);
   await page.goto("/?engine=canvas2d");
   await expect(page.getByRole("status")).toBeVisible();
+  const renderer = await graphicsRenderer(page);
 
-  const { output, stats } = await page.evaluate(async (runs) => {
-    const api = window.galatsaBench;
-    if (api === undefined) throw new Error("The harness did not start");
-    const output = await api.run(runs, "canvas2d");
-    return { output, stats: window.protoCanvasStats };
-  }, runs);
-  const engineStats: EngineStats | undefined = stats;
+  const run = (n: number, engine: string) =>
+    page.evaluate(([n, engine]) => window.galatsaBench!.run(n, engine), [
+      n,
+      engine,
+    ] as const);
 
-  const file = new URL(`../results/bench-${browserName}.json`, import.meta.url);
-  writeFileSync(file, `${JSON.stringify({ ...output, engineStats }, null, 1)}\n`);
+  // Baseline: images generated, no engine drawing.
+  const noopStart = performance.now();
+  await run(1, "noop");
+  const t0 = memory.samples.at(-1)!.t;
+  const noopEnd = performance.now();
+  const engineStart = performance.now();
+  const output: HarnessOutput = await run(runs, "canvas2d");
+  const t1 = memory.samples.at(-1)!.t;
+  memory.end();
+  const engineStats: EngineStats | undefined = await page.evaluate(
+    () => window.protoCanvasStats,
+  );
+
+  const noopWindow = [0, t0] as const;
+  const engineWindow = [t0, t1 + 500] as const;
+  const processMemory = {
+    available: memory.available,
+    note: "Sum of PSS over all browser processes, sampled every 500 ms from /proc. Baseline is the no-op engine run, after the harness generated the images.",
+    baselinePeakBytes: memory.peak(...noopWindow),
+    enginePeakBytes: memory.peak(...engineWindow),
+    noopMs: Math.round(noopEnd - noopStart),
+    engineMs: Math.round(performance.now() - engineStart),
+    samples: memory.samples,
+  };
+
+  const file = new URL(`../results/bench-${testInfo.project.name}.json`, import.meta.url);
+  writeFileSync(
+    file,
+    `${JSON.stringify({ ...output, renderer, engineStats, processMemory }, null, 1)}\n`,
+  );
   console.log(await page.locator("pre").textContent());
+  console.log(`renderer: ${renderer}`);
+  console.log(
+    `process memory peak: baseline ${(processMemory.baselinePeakBytes / 2 ** 20).toFixed(0)} MiB, with engine ${(processMemory.enginePeakBytes / 2 ** 20).toFixed(0)} MiB`,
+  );
   console.log(JSON.stringify(engineStats, null, 1));
 
-  const result = (output as HarnessOutput).results[0]!;
-  expect(result.environment.hiddenDuringRun).toBe(false);
-  expect(result.scene.elements).toBe(2000);
-  expect(result.frames.intervalMs).toHaveLength(result.cameraRun.frames);
-  expect(result.textSharp.missing).toBe(0);
+  for (const result of output.results) {
+    expect(result.environment.hiddenDuringRun).toBe(false);
+    expect(result.scene.elements).toBe(2000);
+    expect(result.frames.intervalMs).toHaveLength(result.cameraRun.frames);
+    expect(result.textSharp.missing).toBe(0);
+  }
 });

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The bench harness page with the custom Canvas 2D engine. The engine's own
-// counters are exposed on window.protoCanvasStats after each run, for the tests.
+// The bench harness page with the custom Canvas 2D engine, and the bench's no-op
+// engine as a baseline. The engine's own counters are exposed on
+// window.protoCanvasStats after each run, for the tests.
 
+import { createNoopEngine } from "@galatsa/bench";
 import { startHarness } from "@galatsa/bench/harness";
 import { type CanvasEngine, createCanvasEngine, type EngineStats } from "./engine.ts";
 
@@ -23,5 +25,6 @@ startHarness({
         return engine;
       },
     },
+    { id: "noop", create: createNoopEngine },
   ],
 });

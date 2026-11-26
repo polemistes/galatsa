@@ -116,10 +116,10 @@ test("type, move, select, paste, undo and compose in a canvas text", async ({
   expect((await state(page))!.selectionStart).toBe(end);
 
   // Selection with the keyboard, then replace it by typing.
-  for (let i = 0; i < 6; i++) await page.keyboard.press("Shift+ArrowLeft");
+  for (let i = 0; i < 7; i++) await page.keyboard.press("Shift+ArrowLeft");
   s = await state(page);
   expect([s?.selectionStart, s?.selectionEnd, s?.direction]).toEqual([
-    end - 6,
+    end - 7,
     end,
     "backward",
   ]);
