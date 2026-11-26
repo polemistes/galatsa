@@ -29,7 +29,12 @@ import { isRemoved } from "../model/route.ts";
 import { INTERNAL_ORIGINS, ORIGIN, roots } from "./schema.ts";
 import { marksOf, revisionOf, yLookup } from "./snapshot.ts";
 
-/** Units of work a writer's counter lasts before it is replaced by a new one. */
+/**
+ * Units of work a writer's counter lasts before it is replaced by a new one: few
+ * for the first counter in a record (most records a session touches, it touches
+ * once or twice), more once the session keeps working on the record.
+ */
+const FIRST_POOL = 8;
 const POOL = 64;
 
 type RecordMap = Y.Map<unknown>;
@@ -96,18 +101,20 @@ function bump(tracker: Tracker, record: RecordMap): void {
   }
   const map = rev as Y.Map<unknown>;
   const prefix = `${tracker.session}.`;
-  let fresh = true;
+  let done = false;
+  let returning = false;
   for (const [key, pool] of [...map.entries()]) {
     if (!key.startsWith(prefix)) continue;
-    if (fresh && pool instanceof Y.Array && pool.length > 1) {
+    returning = true;
+    if (!done && pool instanceof Y.Array && pool.length > 1) {
       pool.delete(0, 1);
-      fresh = false;
+      done = true;
     } else map.delete(key);
   }
-  if (fresh) {
+  if (!done) {
     const pool = new Y.Array<boolean>();
     map.set(prefix + (tracker.seq++).toString(36), pool);
-    pool.push(new Array<boolean>(POOL).fill(true));
+    pool.push(new Array<boolean>(returning ? POOL : FIRST_POOL).fill(true));
   }
 }
 

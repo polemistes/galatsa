@@ -14,7 +14,7 @@ import {
   validateSnapshot,
 } from "../model/grammar.ts";
 import { Resolver } from "../model/resolve.ts";
-import { hiddenAt, routeSteps } from "../model/route.ts";
+import { hiddenAt, liveRoutes, routeSteps } from "../model/route.ts";
 import { FRAME_TYPE, SCHEMA_VERSION } from "../model/types.ts";
 import { importCopy, pasteFragment, tidyUp } from "./document-ops.ts";
 import {
@@ -29,10 +29,13 @@ import {
   insertRouteEntry,
   moveElement,
   moveRouteEntry,
+  removeRoute,
   removeStop,
   renameElement,
+  renameRoute,
   reparent,
   resizeElement,
+  restoreElement,
   setLocked,
   stopNotes,
 } from "./ops.ts";
@@ -273,6 +276,21 @@ describe("review 2: work is detected automatically", () => {
     });
   }
 
+  for (const [ca, cb] of ORDERS) {
+    it(`work on a route keeps it when it is removed concurrently (${ca}/${cb})`, () => {
+      const d = base();
+      addStop(d, { id: "S", view: { kind: "frame", frame: "F", padding: 0 } });
+      for (const id of ["R1", "R2", "R3"]) addRoute(d, { id });
+      const [a, b] = pair(d, ca, cb);
+      for (const id of ["R1", "R2", "R3"]) removeRoute(a, id);
+      insertRouteEntry(b, "R1", "S");
+      renameRoute(b, "R2", "kept");
+      syncDocs(a, b);
+      expect(liveRoutes(toSnapshot(a))).toEqual(["R1", "R2"]);
+      expect(toSnapshot(a)).toEqual(toSnapshot(b));
+    });
+  }
+
   it("typing does not break text into one CRDT item per character", () => {
     const d = base();
     const text = dataMap(d, "T").get("text") as Y.Text;
@@ -299,6 +317,11 @@ describe("review 2: undo and delete", () => {
       expect(visible(a, "X")).toBe(false);
       expect(visible(b, "X")).toBe(false);
       expect(toSnapshot(a)).toEqual(toSnapshot(b));
+      // If it is restored later, it is where the undo put it.
+      restoreElement(b, "X");
+      syncDocs(a, b);
+      expect(visible(a, "X")).toBe(true);
+      expect(R(a).localPosition("X")).toEqual({ x: 10, y: 10 });
     });
 
     it(`an undo made without seeing the delete counts as an edit (${ca}/${cb})`, () => {
