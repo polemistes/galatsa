@@ -12,7 +12,8 @@ import {
 const format = (locale: string, source: string, values?: MessageValues): string =>
   formatMessage(parseMessage(source), values, {
     locale,
-    onMissingValue: (name) => `<missing ${name}>`,
+    onMissingValue: (name, problem) =>
+      problem === "missing" ? `<missing ${name}>` : `<${problem} ${name}>`,
   });
 
 const FILES_NB =
@@ -112,7 +113,9 @@ describe("values", () => {
 
   it("reports a value that is missing or of the wrong type", () => {
     expect(format("en", "Hi {name}")).toBe("Hi <missing name>");
-    expect(format("en", "{n, plural, other {#}}", { n: "x" })).toBe("<missing n>");
+    expect(format("en", "{n, plural, other {#}}", { n: "x" })).toBe("<wrong type n>");
+    expect(format("en", "{d, date}", { d: new Date(Number.NaN) })).toBe("<invalid d>");
+    expect(format("en", "{constructor}", {})).toBe("<missing constructor>");
   });
 
   it("lists the values a message uses", () => {

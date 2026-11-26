@@ -279,6 +279,23 @@ export function pluralArguments(
   return found;
 }
 
+/** Every select in a message, nested ones included, with its option keys. */
+export function selectArguments(message: Message): { name: string; keys: string[] }[] {
+  const found: { name: string; keys: string[] }[] = [];
+  const visit = (parts: Message): void => {
+    for (const part of parts) {
+      if (typeof part === "string" || part.kind === "pound") continue;
+      if (!("options" in part)) continue;
+      if (part.kind === "select") {
+        found.push({ name: part.name, keys: [...part.options.keys()] });
+      }
+      for (const option of part.options.values()) visit(option);
+    }
+  };
+  visit(message);
+  return found;
+}
+
 // Intl objects are slow to create, so one is kept per language and option set.
 const intlCache = new Map<
   string,
@@ -327,9 +344,16 @@ export function pluralRules(locale: string, ordinal: boolean): Intl.PluralRules 
 export interface FormatOptions {
   /** BCP 47 tag passed to Intl, for example "nb" or "en". */
   readonly locale: string;
-  /** Text to use for a value the caller did not pass (or passed with the wrong type). */
-  readonly onMissingValue: (name: string) => string;
+  /**
+   * Text to use for a value that cannot be shown: one the caller did not pass, one
+   * of the wrong type, or one Intl cannot format (an invalid date). `problem` says
+   * which, for warnings.
+   */
+  readonly onMissingValue: (name: string, problem: ValueProblem) => string;
 }
+
+/** Why a value could not be put into a message. */
+export type ValueProblem = "missing" | "wrong type" | "invalid";
 
 const NUMBER_STYLE_OPTIONS: Readonly<Record<string, Intl.NumberFormatOptions>> = {
   integer: { maximumFractionDigits: 0 },
@@ -338,18 +362,44 @@ const NUMBER_STYLE_OPTIONS: Readonly<Record<string, Intl.NumberFormatOptions>> =
 
 type DateStyle = "short" | "medium" | "long" | "full";
 
-/** Formats a parsed message with values, for one language. */
+/** The largest timestamp a Date can hold (ECMAScript time range), in milliseconds. */
+const MAX_TIME = 8.64e15;
+
+/** True if Intl.DateTimeFormat can format this timestamp without throwing. */
+export function isValidTime(time: number): boolean {
+  return Number.isFinite(time) && Math.abs(time) <= MAX_TIME;
+}
+
+/**
+ * Formats a parsed message with values, for one language. It never throws for bad
+ * values: a value that is missing, of the wrong type or not formattable (an invalid
+ * Date) goes through `onMissingValue`. Values are read as own properties only, so a
+ * message "{constructor}" never picks up Object.prototype.constructor.
+ */
 export function formatMessage(
   message: Message,
   values: MessageValues | undefined,
   options: FormatOptions,
 ): string {
   const { locale, onMissingValue } = options;
+  const table: Readonly<Record<string, unknown>> | undefined =
+    values !== null && typeof values === "object" ? values : undefined;
 
-  const asNumber = (value: MessageValue | undefined): number | undefined => {
+  const valueOf = (name: string): unknown =>
+    table !== undefined && Object.hasOwn(table, name) ? table[name] : undefined;
+
+  // A number to format as a number or plural, or the problem with the value.
+  const asNumber = (value: unknown): number | ValueProblem => {
+    if (value === undefined) return "missing";
     if (typeof value === "number") return value;
     if (value instanceof Date) return value.getTime();
-    return undefined;
+    return "wrong type";
+  };
+  // A timestamp to format as a date or time, or the problem with the value.
+  const asTime = (value: unknown): number | ValueProblem => {
+    const time = asNumber(value);
+    if (typeof time !== "number") return time;
+    return isValidTime(time) ? time : "invalid";
   };
 
   const format = (parts: Message, pound: number | undefined): string => {
@@ -363,19 +413,32 @@ export function formatMessage(
         out += numberFormat(locale).format(pound ?? 0);
         continue;
       }
-      const value = values?.[part.name];
+      const value = valueOf(part.name);
       switch (part.kind) {
-        case "argument":
-          if (value === undefined) out += onMissingValue(part.name);
-          else if (typeof value === "string") out += value;
-          else if (typeof value === "number") out += numberFormat(locale).format(value);
-          else out += dateTimeFormat(locale, { dateStyle: "medium" }).format(value);
+        case "argument": {
+          if (typeof value === "string") {
+            out += value;
+          } else if (typeof value === "number") {
+            out += numberFormat(locale).format(value);
+          } else if (value instanceof Date) {
+            const time = asTime(value);
+            out +=
+              typeof time === "number"
+                ? dateTimeFormat(locale, { dateStyle: "medium" }).format(time)
+                : onMissingValue(part.name, time);
+          } else {
+            out += onMissingValue(
+              part.name,
+              value === undefined ? "missing" : "wrong type",
+            );
+          }
           break;
+        }
         case "number": {
           const n = asNumber(value);
           out +=
-            n === undefined
-              ? onMissingValue(part.name)
+            typeof n !== "number"
+              ? onMissingValue(part.name, n)
               : numberFormat(
                   locale,
                   part.style === undefined ? {} : NUMBER_STYLE_OPTIONS[part.style],
@@ -384,24 +447,27 @@ export function formatMessage(
         }
         case "date":
         case "time": {
-          const n = asNumber(value);
+          const time = asTime(value);
           const style = (part.style ?? "medium") as DateStyle;
           out +=
-            n === undefined
-              ? onMissingValue(part.name)
+            typeof time !== "number"
+              ? onMissingValue(part.name, time)
               : dateTimeFormat(
                   locale,
                   part.kind === "date" ? { dateStyle: style } : { timeStyle: style },
-                ).format(n);
+                ).format(time);
           break;
         }
         case "plural":
         case "selectordinal": {
-          const n = typeof value === "number" ? value : undefined;
-          if (n === undefined) {
-            out += onMissingValue(part.name);
+          if (typeof value !== "number") {
+            out += onMissingValue(
+              part.name,
+              value === undefined ? "missing" : "wrong type",
+            );
             break;
           }
+          const n = value;
           let chosen: Message | undefined;
           for (const [key, body] of part.options) {
             if (key.startsWith("=") && Number(key.slice(1)) === n) {
@@ -417,8 +483,15 @@ export function formatMessage(
           break;
         }
         case "select": {
-          if (value === undefined) {
-            out += onMissingValue(part.name);
+          if (
+            typeof value !== "string" &&
+            typeof value !== "number" &&
+            !(value instanceof Date)
+          ) {
+            out += onMissingValue(
+              part.name,
+              value === undefined ? "missing" : "wrong type",
+            );
             break;
           }
           const body = part.options.get(String(value)) ?? part.options.get("other") ?? [];

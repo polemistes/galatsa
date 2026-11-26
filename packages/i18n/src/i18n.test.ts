@@ -169,10 +169,28 @@ describe("extension namespaces", () => {
     expect(i18n.t("ext.shapes:tool.name")).toBe("ext.shapes:tool.name");
   });
 
-  it("refuses a second bundle for a namespace that is taken", () => {
-    const { i18n } = setup({ dev: false });
-    const impostor = defineMessages("ext.shapes", { nb: { a: "a" }, en: { a: "a" } });
-    expect(() => i18n.register(impostor)).toThrow("already registered");
+  it("replaces a bundle with a new copy of the same namespace (hot reload)", () => {
+    const { i18n, warnings } = setup({ dev: true, locale: "en" });
+    expect(i18n.t("ext.shapes:tool.name")).toBe("Shapes");
+    // A hot reload re-runs messages/index.ts and creates a new bundle object.
+    const reloaded = defineMessages("ext.shapes", {
+      nb: { "tool.name": "Formverktøy" },
+      en: { "tool.name": "Shape tool" },
+    });
+    const before = i18n.version;
+    i18n.register(reloaded);
+    expect(i18n.version).toBe(before + 1);
+    expect(i18n.t("ext.shapes:tool.name")).toBe("Shape tool");
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns during development when a replacement shares no key", () => {
+    const { i18n, warnings } = setup({ dev: true, locale: "en" });
+    const other = defineMessages("ext.shapes", { nb: { a: "a" }, en: { a: "a" } });
+    i18n.register(other);
+    expect(i18n.t("ext.shapes:a")).toBe("a");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/replaced by a bundle with none of the same keys/);
   });
 
   it("refuses invalid namespaces", () => {
@@ -181,5 +199,113 @@ describe("extension namespaces", () => {
     expect(() =>
       i18n.register({ namespace: "a:b", messages: { nb: {}, en: {} } }),
     ).toThrow("namespace");
+  });
+});
+
+describe("lookups never throw", () => {
+  const odd = defineMessages("odd", {
+    nb: {
+      when: "{when, date}",
+      at: "{at, time, short}",
+      plain: "{value}",
+      ctor: "{constructor}",
+      proto: "{__proto__} {toString, number} {hasOwnProperty, plural, other {#}}",
+      kind: "{kind, select, a {A} other {B}}",
+    },
+    en: {
+      when: "{when, date}",
+      at: "{at, time, short}",
+      plain: "{value}",
+      ctor: "{constructor}",
+      proto: "{__proto__} {toString, number} {hasOwnProperty, plural, other {#}}",
+      kind: "{kind, select, a {A} other {B}}",
+    },
+  });
+
+  it("marks invalid dates during development and falls back in production", () => {
+    const invalid = new Date("not a date");
+    const dev = setup({ dev: true, locale: "en", bundles: [odd] });
+    expect(dev.i18n.t("odd:when", { when: invalid })).toBe("⟦when⟧");
+    expect(dev.i18n.t("odd:at", { at: Number.NaN })).toBe("⟦at⟧");
+    expect(dev.i18n.t("odd:plain", { value: invalid })).toBe("⟦value⟧");
+    expect(dev.i18n.t("odd:when", { when: 9e15 })).toBe("⟦when⟧"); // out of range
+    expect(dev.warnings).toContain('Invalid value {when} for "odd:when"');
+
+    const prod = setup({ dev: false, locale: "en", bundles: [odd] });
+    expect(prod.i18n.t("odd:when", { when: invalid })).toBe("{when}");
+    expect(prod.i18n.t("odd:at", { at: Number.POSITIVE_INFINITY })).toBe("{at}");
+    expect(prod.warnings).toEqual([]);
+  });
+
+  it("reads values as own properties only", () => {
+    const { i18n } = setup({ dev: false, locale: "en", bundles: [odd] });
+    expect(i18n.t("odd:ctor", {})).toBe("{constructor}");
+    expect(i18n.t("odd:proto", {})).toBe("{__proto__} {toString} {hasOwnProperty}");
+    expect(i18n.t("odd:ctor", { constructor: "own" })).toBe("own");
+  });
+
+  it("survives values of the wrong type from plain JavaScript", () => {
+    const { i18n, warnings } = setup({ dev: true, locale: "en", bundles: [odd] });
+    const values = { value: { an: "object" }, kind: null } as unknown as Record<
+      string,
+      string
+    >;
+    expect(i18n.t("odd:plain", values)).toBe("⟦value⟧");
+    expect(i18n.t("odd:kind", values)).toBe("⟦kind⟧");
+    expect(i18n.t("odd:plain", null as unknown as Record<string, string>)).toBe(
+      "⟦value⟧",
+    );
+    expect(i18n.t(undefined as unknown as string)).toBe("⟦undefined⟧");
+    expect(warnings).toContain('Value of the wrong type {value} for "odd:plain"');
+  });
+
+  it("formats invalid dates and rejected options without throwing", () => {
+    const dev = setup({ dev: true, locale: "en" });
+    expect(dev.i18n.formatDate(Number.NaN)).toBe("⟦NaN⟧");
+    expect(dev.i18n.formatDate(new Date("x"))).toBe("⟦Invalid Date⟧");
+    expect(dev.i18n.formatNumber(5, { style: "currency" })).toBe("⟦5⟧");
+    expect(dev.warnings).toHaveLength(3);
+
+    const prod = setup({ dev: false, locale: "en" });
+    expect(prod.i18n.formatDate(Number.NaN)).toBe("");
+    expect(prod.i18n.formatNumber(5, { style: "currency" })).toBe("5");
+    expect(prod.i18n.formatNumber(Number.NaN)).toBe("NaN");
+  });
+});
+
+describe("translator during rendering", () => {
+  it("registers at once but notifies only after the current task", async () => {
+    const i18n = createI18n({ dev: false, locale: "en" });
+    let calls = 0;
+    i18n.subscribe(() => {
+      calls += 1;
+    });
+    const before = i18n.version;
+    // As if called inside a React render: the store must not change under it.
+    const t = i18n.translator(shapes);
+    const again = i18n.translator(shapes);
+    expect(t("tool.name")).toBe("Shapes");
+    expect(again("tool.name")).toBe("Shapes");
+    expect(calls).toBe(0);
+    expect(i18n.version).toBe(before);
+
+    await Promise.resolve();
+    expect(calls).toBe(1); // one notification for the registration
+    expect(i18n.version).toBe(before + 1);
+
+    // The same bundle again changes nothing.
+    i18n.translator(shapes);
+    await Promise.resolve();
+    expect(calls).toBe(1);
+  });
+
+  it("picks up a reloaded bundle through translator()", async () => {
+    const i18n = createI18n({ dev: false, locale: "en", bundles: [shapes] });
+    const reloaded = defineMessages("ext.shapes", {
+      nb: { "tool.name": "Nytt navn" },
+      en: { "tool.name": "New name" },
+    });
+    expect(i18n.translator(reloaded)("tool.name")).toBe("New name");
+    expect(i18n.translator(shapes)("tool.name")).toBe("Shapes");
   });
 });
