@@ -27,7 +27,12 @@ import type {
   TextElement,
 } from "@galatsa/bench";
 import { type EditHost, type EditState, TextEditor } from "./editor.ts";
-import { ImageCache, type ImageCacheStats } from "./image-cache.ts";
+import {
+  type DecoderChoice,
+  defaultDecoder,
+  ImageCache,
+  type ImageCacheStats,
+} from "./image-cache.ts";
 import { GridIndex } from "./spatial.ts";
 import {
   applyTextRendering,
@@ -70,9 +75,12 @@ export interface EngineStats {
   maxImagesDrawn: number;
   /** Frames where some visible image was drawn from a coarser or finer level than wanted. */
   images: ImageCacheStats | null;
+  decoder: DecoderChoice;
 }
 
 export interface CanvasEngineOptions {
+  /** How images are decoded; default: ImageDecoder where available. */
+  readonly decoder?: DecoderChoice;
   /** Called when something changes outside render() (a decode finished, an edit). */
   readonly onInvalidate?: () => void;
 }
@@ -121,6 +129,7 @@ export function createCanvasEngine(options: CanvasEngineOptions = {}): CanvasEng
     maxGreekedTexts: 0,
     maxImagesDrawn: 0,
     images: null,
+    decoder: options.decoder ?? defaultDecoder(),
   };
 
   /** Writes the rotated bounding box of an item into `boxes`. */
@@ -536,6 +545,7 @@ export function createCanvasEngine(options: CanvasEngineOptions = {}): CanvasEng
       images = new ImageCache(setup.images, setup.scene.assets, {
         budgetBytes: IMAGE_BUDGET_BYTES,
         maxInFlight: 2,
+        decoder: stats.decoder,
         onDecoded: invalidate,
       });
       stats.images = images.stats;

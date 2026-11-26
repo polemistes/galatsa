@@ -3,8 +3,8 @@
 // Decoded images at several resolutions (levels). Level k of an image is its natural
 // size divided by 2^k; the coarsest level (the thumbnail) fits in 256 x 256 pixels.
 // Thumbnails of every image are decoded at load and kept. Finer levels are decoded on
-// demand with createImageBitmap's resize options, which decodes off the main thread,
-// and evicted least-recently-used beyond a byte budget. While a level is missing,
+// demand, off the main thread (WebCodecs ImageDecoder at reduced size where the
+// browser has it, else createImageBitmap with resize options), and evicted least-recently-used beyond a byte budget. While a level is missing,
 // the nearest decoded level is drawn instead.
 
 import type { ImageAsset, ImageSource } from "@galatsa/bench";
@@ -48,6 +48,7 @@ export interface ImageCacheOptions {
   readonly budgetBytes: number;
   /** Decodes in flight at once. */
   readonly maxInFlight: number;
+  readonly decoder: DecoderChoice;
   /** Called when a decode has finished (so a page that renders on demand can redraw). */
   readonly onDecoded?: () => void;
 }
@@ -62,12 +63,58 @@ function levelSize(asset: ImageAsset, level: number): { width: number; height: n
 
 let resizeSupported: boolean | undefined;
 
-async function decode(
+export type DecoderChoice = "imagedecoder" | "createimagebitmap";
+
+/** "imagedecoder" where WebCodecs ImageDecoder exists, else "createimagebitmap". */
+export function defaultDecoder(): DecoderChoice {
+  return typeof ImageDecoder === "function" ? "imagedecoder" : "createimagebitmap";
+}
+
+/**
+ * WebCodecs ImageDecoder with desiredWidth/desiredHeight decodes a JPEG at reduced
+ * size (Chromium 158 picks the nearest larger 1/2, 1/4 or 1/8 scale, Firefox 159 the
+ * exact size), which is several times faster and needs no full-size buffer.
+ * createImageBitmap with resize options decodes at full size and then scales.
+ */
+async function decodeWithImageDecoder(
   blob: Blob,
   width: number,
   height: number,
   full: boolean,
 ): Promise<ImageBitmap> {
+  const decoder = new ImageDecoder({
+    data: blob.stream(),
+    type: blob.type,
+    ...(full ? {} : { desiredWidth: width, desiredHeight: height }),
+  });
+  try {
+    const { image } = await decoder.decode();
+    try {
+      if (image.displayWidth === width && image.displayHeight === height) {
+        return await createImageBitmap(image);
+      }
+      return await createImageBitmap(image, {
+        resizeWidth: width,
+        resizeHeight: height,
+        resizeQuality: "medium",
+      });
+    } finally {
+      image.close();
+    }
+  } finally {
+    decoder.close();
+  }
+}
+
+async function decode(
+  blob: Blob,
+  width: number,
+  height: number,
+  full: boolean,
+  decoder: DecoderChoice,
+): Promise<ImageBitmap> {
+  if (decoder === "imagedecoder")
+    return decodeWithImageDecoder(blob, width, height, full);
   if (full) return createImageBitmap(blob);
   if (resizeSupported !== false) {
     try {
@@ -249,6 +296,7 @@ export class ImageCache {
         width,
         height,
         level === 0,
+        this.options.decoder,
       );
       if (this.disposed) {
         bitmap.close();
