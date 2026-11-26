@@ -6,8 +6,8 @@ Galatsa is licensed under the GNU General Public License, version 3 or later (GP
 
 ## Requirements
 
-- Node.js 22.12 or newer
-- pnpm, the version named in the `packageManager` field of `package.json` (run `corepack enable` or install it with `npm install -g pnpm`)
+- Node.js 24 or newer. The check scripts are TypeScript files that Node runs directly. On Node 24 this prints an "ExperimentalWarning" about type stripping, which is harmless.
+- pnpm 12, the version named in the `packageManager` field of `package.json`. Install it with `npm install -g pnpm@12`, or with one of the other methods on [pnpm.io/installation](https://pnpm.io/installation). If a different pnpm version is installed, pnpm switches to the pinned version by itself.
 
 ## Running the checks
 
@@ -16,7 +16,9 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` runs, in order: type checking, linting, format checking, the license header check, unit tests and the dependency license check. It exits with a non-zero code on the first failure. The same command runs on Linux, Windows and macOS in GitHub Actions.
+`pnpm check` runs, in order: type checking, linting, format checking, the license header check, unit tests and the dependency license check. It exits with a non-zero code on the first failure. It does not need `pnpm build` first: workspace packages import each other from source (see `tsconfig.base.json`). GitHub Actions runs `pnpm check` and then `pnpm build` on Linux, Windows and macOS.
+
+The dependency license check covers every workspace package and the optional platform packages for every operating system. To make that possible, `pnpm-workspace.yaml` tells pnpm to install the platform packages for all systems, not only the current one.
 
 Other scripts:
 

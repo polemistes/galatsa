@@ -244,28 +244,47 @@ export function normalizeLockKey(key: string): string {
 }
 
 /**
- * Returns the "name@version" ids of every package in the text of pnpm-lock.yaml, for
- * all platforms (optional and platform-specific packages included).
- *
- * pnpm 12 can write several YAML documents into the lockfile. A document whose
- * importers have "packageManagerDependencies" describes the pnpm program itself
- * (pinned by the "packageManager" field of package.json), not the project, so it is
- * skipped. That document is recognised by its structure, never by package names.
+ * Splits pnpm-lock.yaml into its YAML documents. pnpm 12 can write a "boot document"
+ * first, which holds the pnpm version pinned by the "packageManager" field
+ * (packageManagerDependencies) and pnpm config dependencies (configDependencies). The
+ * project lockfile is always the last document. See https://pnpm.io/lockfile.
+ */
+function lockfileDocuments(lockfileText: string): { boot: string; project: string } {
+  const documents = lockfileText
+    .replace(/\r\n/g, "\n")
+    .split(/^---$/m)
+    .filter((document) => document.trim().length > 0);
+  const project = documents.at(-1) ?? "";
+  const boot = documents.length > 1 ? (documents[0] ?? "") : "";
+  return { boot, project };
+}
+
+/**
+ * Returns the "name@version" ids of every package in the project lockfile (the last
+ * document of pnpm-lock.yaml), for all platforms: optional and platform-specific
+ * packages included. The boot document is not read; it describes pnpm itself.
  */
 export function lockfilePackageIds(lockfileText: string): Set<string> {
   const ids = new Set<string>();
-  const text = lockfileText.replace(/\r\n/g, "\n");
-  for (const document of text.split(/^---$/m)) {
-    if (/^ {4}packageManagerDependencies:/m.test(document)) continue;
-    const section = document.split(/^packages:\n/m)[1];
-    if (section === undefined) continue;
-    // The section ends at the next top-level key (for example "snapshots:").
-    const body = section.split(/^\S/m)[0] ?? "";
-    for (const match of body.matchAll(/^ {2}(\S.*?):\s*$/gm)) {
-      ids.add(normalizeLockKey(match[1] ?? ""));
-    }
+  const section = lockfileDocuments(lockfileText).project.split(/^packages:\n/m)[1];
+  if (section === undefined) return ids;
+  // The section ends at the next top-level key (for example "snapshots:").
+  const body = section.split(/^\S/m)[0] ?? "";
+  for (const match of body.matchAll(/^ {2}(\S.*?):\s*$/gm)) {
+    ids.add(normalizeLockKey(match[1] ?? ""));
   }
   return ids;
+}
+
+/**
+ * Returns true if the boot document of pnpm-lock.yaml lists pnpm config dependencies.
+ * `pnpm licenses list` does not report them, so the check refuses to pass silently
+ * when there are any: support for them must be added first.
+ */
+export function hasConfigDependencies(lockfileText: string): boolean {
+  return /^ {4}configDependencies:(?! *\{\} *$)/m.test(
+    lockfileDocuments(lockfileText).boot,
+  );
 }
 
 /**

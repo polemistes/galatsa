@@ -19,6 +19,7 @@ import {
   findViolations,
   findWorkspaceViolations,
   flattenReport,
+  hasConfigDependencies,
   lockfilePackageIds,
   WORKSPACE_LICENSES,
   type LicenseReport,
@@ -96,7 +97,14 @@ function readLockfileIds(): Set<string> {
   const lockPath = join(root, "pnpm-lock.yaml");
   if (!existsSync(lockPath))
     fail(["License check needs pnpm-lock.yaml. Run pnpm install first."]);
-  return lockfilePackageIds(readFileSync(lockPath, "utf8"));
+  const text = readFileSync(lockPath, "utf8");
+  if (hasConfigDependencies(text)) {
+    fail([
+      "pnpm-lock.yaml lists pnpm config dependencies (configDependencies).",
+      "The license check does not cover them yet. Extend scripts/check-licenses.ts first.",
+    ]);
+  }
+  return lockfilePackageIds(text);
 }
 
 function main(): void {
