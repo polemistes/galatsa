@@ -1,0 +1,383 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Round trips, unknown extensions, migrations and damaged files. Section 9 of
+// docs/adr/0001-document-model-and-file-format.md.
+
+import {
+  FRAME_TYPE,
+  type AssetId,
+  type DocumentSnapshot,
+  type ElementData,
+} from "@galatsa/core";
+import {
+  SAMPLE,
+  addAsset,
+  addElement,
+  buildSampleDocument,
+  deleteElements,
+  edit,
+  forkDoc,
+  renameElement,
+  stopNotes,
+  syncDocs,
+  toSnapshot,
+} from "@galatsa/core/ydoc";
+import { describe, expect, it } from "vitest";
+import * as Y from "yjs";
+import { FileFormatError, type FileErrorCode } from "./errors.ts";
+import { assetIdOf } from "./hash.ts";
+import { canonicalJson, fromUtf8, utf8 } from "./json.ts";
+import { FORMAT_VERSION, MIGRATIONS, type MigrationRegistry } from "./migrations.ts";
+import { MIMETYPE, readGalatsaFile, writeGalatsaFile } from "./file.ts";
+import { readZip, writeZip } from "./zip.ts";
+
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+const VIDEO = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]);
+
+/** An element of an extension this program does not have, with every kind of data. */
+const UNKNOWN_DATA: ElementData = {
+  settings: {
+    $y: "json",
+    value: { mode: "spiral", turns: 3.5, $y: "plain object with a $y key" },
+  },
+  caption: {
+    $y: "text",
+    delta: [{ insert: "Caption", attributes: { bold: true } }, { insert: "\n" }],
+  },
+  items: {
+    $y: "array",
+    items: [
+      { a: 1 },
+      { $y: "map", entries: { label: { $y: "text", delta: [{ insert: "x" }] } } },
+    ],
+  },
+  tree: {
+    $y: "xmlFragment",
+    children: [{ $y: "xmlElement", name: "node", attributes: { k: 1 }, children: [] }],
+  },
+};
+
+async function sampleWithAssets(): Promise<{
+  doc: Y.Doc;
+  assets: Map<AssetId, Uint8Array>;
+}> {
+  const doc = buildSampleDocument(new Y.Doc(), 3);
+  const png = await assetIdOf(PNG);
+  const video = await assetIdOf(VIDEO);
+  addAsset(doc, png, { mediaType: "image/png", byteLength: PNG.length });
+  addAsset(doc, video, { mediaType: "video/mp4", byteLength: VIDEO.length });
+  addElement(doc, {
+    id: "pic",
+    type: "galatsa.image/image",
+    x: 0,
+    y: 0,
+    size: { w: 1, h: 1 },
+    assets: [png],
+    data: { asset: png },
+  });
+  addElement(doc, {
+    id: "clip",
+    type: "galatsa.media/media",
+    x: 0,
+    y: 0,
+    size: { w: 1, h: 1 },
+    assets: [video],
+    data: { asset: video },
+  });
+  addElement(doc, {
+    id: "alien",
+    type: "example.spiral/spiral",
+    typeVersion: 4,
+    x: 5,
+    y: 6,
+    size: { w: 7, h: 8 },
+    rot: 0.25,
+    data: UNKNOWN_DATA,
+  });
+  return {
+    doc,
+    assets: new Map([
+      [png, PNG],
+      [video, VIDEO],
+    ]),
+  };
+}
+
+async function failure(promise: Promise<unknown>): Promise<FileErrorCode | string> {
+  try {
+    await promise;
+  } catch (error) {
+    return error instanceof FileFormatError ? error.code : `other: ${String(error)}`;
+  }
+  return "no error";
+}
+
+/** Rebuilds a file's archive with some entries replaced or removed. */
+function rewrite(
+  bytes: Uint8Array,
+  change: (entries: Map<string, Uint8Array>) => void,
+): Uint8Array {
+  const entries = readZip(bytes);
+  change(entries);
+  return writeZip(
+    [...entries].map(([name, data]) => ({ name, data, compress: name !== "mimetype" })),
+  );
+}
+
+describe("file round trip", () => {
+  it("writes a file and reads back an equal document, with assets and merge identity", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const thumbnail = new Uint8Array([9, 9, 9]);
+    const bytes = writeGalatsaFile(doc, (id) => assets.get(id), {
+      generator: "test",
+      thumbnail,
+    });
+    const read = await readGalatsaFile(bytes);
+    expect(read.snapshot).toEqual(toSnapshot(doc));
+    expect(read.mergeIdentityKept).toBe(true);
+    expect(read.formatVersion).toBe(FORMAT_VERSION);
+    expect(read.thumbnail).toEqual(thumbnail);
+    expect([...read.assets.keys()].sort()).toEqual([...assets.keys()].sort());
+    // The sample's own placeholder asset ids have no bytes: reported, not fatal.
+    expect(read.warnings.map((w) => w.code).sort()).toEqual([
+      "asset-missing",
+      "asset-missing",
+    ]);
+    // Writing what was read gives the same document.json and the same Yjs state.
+    const again = readZip(
+      writeGalatsaFile(read.doc, (id) => read.assets.get(id), {
+        generator: "test",
+        thumbnail,
+      }),
+    );
+    const first = readZip(bytes);
+    expect(again.get("document.json")).toEqual(first.get("document.json"));
+    expect(again.get("ydoc.bin")).toEqual(first.get("ydoc.bin"));
+  });
+
+  it("lays out the archive as specified", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const entries = readZip(writeGalatsaFile(doc, (id) => assets.get(id)));
+    const names = [...entries.keys()];
+    expect(names[0]).toBe("mimetype");
+    expect(fromUtf8(entries.get("mimetype")!)).toBe(MIMETYPE);
+    expect(names).toContain("manifest.json");
+    expect(names).toContain("document.json");
+    expect(names).toContain("ydoc.bin");
+    expect(names.filter((n) => n.startsWith("assets/"))).toHaveLength(2);
+    expect(JSON.parse(fromUtf8(entries.get("manifest.json")!))).toEqual({
+      format: "galatsa",
+      formatVersion: 1,
+      generator: "Galatsa",
+      ydoc: { encoding: "yjs-update-v1" },
+    });
+  });
+
+  it("keeps an element from a missing extension unchanged through a round trip", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const original = toSnapshot(doc).elements.alien!;
+    // Through ydoc.bin, and through document.json alone.
+    for (const includeYdoc of [true, false]) {
+      const bytes = writeGalatsaFile(doc, (id) => assets.get(id), { includeYdoc });
+      const read = await readGalatsaFile(bytes);
+      expect(read.mergeIdentityKept).toBe(includeYdoc);
+      expect(read.snapshot.elements.alien).toEqual(original);
+      const again = readZip(writeGalatsaFile(read.doc, (id) => read.assets.get(id)));
+      const json = JSON.parse(fromUtf8(again.get("document.json")!)) as DocumentSnapshot;
+      expect(canonicalJson(json.elements.alien)).toBe(canonicalJson(original));
+    }
+  });
+
+  it("keeps merge identity: a reopened file merges with other copies without duplicates", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const peer = forkDoc(doc, 77);
+    const read = await readGalatsaFile(writeGalatsaFile(doc, (id) => assets.get(id)));
+    renameElement(read.doc, SAMPLE.frame, "Renamed offline");
+    edit(peer, () => stopNotes(peer, SAMPLE.stop1).insert(0, "Peer note. "));
+    syncDocs(read.doc, peer);
+    const merged = toSnapshot(read.doc);
+    expect(toSnapshot(peer)).toEqual(merged);
+    expect(merged.elements[SAMPLE.frame]!.name).toBe("Renamed offline");
+    expect(merged.stops[SAMPLE.stop1]!.notes.delta[0]!.insert).toBe(
+      "Peer note. Welcome everyone\n",
+    );
+  });
+
+  it("writes only the assets of elements that are not deleted", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    deleteElements(doc, ["clip"]);
+    const read = await readGalatsaFile(writeGalatsaFile(doc, (id) => assets.get(id)));
+    expect(read.assets.has(await assetIdOf(PNG))).toBe(true);
+    expect(read.assets.has(await assetIdOf(VIDEO))).toBe(false);
+    // The description stays, so a restored element can find the bytes elsewhere.
+    expect(read.snapshot.assets[await assetIdOf(VIDEO)]).toBeDefined();
+  });
+
+  it("writes a snapshot without a Y.Doc (no ydoc.bin)", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const snapshot = toSnapshot(doc);
+    const read = await readGalatsaFile(
+      writeGalatsaFile(snapshot, (id) => assets.get(id)),
+    );
+    expect(read.snapshot).toEqual(snapshot);
+    expect(read.mergeIdentityKept).toBe(false);
+    expect(read.warnings.map((w) => w.code)).not.toContain("ydoc-discarded");
+  });
+});
+
+describe("format versions", () => {
+  /**
+   * A hypothetical next version: version 2 renames the frame data key "fill" to
+   * "background". Real migrations are registered in MIGRATIONS the same way.
+   */
+  const NEXT: MigrationRegistry = {
+    current: 2,
+    migrations: [
+      {
+        from: 1,
+        description: "Rename frame data key fill to background",
+        migrate({ manifest, document }) {
+          const doc = document as DocumentSnapshot;
+          for (const element of Object.values(doc.elements)) {
+            if (element.type === FRAME_TYPE && "fill" in element.data) {
+              element.data.background = element.data.fill!;
+              delete element.data.fill;
+            }
+          }
+          doc.schemaVersion = 2;
+          return { manifest: { ...manifest, formatVersion: 2 }, document: doc };
+        },
+      },
+    ],
+  };
+
+  it("upgrades an older file with a migration and drops its Yjs state", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const v1 = writeGalatsaFile(doc, (id) => assets.get(id));
+    const read = await readGalatsaFile(v1, { migrations: NEXT });
+    expect(read.formatVersion).toBe(1);
+    expect(read.snapshot.schemaVersion).toBe(2);
+    expect(read.snapshot.elements[SAMPLE.frame]!.data).toEqual({
+      background: "#ffffff",
+      clip: false,
+      stroke: null,
+    });
+    // Elements the migration does not own pass through untouched.
+    expect(read.snapshot.elements.alien).toEqual(toSnapshot(doc).elements.alien);
+    expect(read.mergeIdentityKept).toBe(false);
+    expect(read.warnings.map((w) => w.code)).toContain("migrated");
+  });
+
+  it("reads current files with the real registry without migrating", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const read = await readGalatsaFile(
+      writeGalatsaFile(doc, (id) => assets.get(id)),
+      { migrations: MIGRATIONS },
+    );
+    expect(read.warnings.map((w) => w.code)).not.toContain("migrated");
+  });
+
+  it("refuses files from a newer version", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const bytes = rewrite(
+      writeGalatsaFile(doc, (id) => assets.get(id)),
+      (entries) => {
+        entries.set(
+          "manifest.json",
+          utf8(
+            JSON.stringify({ format: "galatsa", formatVersion: 99, generator: "future" }),
+          ),
+        );
+      },
+    );
+    expect(await failure(readGalatsaFile(bytes))).toBe("newer-version");
+  });
+
+  it("runs element data migrations from the extension and drops the Yjs state", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const read = await readGalatsaFile(
+      writeGalatsaFile(doc, (id) => assets.get(id)),
+      {
+        migrateElement: (element) =>
+          element.type === "galatsa.shapes/shape" && element.typeVersion === 1
+            ? { ...element, typeVersion: 2, data: { ...element.data, migrated: true } }
+            : undefined,
+      },
+    );
+    expect(read.snapshot.elements[SAMPLE.shape]!.typeVersion).toBe(2);
+    expect(read.snapshot.elements[SAMPLE.shape]!.data.migrated).toBe(true);
+    expect(read.mergeIdentityKept).toBe(false);
+  });
+});
+
+describe("damaged and foreign files", () => {
+  it("reports each kind of problem with its own code", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const good = writeGalatsaFile(doc, (id) => assets.get(id));
+    expect(await failure(readGalatsaFile(good.subarray(0, good.length - 100)))).toBe(
+      "damaged",
+    );
+    expect(await failure(readGalatsaFile(utf8("hello")))).toBe("not-zip");
+    const foreign = writeZip([
+      { name: "word/document.xml", data: utf8("<w/>"), compress: true },
+    ]);
+    expect(await failure(readGalatsaFile(foreign))).toBe("not-galatsa");
+    expect(
+      await failure(
+        readGalatsaFile(rewrite(good, (e) => e.set("mimetype", utf8("application/zip")))),
+      ),
+    ).toBe("not-galatsa");
+    expect(
+      await failure(readGalatsaFile(rewrite(good, (e) => e.delete("document.json")))),
+    ).toBe("damaged");
+    expect(
+      await failure(
+        readGalatsaFile(rewrite(good, (e) => e.set("document.json", utf8("{not json")))),
+      ),
+    ).toBe("damaged");
+    expect(
+      await failure(
+        readGalatsaFile(
+          rewrite(good, (e) => e.set("document.json", utf8('{"schemaVersion":1}'))),
+        ),
+      ),
+    ).toBe("invalid-document");
+    expect(
+      await failure(
+        readGalatsaFile(good, { limits: { maxTotalSize: 100, maxEntries: 100 } }),
+      ),
+    ).toBe("too-large");
+  });
+
+  it("ignores asset bytes that do not match their id", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const png = await assetIdOf(PNG);
+    const bytes = rewrite(
+      writeGalatsaFile(doc, (id) => assets.get(id)),
+      (e) => e.set(`assets/${png}`, new Uint8Array([1, 2, 3])),
+    );
+    const read = await readGalatsaFile(bytes);
+    expect(read.assets.has(png)).toBe(false);
+    expect(read.warnings.map((w) => w.code)).toContain("asset-damaged");
+  });
+
+  it("prefers document.json when ydoc.bin disagrees with it or is unreadable", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const good = writeGalatsaFile(doc, (id) => assets.get(id));
+    const edited = rewrite(good, (e) => {
+      const json = JSON.parse(fromUtf8(e.get("document.json")!)) as DocumentSnapshot;
+      json.title = "Edited by another tool";
+      e.set("document.json", utf8(JSON.stringify(json)));
+    });
+    const read = await readGalatsaFile(edited);
+    expect(read.snapshot.title).toBe("Edited by another tool");
+    expect(read.mergeIdentityKept).toBe(false);
+    expect(read.warnings.map((w) => w.code)).toContain("ydoc-discarded");
+
+    const garbage = await readGalatsaFile(
+      rewrite(good, (e) => e.set("ydoc.bin", new Uint8Array([255, 255, 255]))),
+    );
+    expect(garbage.snapshot).toEqual(toSnapshot(doc));
+    expect(garbage.warnings.map((w) => w.code)).toContain("ydoc-discarded");
+  });
+});

@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// The generic data encoding (section 3.4) and the snapshot conversion (section 2)
+// of docs/adr/0001-document-model-and-file-format.md.
+
+import { describe, expect, it } from "vitest";
+import * as Y from "yjs";
+import { validateSnapshot } from "../model/validate.ts";
+import type { DataValue, ElementData } from "../model/types.ts";
+import { dataValueFromY, dataValueToY } from "./encode.ts";
+import { addElement, initDocument } from "./ops.ts";
+import { fromSnapshot, toSnapshot } from "./snapshot.ts";
+import { forkDoc, syncDocs } from "./sync.ts";
+import { buildSampleDocument } from "./testing.ts";
+
+/** Every kind of value, as an element of an unknown type would carry. */
+const EVERYTHING: ElementData = {
+  number: -0.5,
+  string: "plain",
+  nothing: null,
+  list: [1, "two", { three: 3 }, [{ $y: "not a tag inside plain JSON" }]],
+  object: { nested: { deep: true } },
+  escaped: { $y: "json", value: { $y: "text", delta: "this is plain data" } },
+  text: {
+    $y: "text",
+    delta: [
+      { insert: "Bold", attributes: { bold: true } },
+      { insert: " and an embed " },
+      { insert: { formula: "x^2" } },
+      { insert: "\n", attributes: { align: "center" } },
+    ],
+  },
+  map: {
+    $y: "map",
+    entries: {
+      a: 1,
+      inner: { $y: "map", entries: { t: { $y: "text", delta: [{ insert: "deep" }] } } },
+    },
+  },
+  array: {
+    $y: "array",
+    items: [
+      1,
+      { $y: "text", delta: [{ insert: "in array" }] },
+      { $y: "array", items: [] },
+      { $y: "json", value: { $y: 5 } },
+    ],
+  },
+  xml: {
+    $y: "xmlFragment",
+    children: [
+      {
+        $y: "xmlElement",
+        name: "paragraph",
+        attributes: { level: 1, style: { x: 1 } },
+        children: [
+          {
+            $y: "xmlText",
+            delta: [{ insert: "tree text", attributes: { italic: true } }],
+          },
+        ],
+      },
+      { $y: "xmlElement", name: "empty", attributes: {}, children: [] },
+    ],
+  },
+  xmlElementAlone: {
+    $y: "xmlElement",
+    name: "figure",
+    attributes: { src: "a" },
+    children: [],
+  },
+  xmlTextAlone: { $y: "xmlText", delta: [{ insert: "lone" }] },
+};
+
+function roundTrip(data: ElementData): ElementData {
+  const doc = new Y.Doc();
+  const map = doc.getMap<unknown>("m");
+  for (const [k, v] of Object.entries(data)) map.set(k, dataValueToY(v));
+  // Through an update, as another replica would receive it.
+  const other = new Y.Doc();
+  Y.applyUpdate(other, Y.encodeStateAsUpdate(doc));
+  const out: ElementData = {};
+  for (const [k, v] of other.getMap<unknown>("m").entries()) out[k] = dataValueFromY(v);
+  return out;
+}
+
+describe("generic data encoding", () => {
+  it("round-trips every shared type, embeds, attributes and the $y escape", () => {
+    expect(roundTrip(EVERYTHING)).toEqual(EVERYTHING);
+  });
+
+  it("escapes plain objects that carry a $y key", () => {
+    const doc = new Y.Doc();
+    const map = doc.getMap<unknown>("m");
+    map.set("raw", { $y: "text", note: "stored as plain JSON by some extension" });
+    const value = dataValueFromY(map.get("raw")) as DataValue;
+    expect(value).toEqual({
+      $y: "json",
+      value: { $y: "text", note: "stored as plain JSON by some extension" },
+    });
+  });
+
+  it("rejects values that are not JSON", () => {
+    expect(() => dataValueToY(Number.NaN)).toThrow();
+    const doc = new Y.Doc();
+    doc.getMap<unknown>("m").set("bin", new Uint8Array([1]));
+    expect(() => dataValueFromY(doc.getMap<unknown>("m").get("bin"))).toThrow();
+  });
+});
+
+describe("snapshot conversion", () => {
+  it("converts the sample document to JSON and back without change", () => {
+    const doc = buildSampleDocument();
+    const snapshot = toSnapshot(doc);
+    expect(validateSnapshot(snapshot)).toEqual([]);
+    expect(toSnapshot(fromSnapshot(snapshot))).toEqual(snapshot);
+  });
+
+  it("keeps an element of an unknown type unchanged", () => {
+    const doc = new Y.Doc();
+    initDocument(doc, { id: "d" });
+    addElement(doc, {
+      id: "u",
+      type: "someone.else/widget",
+      typeVersion: 7,
+      x: 1,
+      y: 2,
+      size: { w: 3, h: 4 },
+      data: EVERYTHING,
+    });
+    const snapshot = toSnapshot(doc);
+    expect(snapshot.elements.u!.data).toEqual(EVERYTHING);
+    expect(toSnapshot(fromSnapshot(snapshot)).elements.u).toEqual(snapshot.elements.u);
+  });
+
+  it("gives a rebuilt document fresh identity: it does not merge with the original", () => {
+    const original = buildSampleDocument();
+    const rebuilt = fromSnapshot(toSnapshot(original));
+    const fork = forkDoc(original);
+    syncDocs(fork, rebuilt);
+    // Same content written twice under different identities: map keys collide and
+    // one write wins per key, so the merge keeps the content but not two copies.
+    expect(Object.keys(toSnapshot(fork).elements).sort()).toEqual(
+      Object.keys(toSnapshot(original).elements).sort(),
+    );
+  });
+});
