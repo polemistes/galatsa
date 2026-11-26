@@ -1,0 +1,43 @@
+{
+  "variant": "dom-screen",
+  "project": "chromium-gpu",
+  "still-0.1": {
+    "sharpness": 0.024636771817342522,
+    "reportedSharpAfterMs": 35.705000042915344
+  },
+  "still-1": {
+    "sharpness": 1.38281602564591,
+    "reportedSharpAfterMs": 44.02999997138977
+  },
+  "still-8": {
+    "sharpness": 2.276026595592352,
+    "reportedSharpAfterMs": 43.39999997615814
+  },
+  "still-40": {
+    "sharpness": 0.9305711571286526,
+    "reportedSharpAfterMs": 40.310000002384186
+  },
+  "still-fine-40": {
+    "sharpness": 0.9836905715993456
+  },
+  "move-1-to-8": {
+    "sharpness": {
+      "during": 2.276026595592352,
+      "after1": 2.276026595592352,
+      "after2": 2.276026595592352,
+      "afterSharp": 2.276026595592352,
+      "afterHalfSecond": 2.276026595592352
+    },
+    "reportedSharpAfterMs": 35.06999999284744
+  },
+  "move-8-to-40": {
+    "sharpness": {
+      "during": 0.9305711571286526,
+      "after1": 0.9305711571286526,
+      "after2": 0.9305711571286526,
+      "afterSharp": 0.9305711571286526,
+      "afterHalfSecond": 0.9305711571286526
+    },
+    "reportedSharpAfterMs": 44.375
+  }
+}

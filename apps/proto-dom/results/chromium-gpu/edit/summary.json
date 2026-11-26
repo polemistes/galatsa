@@ -1,0 +1,7 @@
+{
+  "variant": "dom",
+  "project": "chromium-gpu",
+  "original": "Kameraet flyr over et uendelig lerret. Teksten skal være skarp ved hver zoom: æ ø å é ü. The quick brown fox jumps over the lazy dog 0123456789.",
+  "edited": "Hallo Kameraet flyr over et uendelig lerret. Teksten skal være skarp ved hver zoom: æ ø å é ü. The quick brown fox jumps over the lazy dog 0123456#789.fet tekst 日本",
+  "ime": "ok: compositionstart:, compositionupdate:に, compositionupdate:にほ, compositionupdate:日本, compositionend:日本"
+}

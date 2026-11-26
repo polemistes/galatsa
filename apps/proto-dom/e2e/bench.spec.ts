@@ -70,7 +70,12 @@ test("camera run", async ({ page }, testInfo) => {
       engineStats,
       result,
     };
-    writeFileSync(new URL(`${variant}.json`, folder), JSON.stringify(saved, null, 1));
+    // BENCH_SUFFIX names a repeat run, e.g. "-run2".
+    const suffix = process.env["BENCH_SUFFIX"] ?? "";
+    writeFileSync(
+      new URL(`${variant}${suffix}.json`, folder),
+      JSON.stringify(saved, null, 1),
+    );
     const s = result.stats;
     console.log(
       [

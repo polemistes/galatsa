@@ -3,19 +3,19 @@
   "project": "chromium",
   "still-0.1": {
     "sharpness": 0.05042911726571234,
-    "reportedSharpAfterMs": 38.71000003814697
+    "reportedSharpAfterMs": 42.00999999046326
   },
   "still-1": {
     "sharpness": 1.6043892949226946,
-    "reportedSharpAfterMs": 34.55500000715256
+    "reportedSharpAfterMs": 46.93000000715256
   },
   "still-8": {
     "sharpness": 2.276034570065353,
-    "reportedSharpAfterMs": 38.189999997615814
+    "reportedSharpAfterMs": 44.389999985694885
   },
   "still-40": {
     "sharpness": 0.9302313358365926,
-    "reportedSharpAfterMs": 47.5
+    "reportedSharpAfterMs": 37.094999969005585
   },
   "still-fine-40": {
     "sharpness": 0.9836938338837535
@@ -28,7 +28,7 @@
       "afterSharp": 2.276034570065353,
       "afterHalfSecond": 2.276034570065353
     },
-    "reportedSharpAfterMs": 46.844999969005585
+    "reportedSharpAfterMs": 35.35000002384186
   },
   "move-8-to-40": {
     "sharpness": {
@@ -38,6 +38,6 @@
       "afterSharp": 0.9302313358365926,
       "afterHalfSecond": 0.9302313358365926
     },
-    "reportedSharpAfterMs": 41.81999999284744
+    "reportedSharpAfterMs": 43.18000000715256
   }
 }
