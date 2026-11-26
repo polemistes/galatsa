@@ -567,3 +567,143 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
 
   return { replicas, snapshot: tidy, failures, steps: counts };
 }
+
+// ---------------------------------------------------------------------------
+// Junk: what a faulty or hostile peer might write
+// ---------------------------------------------------------------------------
+
+/** Things a faulty or hostile peer might store anywhere. */
+function junk(rnd: () => number, depth = 0): unknown {
+  const value = anything(rnd, depth);
+  // Yjs itself refuses these directly in a shared map or array, not nested.
+  return typeof value === "function" || typeof value === "bigint" || value instanceof Date
+    ? [value]
+    : value;
+}
+
+function encodable(value: unknown): unknown {
+  if (typeof value === "bigint") return 1;
+  return Array.isArray(value) ? value.map(encodable) : value;
+}
+
+function anything(rnd: () => number, depth: number): unknown {
+  const simple = [
+    null,
+    undefined,
+    true,
+    0,
+    -0,
+    -5,
+    1.5,
+    Number.NaN,
+    Infinity,
+    "",
+    "a b",
+    "__proto__",
+    "a0",
+    "x\uD800",
+    10n,
+    2n ** 80n,
+    new Uint8Array([1, 2]),
+    new Date(0),
+    () => 1,
+    "sha256-" + "f".repeat(64),
+  ];
+  const roll = Math.floor(rnd() * 16);
+  if (depth > 3 || roll < 8) return simple[Math.floor(rnd() * simple.length)];
+  if (roll === 8) return [junk(rnd, depth + 1), junk(rnd, depth + 1)];
+  if (roll === 9) {
+    return JSON.parse(
+      `{"__proto__": 1, "$y": ${JSON.stringify(
+        ["text", "map", "any", "json", "unsupported", "hologram", 5][Math.floor(rnd() * 7)],
+      )}, "delta": [], "note": "n", "value": {"u": 2}}`,
+    );
+  }
+  if (roll === 10) return { x: junk(rnd, depth + 1), y: 1, w: junk(rnd, depth + 1), space: junk(rnd, depth + 1) };
+  if (roll === 11) {
+    const map = new Y.Map<unknown>();
+    map.set(String(junk(rnd, 9)), junk(rnd, depth + 1));
+    map.set("seen", junk(rnd, depth + 1));
+    return map;
+  }
+  if (roll === 12) {
+    const text = new Y.Text();
+    text.applyDelta([
+      { insert: "ab" },
+      { insert: [1, { a: undefined }] as unknown as object },
+      // (A big integer here cannot be encoded by Yjs at all, so no peer can send it.)
+      { insert: "c", attributes: { k: encodable(junk(rnd, 9)) ?? 1 } },
+    ]);
+    return text;
+  }
+  if (roll === 13) {
+    const array = new Y.Array<unknown>();
+    // (Yjs refuses undefined directly in an array.)
+    array.push([junk(rnd, depth + 1) ?? null, junk(rnd, depth + 1) ?? 0]);
+    return array;
+  }
+  if (roll === 14) {
+    const fragment = new Y.XmlFragment();
+    const element = new Y.XmlElement(String(junk(rnd, 9) ?? ""));
+    fragment.insert(0, [element, new Y.XmlText("t")]);
+    element.setAttribute("a", junk(rnd, depth + 1) as string);
+    return fragment;
+  }
+  return { nested: { deep: junk(rnd, depth + 1) } };
+}
+
+const KEYS = [
+  "type",
+  "typeVersion",
+  "parent",
+  "order",
+  "pos",
+  "rebase",
+  "size",
+  "rot",
+  "name",
+  "locked",
+  "rev",
+  "deleted",
+  "dissolved",
+  "refs",
+  "ext",
+  "data",
+  "view",
+  "notes",
+  "visibility",
+  "transition",
+  "entries",
+  "surprise",
+  "__proto__",
+];
+
+
+/**
+ * Writes random junk into a document, as a faulty or hostile peer could: odd
+ * values under known and unknown keys of records, records under odd ids, odd
+ * shared types. For tests of the rule that reading is total.
+ */
+export function scribbleJunk(doc: Y.Doc, seed: number, steps = 25): void {
+  const rnd = seededRandom(seed * 31);
+  const tables = ["elements", "stops", "routes", "assets", "settings", "meta"];
+  for (let step = 0; step < steps; step++) {
+    doc.transact(() => {
+      const table = doc.getMap<unknown>(tables[Math.floor(rnd() * tables.length)]!);
+      const ids = [...table.keys()];
+      const roll = rnd();
+      const key = KEYS[Math.floor(rnd() * KEYS.length)]!;
+      if (roll < 0.15 || ids.length === 0) {
+        table.set(rnd() < 0.5 ? `junk${step}` : String(junk(rnd, 9)), junk(rnd));
+        return;
+      }
+      const record = table.get(ids[Math.floor(rnd() * ids.length)]!);
+      if (!(record instanceof Y.Map)) return;
+      const inner = (record as Y.Map<unknown>).get(key);
+      if (inner instanceof Y.Map && rnd() < 0.6) {
+        (inner as Y.Map<unknown>).set(rnd() < 0.5 ? "k" : String(junk(rnd, 9)), junk(rnd));
+      } else if (rnd() < 0.1) (record as Y.Map<unknown>).delete(key);
+      else (record as Y.Map<unknown>).set(key, junk(rnd));
+    }, "remote-peer");
+  }
+}

@@ -310,5 +310,5 @@ export function buildSampleDocument(doc: Y.Doc = new Y.Doc(), seed = 1): Y.Doc {
   return doc;
 }
 
-export { BINDING_ORIGIN, runScenario } from "./scenario.ts";
+export { BINDING_ORIGIN, runScenario, scribbleJunk } from "./scenario.ts";
 export type { ScenarioOptions, ScenarioResult } from "./scenario.ts";
