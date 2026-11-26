@@ -7,6 +7,7 @@ import {
   findHardcodedText,
   isTextName,
   isUserText,
+  looksLikeCode,
 } from "./i18n-hardcoded.ts";
 
 const fixture = (name: string): string =>
@@ -367,5 +368,118 @@ describe("findBundleProblems", () => {
       ],
       [6, "de", "not an interface language (nb, en)"],
     ]);
+  });
+});
+
+describe("hand-written bundles", () => {
+  const rules = { messages: "src/messages", locales: ["nb", "en"] };
+
+  it("rejects a bundle object written without defineMessages()", () => {
+    const source = [
+      'import type { MessageBundle } from "@galatsa/i18n";',
+      'import nb from "./nb.ts";',
+      'export const bundle: MessageBundle = { namespace: "editor", messages: { nb, en: { x: "X" } } };',
+    ].join("\n");
+    const found = findBundleProblems("src/messages/index.ts", source, rules);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.reason).toMatch(
+      /written by hand; create it with defineMessages\(\)/,
+    );
+  });
+
+  it("accepts the shorthand object that defineMessages() itself returns", () => {
+    const source =
+      "export function make(namespace: string, messages: object) {\n  return { namespace, messages };\n}";
+    expect(findBundleProblems("src/catalog.ts", source, rules)).toEqual([]);
+  });
+});
+
+describe("findHardcodedText: fewer false alarms, fewer misses", () => {
+  it("does not read CSS in <style> or code in <script> as text", () => {
+    const source = [
+      'const css = ".a { color: red; }";',
+      "export const A = () => (",
+      "  <>",
+      "    <style>{css}</style>",
+      '    <style>{".b { margin: 0 }"}</style>',
+      '    <script>{"window.x = 1"}</script>',
+      "  </>",
+      ");",
+    ].join("\n");
+    expect(texts("A.tsx", source)).toEqual([]);
+  });
+
+  it("knows enterKeyHint and the like are keywords", () => {
+    expect(
+      texts("A.tsx", 'export const A = () => <input enterKeyHint="search" />;'),
+    ).toEqual([]);
+    expect(isTextName("enterKeyHint")).toBe(false);
+  });
+
+  it("does not report codes in names that hold text only by convention", () => {
+    const source = [
+      'const errorMessage = "ENOENT";',
+      'const plainText = "text/plain";',
+      'const sortDescription = "ascending";',
+      'const localeText = "en-US";',
+      'const iconLabel = "arrowLeft";',
+      'export const A = () => <Field statusText="idle" placeholder="https://example.com/x.png" />;',
+      // Words are still text, also capitalised single words and non-ASCII words.
+      'const saveLabel = "Save";',
+      'const emptyMessage = "Nothing here";',
+      'const searchHint = "søk";',
+      'const okLabel = "OK";',
+    ].join("\n");
+    expect(texts("A.tsx", source)).toEqual(["Save", "Nothing here", "søk", "OK"]);
+  });
+
+  it("still reports codes in the fixed text places", () => {
+    const source = [
+      "export const A = () => (",
+      '  <button title="save" aria-label="ENOENT">ok</button>',
+      ");",
+    ].join("\n");
+    expect(texts("A.tsx", source)).toEqual(["save", "ENOENT", "ok"]);
+  });
+
+  it("does not report a URL or e-mail address", () => {
+    expect(isUserText("https://example.com/x.png")).toBe(false);
+    expect(isUserText("someone@example.org")).toBe(false);
+    expect(isUserText("Visit https://example.com")).toBe(true);
+  });
+
+  it("finds text appended to document.body and in notification bodies", () => {
+    const source = [
+      'document.body.append("Loading…");',
+      'frame.contentDocument.body.append("Loading again");',
+      'new Notification("Saved", { body: "Your presentation was saved" });',
+      'const options = { body: "Ready" };',
+      'registration.showNotification("Done", options);',
+      'request.body.append("x", "not text");',
+      'body.append("y", "not text either");',
+    ].join("\n");
+    expect(texts("dom.ts", source)).toEqual([
+      "Loading…",
+      "Loading again",
+      "Saved",
+      "Your presentation was saved",
+      "Ready",
+      "Done",
+    ]);
+  });
+
+  it("looks for codes the way the documentation says", () => {
+    const codes = [
+      "ENOENT",
+      "text/plain",
+      "ascending",
+      "en-US",
+      "fooBar",
+      "x.png",
+      "item_1",
+    ];
+    for (const code of codes) expect(looksLikeCode(code), code).toBe(true);
+    const words = ["Save", "OK", "Sign-in", "Saved.", "søk", "Save file", "Lagre…"];
+    for (const word of words) expect(looksLikeCode(word), word).toBe(false);
   });
 });
