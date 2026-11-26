@@ -20,13 +20,21 @@ export interface ImageStore extends ImageSource {
 }
 
 type AnyCanvas = OffscreenCanvas | HTMLCanvasElement;
+type AnyContext = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
 
-function createCanvas(width: number, height: number): AnyCanvas {
-  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(width, height);
+/** An OffscreenCanvas where it has a 2D context, else a canvas element. */
+function createCanvas(width: number, height: number): [AnyCanvas, AnyContext] {
+  if (typeof OffscreenCanvas !== "undefined") {
+    const offscreen = new OffscreenCanvas(width, height);
+    const context = offscreen.getContext("2d");
+    if (context !== null) return [offscreen, context];
+  }
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  return canvas;
+  const context = canvas.getContext("2d");
+  if (context === null) throw new Error("No 2D canvas context");
+  return [canvas, context];
 }
 
 function encode(canvas: AnyCanvas): Promise<Blob> {
@@ -44,10 +52,7 @@ function encode(canvas: AnyCanvas): Promise<Blob> {
 
 /** Generates one image as an encoded file. */
 export async function generateImage(asset: ImageAsset): Promise<Blob> {
-  const canvas = createCanvas(asset.width, asset.height);
-  const context = canvas.getContext("2d") as
-    OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;
-  if (context === null) throw new Error("No 2D canvas context");
+  const [canvas, context] = createCanvas(asset.width, asset.height);
   const image = context.createImageData(asset.width, asset.height);
   fillImagePixels(asset, image.data);
   context.putImageData(image, 0, 0);

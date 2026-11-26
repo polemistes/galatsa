@@ -139,6 +139,9 @@ export function startHarness(options: HarnessOptions): HarnessApi {
     try {
       images ??= prepareImages(scene, (done, total) => {
         status.textContent = STRINGS.statusGenerating(done, total);
+      }).catch((error: unknown) => {
+        images = undefined; // try again on the next run
+        throw error;
       });
       const store = await images;
       const results: BenchResult[] = [];
