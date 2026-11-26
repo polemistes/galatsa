@@ -1,0 +1,60 @@
+{
+  // Type-checks every TypeScript file in the repository in one program, so that no
+  // folder can be skipped by accident: all packages (extensions included), apps,
+  // bench, tests, scripts and the root config files. Because it covers everything,
+  // it loads both Node types and the DOM library.
+  //
+  // The environment rules of each package (for example that @galatsa/core uses
+  // neither Node nor DOM APIs) are enforced by the package's own tsconfig.json, run
+  // by its "typecheck" script (`pnpm -r run typecheck`). See tsconfig.base.json.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  // tsc does not expand braces in "include", so each extension is listed.
+  "include": [
+    "*.ts",
+    "*.tsx",
+    "*.mts",
+    "*.cts",
+    "*.js",
+    "*.mjs",
+    "*.cjs",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "packages/**/*.mts",
+    "packages/**/*.cts",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "apps/**/*.mts",
+    "apps/**/*.cts",
+    "bench/**/*.ts",
+    "bench/**/*.tsx",
+    "bench/**/*.mts",
+    "bench/**/*.cts",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "tests/**/*.mts",
+    "tests/**/*.cts",
+    "scripts/**/*.ts",
+    "scripts/**/*.tsx",
+    "scripts/**/*.mts",
+    "scripts/**/*.cts",
+    "scripts/**/*.js",
+    "scripts/**/*.mjs",
+    "scripts/**/*.cjs"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/dist",
+    "**/build",
+    "**/out",
+    "**/coverage",
+    "**/target",
+    ".claude"
+  ]
+}

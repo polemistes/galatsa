@@ -1,0 +1,29 @@
+{
+  // Shared settings for building a package to dist/ with tsc. A package's
+  // tsconfig.build.json extends this and sets "rootDir", "outDir" and "include"
+  // (paths in an extended file are relative to that file, so they cannot live here).
+  // It must not set "exclude": the list below is inherited, and it keeps test files
+  // out of dist/. It matches TEST_FILE_EXTENSIONS in vite.shared.ts, which Vitest
+  // uses; scripts/lib/test-files.test.ts fails if the two drift apart.
+  //
+  // The "@galatsa/source" condition is turned off, so a package that imports another
+  // workspace package compiles against that package's dist/ output instead of pulling
+  // its source into this build. `pnpm build` runs the builds in dependency order.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "customConditions": [],
+    "noEmit": false
+  },
+  "exclude": [
+    "**/node_modules",
+    "**/dist",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.test.mts",
+    "**/*.test.cts",
+    "**/*.test.js",
+    "**/*.test.jsx",
+    "**/*.test.mjs",
+    "**/*.test.cjs"
+  ]
+}

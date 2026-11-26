@@ -1,0 +1,50 @@
+{
+  // Shared strict settings for every TypeScript program in the repository.
+  //
+  // Environment: deliberately none. "types" is empty, so no @types package (Node or
+  // other) is loaded unless a tsconfig asks for it, and "lib" has no DOM. Each
+  // package declares its own environment in its tsconfig.json:
+  //   - environment-agnostic packages (core, format, i18n): keep this as it is;
+  //   - browser packages (renderer, player, editor, apps/web): add "DOM" and
+  //     "DOM.Iterable" to "lib";
+  //   - Node code (scripts, configs, the future packages/server): add "node" to "types".
+  // The root tsconfig.json adds both, because it checks every file in one program.
+  //
+  // Imports: relative imports name the source file with its .ts or .tsx extension
+  // ("./camera.ts"). Node runs .ts files directly (type stripping), Vite and Vitest
+  // accept it, and tsc rewrites the extension to .js when it builds dist/.
+  //
+  // Workspace packages: each package.json lists "@galatsa/source": "./src/index.ts"
+  // first in "exports". The custom condition below makes TypeScript resolve another
+  // workspace package from its source, so nothing has to be built before type
+  // checking or testing. Vitest and Vite use the same condition (vite.shared.ts).
+  // Builds turn it off (tsconfig.build.base.json) and use the dist/ output instead.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "types": [],
+    "jsx": "react-jsx",
+    "customConditions": ["@galatsa/source"],
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    // Only syntax that can be erased (no enums, namespaces or parameter properties),
+    // because Node runs .ts files by stripping the types.
+    "erasableSyntaxOnly": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  }
+}

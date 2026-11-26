@@ -6,3 +6,35 @@ CLAUDE.md
 idenotat.md
 # Claude Code local state and agent worktrees
 .claude/
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+
+# Tests and tools
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+.vite/
+.eslintcache
+
+# Rust (Tauri backend, later phases)
+target/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local

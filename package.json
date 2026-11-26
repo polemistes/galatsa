@@ -1,0 +1,38 @@
+{
+  "name": "galatsa",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Infinite-canvas presentation program built around a camera and saved routes of camera stops",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "packageManager": "pnpm@12.19.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "tsc -p tsconfig.json && pnpm -r run typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:spdx": "node scripts/check-spdx.ts",
+    "check:licenses": "node scripts/check-licenses.ts",
+    "test": "vitest run",
+    "e2e": "pnpm --filter @galatsa/e2e run e2e",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run check:spdx && pnpm run check:workspace && pnpm run test && pnpm run check:licenses",
+    "check:workspace": "node scripts/check-workspace.ts"
+  },
+  "devDependencies": {
+    "@eslint/compat": "2.1.1",
+    "@eslint/js": "10.0.1",
+    "@types/node": "catalog:",
+    "eslint": "10.14.0",
+    "globals": "17.14.0",
+    "prettier": "3.10.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2",
+    "vite": "8.3.8",
+    "vitest": "catalog:",
+    "yaml": "2.9.1"
+  }
+}
