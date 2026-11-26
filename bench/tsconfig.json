@@ -1,10 +1,13 @@
 {
-  // The bench is run by Node from source (see the "start" script), so it has Node
-  // types. Measurements that run in a browser can add "DOM" to "lib" later.
+  // The bench has two environments: the measurement runs in a browser (DOM), and
+  // the scene summary (src/main.ts) and the unit tests run in Node. The modules
+  // prng, scene, camera, images, stats, result and strings use neither browser nor
+  // Node APIs, and must stay that way so that engines and Node code can use them.
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
   "include": ["src/**/*.ts", "src/**/*.mts", "src/**/*.cts"]
 }
