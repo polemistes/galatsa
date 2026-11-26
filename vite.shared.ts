@@ -12,6 +12,24 @@
 
 import { defaultClientConditions, defaultServerConditions, type UserConfig } from "vite";
 
+/**
+ * Extensions of test files. Vitest runs every "*.test.<ext>" file, and
+ * tsconfig.build.base.json keeps the same files out of dist/.
+ */
+export const TEST_FILE_EXTENSIONS = [
+  "ts",
+  "tsx",
+  "mts",
+  "cts",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+] as const;
+
+/** Glob for every test file, for Vitest's "include". */
+export const TEST_FILE_GLOB = `**/*.test.{${TEST_FILE_EXTENSIONS.join(",")}}`;
+
 export const SOURCE_CONDITION = "@galatsa/source";
 
 export const workspaceSourceResolve = {
