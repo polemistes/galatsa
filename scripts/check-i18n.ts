@@ -2,13 +2,15 @@
 
 // Translation check, run by `pnpm check`:
 //
-//   1. No hard-coded user-visible text in user interface code
-//      (rules in scripts/lib/i18n-hardcoded.ts, which files count as user interface
-//      code in scripts/lib/i18n-config.ts).
-//   2. The message files of every package agree: Norwegian Bokmål and English have
-//      the same keys, the same values per key, valid syntax, and the plural
-//      categories of their language (checkCatalogs in @galatsa/i18n).
-//   3. No catalog is written inline in defineMessages(), where (2) cannot see it.
+//   1. No hard-coded user-visible text in user interface code, scripts and HTML
+//      pages (rules in scripts/lib/i18n-hardcoded.ts, which files count as user
+//      interface code in scripts/lib/i18n-config.ts).
+//   2. The message files of every package (<messages>/<language>.ts for each
+//      language in LOCALES) agree: the same keys, the same values with the same
+//      kinds per key, valid syntax, and the plural categories of their language
+//      (checkCatalogs in @galatsa/i18n).
+//   3. Every defineMessages() call is in the messages folder and takes its
+//      catalogs from those files, so (2) sees every bundle.
 //
 // Files are listed with git, so ignored files are skipped.
 //
@@ -18,8 +20,9 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { checkCatalogs } from "@galatsa/i18n";
+import { checkCatalogs, LOCALES } from "@galatsa/i18n";
 import {
+  isHtmlFile,
   isSourceFile,
   isTestFile,
   isUiFile,
@@ -28,8 +31,8 @@ import {
   UI_PACKAGE_PATTERN,
 } from "./lib/i18n-config.ts";
 import {
+  findBundleProblems,
   findHardcodedText,
-  findInlineCatalogs,
   type Finding,
 } from "./lib/i18n-hardcoded.ts";
 
@@ -86,13 +89,16 @@ async function main(): Promise<void> {
   for (const dir of [...packages].sort()) {
     const manifestText = read(`${dir}/package.json`);
     if (manifestText === undefined) continue;
-    const { config, problems: configProblems } = readI18nConfig(JSON.parse(manifestText));
+    const packageFiles = filesOf.get(dir) ?? [];
+    const { config, problems: configProblems } = readI18nConfig(
+      JSON.parse(manifestText),
+      packageFiles,
+    );
     for (const problem of configProblems)
       problems.push(`${dir}/package.json: ${problem}`);
-    const packageFiles = filesOf.get(dir) ?? [];
 
     for (const file of packageFiles) {
-      if (!isSourceFile(file) || isTestFile(file)) continue;
+      if (!(isSourceFile(file) || isHtmlFile(file)) || isTestFile(file)) continue;
       const path = `${dir}/${file}`;
       const source = read(path);
       if (source === undefined) continue;
@@ -101,13 +107,18 @@ async function main(): Promise<void> {
         const findings = findHardcodedText(path, source, config);
         for (const finding of findings) add(path, finding);
       }
-      for (const finding of findInlineCatalogs(path, source)) add(path, finding);
+      if (isSourceFile(file)) {
+        const rules = { messages: config.messages, locales: LOCALES };
+        for (const finding of findBundleProblems(file, source, rules)) add(path, finding);
+      }
     }
 
-    const catalogs = messageFiles(packageFiles, config);
+    const catalogs = messageFiles(packageFiles, config, LOCALES);
     if (catalogs.size === 0) {
       if (config.messagesExplicit) {
-        problems.push(`${dir}: no message files (<language>.ts) in ${config.messages}`);
+        problems.push(
+          `${dir}: no message files (${LOCALES.map((l) => `${l}.ts`).join(", ")}) in ${config.messages}`,
+        );
       }
       continue;
     }
@@ -143,7 +154,7 @@ async function main(): Promise<void> {
 
   console.log(
     `Translation check passed: ${uiFileCount} user interface file(s) without hard-coded text, ` +
-      `${catalogCount} message folder(s) with matching nb and en catalogs.`,
+      `${catalogCount} message folder(s) with matching ${LOCALES.join(" and ")} catalogs.`,
   );
 }
 

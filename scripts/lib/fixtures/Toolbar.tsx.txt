@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// A test fixture for scripts/lib/i18n-hardcoded.test.ts: an ordinary React
+// component with hard-coded text in the places React code usually has it. It is a
+// .txt file so that it is not type-checked, linted or built (react is not a
+// dependency of the repository); the test parses it as Toolbar.tsx.
+
+import { useState, type ReactNode } from "react";
+import { menu, statusText } from "./menu.ts";
+
+interface ButtonProps {
+  readonly text: string;
+  readonly confirmLabel?: string;
+  readonly children?: ReactNode;
+  readonly icon?: string;
+}
+
+function Button({ text, confirmLabel, children, icon }: ButtonProps): ReactNode {
+  return (
+    <button
+      type="button"
+      className="tb-button tb-button--primary"
+      data-testid="tb-save"
+      data-icon={icon}
+    >
+      {text}
+      {confirmLabel}
+      {children}
+    </button>
+  );
+}
+
+const a11y = { role: "toolbar" };
+const names = { save: "Save", delete: "Delete" } as const;
+const emptyHint = "Nothing selected";
+
+function selectionSummary(count: number): string {
+  return count === 0 ? "No selection" : `${count} selected`;
+}
+
+export function Toolbar({ count }: { count: number }): ReactNode {
+  const [busy] = useState(false);
+  const status = busy ? "saving" : "idle";
+  const label = String(count) + " items";
+  const marker = "i18n-ignore: not a comment, so it does not hide this line"; <Button text="Hidden?" />;
+  return (
+    <div
+      {...a11y}
+      id="main-toolbar"
+      key="toolbar"
+      className={busy ? "is-busy" : "is-idle"}
+      data-state={status}
+      data-marker={marker}
+    >
+      <Button text="Save" icon="floppy-disk" />
+      <Button text={names.save} confirmLabel="Really delete?" />
+      <Button text="" children="Delete everything" />
+      <Button text={`${count} selected`}>{count === 1 ? "element" : "elements"}</Button>
+      <input type="submit" value="Send" />
+      <input type="checkbox" value="on" name="agree" />
+      <a href="https://example.org/help" target="_blank" rel="noreferrer">
+        ?
+      </a>
+      <span>{statusText(busy)}</span>
+      <span>{label}</span>
+      <span>{["Undo", "Redo"].join(" / ")}</span>
+      <span>{selectionSummary(count)}</span>
+      <span title={busy ? "Working" : undefined}>{count} files</span>
+      <img src="/logo.svg" alt={"Galatsa logo"} />
+      {menu.map((item) => (
+        <Button key={item.id} text={item.label} />
+      ))}
+      <svg viewBox="0 0 10 10">
+        <path d="M0 0L10 10" />
+      </svg>
+      <p>{count === 0 && emptyHint}</p>
+      {/* i18n-ignore: key names on the keyboard are printed in English */}
+      <kbd>Ctrl</kbd>
+    </div>
+  );
+}
+
+export async function upload(file: Blob, url: URL): Promise<void> {
+  const form = new FormData();
+  form.append("file", file);
+  const params = new URLSearchParams();
+  params.append("page", "2");
+  url.searchParams.append("view", "grid");
+  const headers = new Headers();
+  headers.append("Content-Type", "application/json");
+  await fetch(url, { method: "POST", body: form, headers });
+}
+
+export function addItem(list: HTMLElement): void {
+  list.append("New item", document.createElement("hr"));
+}

@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// A test fixture for scripts/lib/i18n-hardcoded.test.ts: menu definitions kept in a
+// plain .ts file next to the component, as React apps often do. The test parses it
+// as menu.ts.
+
+export const menu = [
+  { id: "save", label: "Save", shortcut: "Ctrl+S" },
+  { id: "open", label: "Open file…", tooltip: "Open a presentation" },
+];
+
+export function statusText(busy: boolean): string {
+  return busy ? "Saving…" : "All changes saved";
+}
+
+export const shortcuts = { save: "Mod+S", open: "Mod+O" };
+
+export function cssClass(busy: boolean): string {
+  return busy ? "is-busy" : "is-idle";
+}

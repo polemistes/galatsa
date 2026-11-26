@@ -2,31 +2,47 @@
 
 // Pure logic for the hard-coded text check (scripts/check-i18n.ts): finds text that a
 // user would see, written directly in user interface code instead of coming from the
-// translation files. It parses the file with the TypeScript compiler, so text in
-// comments, type names and imports is never mistaken for user text.
+// translation files. Scripts are parsed with the TypeScript compiler, so text in
+// comments, type names and imports is never mistaken for user text. HTML pages are
+// read with a small tokenizer (findHardcodedHtmlText).
 //
 // User-visible text is a string (or the literal parts of a template string) that
 // contains at least one letter, in one of these places:
 //
 //   1. JSX text:                         <button>Save</button>
 //   2. JSX children in braces:           <p>{busy ? "Saving" : "Saved"}</p>
-//   3. Text attributes (TEXT_ATTRIBUTES): <img alt="Logo" />, aria-label, title, ...
+//   3. JSX attributes that hold text: the names in TEXT_ATTRIBUTES (alt,
+//      aria-label, title, ...), names that hold text by convention (isTextName:
+//      text, confirmLabel, emptyText, ...), the children prop, and value on
+//      <input type="submit|button|reset">:
+//                                        <Button text="Save" confirmLabel="Sure?" />
 //   4. Text properties and names (isTextName), in object literals, variable
 //      declarations and assignments:     { label: "Save" }, el.textContent = "Save",
 //                                        const emptyMessage = "Nothing here"
-//   5. Arguments of DOM and browser APIs that show text (TEXT_CALLS):
+//   5. Values returned by functions, methods and getters with such a name:
+//                                        function statusText() { return "Saved"; }
+//   6. Arguments of DOM and browser APIs that show text (TEXT_CALLS):
 //                                        alert("Saved"), ctx.fillText("Hi", 0, 0),
 //                                        el.setAttribute("title", "Close")
+//
+// A value in one of these places is followed through the file where that is cheap
+// and certain: both sides of ?:, &&, ||, ?? and +, array elements, string methods
+// such as ["Undo", "Redo"].join(" / "), String(x), a local constant
+// (text={label} with const label = "Save"), a property of a local object literal
+// (text={names.save} with const names = { save: "Save" }), and the return values of
+// a local function (<span>{status()}</span>).
 //
 // Not user text: strings without letters ("–", "100", "·"), and message keys in the
 // form "namespace:key" (for example "editor:toolbar.save").
 //
-// Opting out: a comment `i18n-ignore: <reason>` on the same line or the line above
-// skips that line, and `i18n-ignore-file: <reason>` anywhere in a comment skips the
-// file. The reason is required. In JSX, write the comment as {/* i18n-ignore: ... */}.
+// Opting out: a comment `i18n-ignore: <reason>` on the same line or alone on the
+// line above skips that line, and `i18n-ignore-file: <reason>` in a comment skips
+// the file. The reason is required. Only real comments count, not the same words
+// inside a string. In JSX, write the comment as {/* i18n-ignore: ... */}; in HTML as
+// <!-- i18n-ignore: ... -->.
 //
-// The check sees text where it is written, not where it ends up: a string stored in
-// a variable with an ordinary name and shown later is not found.
+// The check sees text where it is written, not where it ends up: a string passed
+// through a parameter, an import or a variable that is reassigned is not followed.
 
 import ts from "typescript";
 
@@ -46,7 +62,7 @@ export interface ScanOptions {
   readonly textCalls?: readonly string[];
 }
 
-/** JSX attributes whose value is shown to users or read aloud by screen readers. */
+/** JSX and HTML attributes whose value is shown to users or read by screen readers. */
 export const TEXT_ATTRIBUTES: readonly string[] = [
   "alt",
   "aria-braillelabel",
@@ -83,6 +99,9 @@ const TEXT_PROPERTIES: readonly string[] = [
   "ariaValueText",
 ];
 
+/** <input> types whose value attribute is the button's visible label. */
+const BUTTON_INPUT_TYPES: readonly string[] = ["submit", "button", "reset"];
+
 /**
  * Names that hold user text by convention: label, title, tooltip and so on, and
  * names ending in Label, Title, Text, Message and so on (saveLabel, emptyMessage).
@@ -107,14 +126,52 @@ const TEXT_CALLS: ReadonlyMap<string, readonly number[] | "all"> = new Map<
   ["fillText", [0]],
   ["strokeText", [0]],
   ["insertAdjacentText", [1]],
+  // DOM methods that insert strings as text nodes. FormData, URLSearchParams and
+  // Headers also have an append(name, value); see isNameValueReceiver.
   ["append", "all"],
   ["prepend", "all"],
+  ["before", "all"],
+  ["after", "all"],
   ["replaceChildren", "all"],
   ["replaceWith", "all"],
 ]);
 
+/** DOM insertion methods that FormData, URLSearchParams or Headers share by name. */
+const SHARED_NAME_CALLS: readonly string[] = ["append"];
+
+/** Types with an append(name, value) that is not text: form fields, query, headers. */
+const NAME_VALUE_TYPES: readonly string[] = ["FormData", "URLSearchParams", "Headers"];
+
+/**
+ * Receiver names that, by convention, hold a FormData, URLSearchParams or Headers
+ * object: form, formData, params, searchParams, query, headers and the like.
+ */
+const NAME_VALUE_RECEIVER =
+  /^(?:fd|form|formData|params|query|headers|body)$|[a-z0-9](?:Form|FormData|Params|Query|Headers|Body)$/;
+
 /** Constructors whose first argument is shown to users. */
 const TEXT_CONSTRUCTORS: readonly string[] = ["Notification", "Option"];
+
+/** String methods whose result contains the text of the string they are called on. */
+const STRING_METHODS: readonly string[] = [
+  "concat",
+  "join",
+  "padEnd",
+  "padStart",
+  "repeat",
+  "replace",
+  "replaceAll",
+  "slice",
+  "substring",
+  "toLocaleLowerCase",
+  "toLocaleUpperCase",
+  "toLowerCase",
+  "toString",
+  "toUpperCase",
+  "trim",
+  "trimEnd",
+  "trimStart",
+];
 
 const MESSAGE_KEY = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*:[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 const ENTITY = /&(?:[A-Za-z]+|#\d+|#x[0-9A-Fa-f]+);/g;
@@ -127,8 +184,9 @@ export function isUserText(text: string): boolean {
 }
 
 const IGNORE_LINE = /i18n-ignore(?!-file)(:\s*\S)?/;
-const IGNORE_FILE = /(?:\/\/|\/\*)\s*i18n-ignore-file:\s*\S/;
-const COMMENT_LINE = /^\s*(?:\/\/|\/\*|\{\s*\/\*)/;
+const IGNORE_FILE = /i18n-ignore-file:\s*\S/;
+const MISSING_REASON =
+  "i18n-ignore needs a reason: write `i18n-ignore: <why this is not text>`";
 
 function scriptKind(fileName: string): ts.ScriptKind {
   if (fileName.endsWith(".tsx")) return ts.ScriptKind.TSX;
@@ -157,13 +215,94 @@ function shorten(text: string): string {
   return flat.length > 60 ? `${flat.slice(0, 57)}...` : flat;
 }
 
-/** Finds hard-coded user-visible text in one user interface source file. */
+function jsxAttributeName(name: ts.JsxAttributeName): string {
+  return ts.isIdentifier(name) ? name.text : `${name.namespace.text}:${name.name.text}`;
+}
+
+/** An i18n-ignore comment: the lines it covers and whether it gives a reason. */
+interface IgnoreComment {
+  /** 0-based lines the comment starts and ends on. */
+  readonly first: number;
+  readonly last: number;
+  /** True if nothing but the comment (and a JSX "{") is on its first line. */
+  readonly alone: boolean;
+  readonly hasReason: boolean;
+}
+
+/**
+ * Applies the i18n-ignore comments of a file to the findings at given positions.
+ * A comment covers the line (or lines) it is on and, if it stands alone on its
+ * line, the next line.
+ */
+class Ignores {
+  private readonly comments: IgnoreComment[] = [];
+  readonly findings: Finding[] = [];
+  private readonly seen = new Set<number>();
+
+  private readonly lineOf: (position: number) => [number, number];
+
+  constructor(lineOf: (position: number) => [number, number]) {
+    this.lineOf = lineOf;
+  }
+
+  addComment(first: number, last: number, alone: boolean, text: string): void {
+    const match = IGNORE_LINE.exec(text);
+    if (match === null) return;
+    this.comments.push({ first, last, alone, hasReason: match[1] !== undefined });
+  }
+
+  report(position: number, text: string, reason: string): void {
+    if (this.seen.has(position)) return; // reached twice, for example through a constant
+    this.seen.add(position);
+    const [line, column] = this.lineOf(position);
+    const comment = this.comments.find(
+      (c) => (line >= c.first && line <= c.last) || (c.alone && line === c.last + 1),
+    );
+    if (comment?.hasReason === true) return;
+    this.findings.push({
+      line: line + 1,
+      column: column + 1,
+      text: shorten(text),
+      reason: comment === undefined ? reason : MISSING_REASON,
+    });
+  }
+}
+
+/** Every comment in a parsed file, JSX comments included, once each. */
+function commentsOf(file: ts.SourceFile): ts.CommentRange[] {
+  const text = file.text;
+  const found = new Map<number, ts.CommentRange>();
+  const add = (ranges: ts.CommentRange[] | undefined): void => {
+    for (const range of ranges ?? []) found.set(range.pos, range);
+  };
+  // The trivia before a node starts at node.pos. TypeScript calls comments before
+  // the first line break there "trailing" and those after it "leading", so both
+  // are read.
+  const around = (position: number): void => {
+    add(ts.getTrailingCommentRanges(text, position));
+    add(ts.getLeadingCommentRanges(text, position));
+  };
+  const visit = (node: ts.Node): void => {
+    around(node.pos);
+    around(node.end);
+    // {/* comment */} in JSX: an expression container with only a comment inside.
+    if (ts.isJsxExpression(node) && node.expression === undefined) {
+      around(node.getStart(file) + 1);
+    }
+    ts.forEachChild(node, visit);
+  };
+  around(0);
+  visit(file);
+  return [...found.values()];
+}
+
+/** Finds hard-coded user-visible text in one user interface file (script or HTML). */
 export function findHardcodedText(
   fileName: string,
   source: string,
   options: ScanOptions = {},
 ): Finding[] {
-  if (IGNORE_FILE.test(source)) return [];
+  if (/\.html?$/i.test(fileName)) return findHardcodedHtmlText(source, options);
 
   const attributes = new Set([...TEXT_ATTRIBUTES, ...(options.textAttributes ?? [])]);
   const calls = new Map(TEXT_CALLS);
@@ -177,33 +316,30 @@ export function findHardcodedText(
     scriptKind(fileName),
   );
   const lines = source.split(/\r?\n/);
-  const findings: Finding[] = [];
-
-  const report = (position: number, text: string, reason: string): void => {
+  const ignores = new Ignores((position) => {
     const { line, character } = file.getLineAndCharacterOfPosition(position);
-    const here = lines[line] ?? "";
-    const above = line > 0 ? (lines[line - 1] ?? "") : "";
-    // The line above counts only if it holds nothing but the comment, so a trailing
-    // opt-out on one line does not also cover the next.
-    const candidates = COMMENT_LINE.test(above) ? [here, above] : [here];
-    for (const candidate of candidates) {
-      const ignore = IGNORE_LINE.exec(candidate);
-      if (ignore === null) continue;
-      if (ignore[1] !== undefined) return;
-      findings.push({
-        line: line + 1,
-        column: character + 1,
-        text: shorten(text),
-        reason: "i18n-ignore needs a reason: write `i18n-ignore: <why this is not text>`",
-      });
-      return;
-    }
-    findings.push({ line: line + 1, column: character + 1, text: shorten(text), reason });
-  };
+    return [line, character];
+  });
+  for (const range of commentsOf(file)) {
+    const text = source.slice(range.pos, range.end);
+    if (IGNORE_FILE.test(text)) return [];
+    const first = file.getLineAndCharacterOfPosition(range.pos);
+    const last = file.getLineAndCharacterOfPosition(range.end);
+    const before = (lines[first.line] ?? "").slice(0, first.character);
+    ignores.addComment(first.line, last.line, /^\s*\{?\s*$/.test(before), text);
+  }
+  const report = ignores.report.bind(ignores);
 
-  // Strings in an expression that end up as the expression's value: literals,
-  // template strings, both sides of ?:, &&, ||, ?? and +, and array elements.
-  const checkValue = (expression: ts.Expression, reason: string): void => {
+  // Strings in an expression that end up as the expression's value. `seen` stops
+  // cycles through constants and functions that refer to each other.
+  const checkValue = (
+    expression: ts.Expression,
+    reason: string,
+    seen: Set<ts.Node> = new Set(),
+  ): void => {
+    if (seen.has(expression)) return;
+    seen.add(expression);
+    const again = (next: ts.Expression): void => checkValue(next, reason, seen);
     if (
       ts.isStringLiteral(expression) ||
       ts.isNoSubstitutionTemplateLiteral(expression)
@@ -215,9 +351,10 @@ export function findHardcodedText(
         expression.head.text +
         expression.templateSpans.map((s) => ` ${s.literal.text}`).join("");
       if (isUserText(literal)) report(expression.getStart(), literal, reason);
+      for (const span of expression.templateSpans) again(span.expression);
     } else if (ts.isConditionalExpression(expression)) {
-      checkValue(expression.whenTrue, reason);
-      checkValue(expression.whenFalse, reason);
+      again(expression.whenTrue);
+      again(expression.whenFalse);
     } else if (ts.isBinaryExpression(expression)) {
       const op = expression.operatorToken.kind;
       if (
@@ -226,18 +363,63 @@ export function findHardcodedText(
         op === ts.SyntaxKind.QuestionQuestionToken ||
         op === ts.SyntaxKind.PlusToken
       ) {
-        checkValue(expression.left, reason);
-        checkValue(expression.right, reason);
+        again(expression.left);
+        again(expression.right);
       }
     } else if (
       ts.isParenthesizedExpression(expression) ||
       ts.isAsExpression(expression) ||
       ts.isSatisfiesExpression(expression) ||
-      ts.isNonNullExpression(expression)
+      ts.isNonNullExpression(expression) ||
+      ts.isTypeAssertionExpression(expression)
     ) {
-      checkValue(expression.expression, reason);
+      again(expression.expression);
     } else if (ts.isArrayLiteralExpression(expression)) {
-      for (const element of expression.elements) checkValue(element, reason);
+      for (const element of expression.elements) {
+        if (!ts.isOmittedExpression(element) && !ts.isSpreadElement(element)) {
+          again(element);
+        }
+      }
+    } else if (ts.isCallExpression(expression)) {
+      const callee = expression.expression;
+      if (ts.isPropertyAccessExpression(callee)) {
+        if (STRING_METHODS.includes(callee.name.text)) {
+          again(callee.expression);
+          if (callee.name.text === "concat") expression.arguments.forEach(again);
+        }
+      } else if (ts.isIdentifier(callee)) {
+        if (callee.text === "String" && expression.arguments[0] !== undefined) {
+          again(expression.arguments[0]);
+        }
+        const declaration = resolve(callee);
+        const fn = declaration && functionOf(declaration);
+        if (fn !== undefined && !seen.has(fn)) {
+          seen.add(fn);
+          for (const value of returnedValues(fn)) again(value);
+        }
+      }
+    } else if (ts.isIdentifier(expression)) {
+      const declaration = resolve(expression);
+      if (
+        declaration !== undefined &&
+        ts.isVariableDeclaration(declaration) &&
+        declaration.initializer !== undefined &&
+        functionOf(declaration) === undefined
+      ) {
+        again(declaration.initializer);
+      }
+    } else if (
+      ts.isPropertyAccessExpression(expression) ||
+      ts.isElementAccessExpression(expression)
+    ) {
+      const property = ts.isPropertyAccessExpression(expression)
+        ? expression.name.text
+        : ts.isStringLiteralLike(expression.argumentExpression)
+          ? expression.argumentExpression.text
+          : undefined;
+      const object = literalObjectOf(expression.expression);
+      const value = property === undefined ? undefined : propertyValue(object, property);
+      if (value !== undefined) again(value);
     }
   };
 
@@ -252,10 +434,13 @@ export function findHardcodedText(
         checkValue(node.expression, "text in JSX");
       }
     } else if (ts.isJsxAttribute(node)) {
-      const name = ts.isIdentifier(node.name)
-        ? node.name.text
-        : `${node.name.namespace.text}:${node.name.name.text}`;
-      if (attributes.has(name) && node.initializer !== undefined) {
+      const name = jsxAttributeName(node.name);
+      const shown =
+        attributes.has(name) ||
+        isTextName(name) ||
+        name === "children" ||
+        (name === "value" && isButtonInput(node));
+      if (shown && node.initializer !== undefined) {
         const reason = `text in the "${name}" attribute`;
         if (ts.isStringLiteral(node.initializer)) checkValue(node.initializer, reason);
         else if (ts.isJsxExpression(node.initializer) && node.initializer.expression) {
@@ -271,6 +456,24 @@ export function findHardcodedText(
       const name = nameOf(node.name);
       if (name !== undefined && isTextName(name)) {
         checkValue(node.initializer, `text in the "${name}" variable`);
+      }
+    } else if (
+      (ts.isPropertyDeclaration(node) ||
+        ts.isParameter(node) ||
+        ts.isBindingElement(node)) &&
+      node.initializer !== undefined
+    ) {
+      // Class fields (label = "Save") and default values ({ text = "Save" }).
+      const key =
+        ts.isBindingElement(node) && node.propertyName !== undefined
+          ? node.propertyName
+          : node.name;
+      const name =
+        ts.isObjectBindingPattern(key) || ts.isArrayBindingPattern(key)
+          ? undefined
+          : nameOf(key);
+      if (name !== undefined && isTextName(name)) {
+        checkValue(node.initializer, `text in the "${name}" default value`);
       }
     } else if (
       ts.isBinaryExpression(node) &&
@@ -302,7 +505,11 @@ export function findHardcodedText(
         }
       } else if (name !== undefined) {
         const positions = calls.get(name);
-        if (positions !== undefined) {
+        const skip =
+          SHARED_NAME_CALLS.includes(name) &&
+          ts.isPropertyAccessExpression(node.expression) &&
+          isNameValueReceiver(node.expression.expression);
+        if (positions !== undefined && !skip) {
           node.arguments.forEach((argument, index) => {
             if (positions === "all" || positions.includes(index)) {
               checkValue(argument, `text passed to ${name}()`);
@@ -317,19 +524,377 @@ export function findHardcodedText(
         checkValue(first, `text passed to new ${name}()`);
       }
     }
+    // Functions, methods and getters named like text: what they return is text.
+    const fnName = textFunctionName(node);
+    if (fnName !== undefined) {
+      const fn = node as ts.FunctionLikeDeclaration;
+      for (const value of returnedValues(fn)) {
+        checkValue(value, `text returned by "${fnName}"`);
+      }
+    }
     ts.forEachChild(node, visit);
   };
 
   visit(file);
-  return findings;
+  return sorted(ignores.findings);
+}
+
+function sorted(findings: readonly Finding[]): Finding[] {
+  return [...findings].sort((a, b) => a.line - b.line || a.column - b.column);
+}
+
+/** True if a JSX "value" attribute belongs to <input type="submit|button|reset">. */
+function isButtonInput(attribute: ts.JsxAttribute): boolean {
+  const element = attribute.parent.parent;
+  if (!ts.isJsxOpeningElement(element) && !ts.isJsxSelfClosingElement(element)) {
+    return false;
+  }
+  if (element.tagName.getText() !== "input") return false;
+  return element.attributes.properties.some(
+    (other) =>
+      ts.isJsxAttribute(other) &&
+      jsxAttributeName(other.name) === "type" &&
+      other.initializer !== undefined &&
+      ts.isStringLiteral(other.initializer) &&
+      BUTTON_INPUT_TYPES.includes(other.initializer.text.toLowerCase()),
+  );
+}
+
+/** The name of a function-like node whose name says it returns text. */
+function textFunctionName(node: ts.Node): string | undefined {
+  let name: string | undefined;
+  if (
+    (ts.isFunctionDeclaration(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isGetAccessorDeclaration(node)) &&
+    node.name !== undefined
+  ) {
+    name = nameOf(node.name);
+  } else if (
+    (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
+    (ts.isVariableDeclaration(node.parent) || ts.isPropertyAssignment(node.parent)) &&
+    node.parent.initializer === node
+  ) {
+    name = nameOf(node.parent.name);
+  }
+  return name !== undefined && isTextName(name) ? name : undefined;
+}
+
+/** The function a declaration holds: a function declaration or a variable with one. */
+function functionOf(declaration: ts.Node): ts.FunctionLikeDeclaration | undefined {
+  if (ts.isFunctionDeclaration(declaration)) return declaration;
+  if (ts.isVariableDeclaration(declaration) && declaration.initializer !== undefined) {
+    let init: ts.Expression = declaration.initializer;
+    while (ts.isParenthesizedExpression(init)) init = init.expression;
+    if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return init;
+  }
+  return undefined;
+}
+
+/** The expressions a function returns (not those of functions nested in it). */
+function returnedValues(fn: ts.FunctionLikeDeclaration): ts.Expression[] {
+  const body = fn.body;
+  if (body === undefined) return [];
+  if (!ts.isBlock(body)) return [body];
+  const values: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node) || ts.isClassLike(node)) return;
+    if (ts.isReturnStatement(node) && node.expression !== undefined) {
+      values.push(node.expression);
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(body, visit);
+  return values;
 }
 
 /**
- * Finds catalogs written inline, as object literals passed to defineMessages().
- * Catalogs must live in message files (src/messages/nb.ts and en.ts), where the
- * check can compare the languages.
+ * The declaration an identifier refers to, if it is a variable or function declared
+ * in an enclosing block of the same file. A parameter, a catch variable or an import
+ * gives undefined: their values are not known here.
  */
-export function findInlineCatalogs(fileName: string, source: string): Finding[] {
+function resolve(identifier: ts.Identifier): ts.Node | undefined {
+  const name = identifier.text;
+  for (let node: ts.Node | undefined = identifier.parent; node; node = node.parent) {
+    if (ts.isFunctionLike(node)) {
+      const shadowed = node.parameters.some((parameter) =>
+        bindsName(parameter.name, name),
+      );
+      if (shadowed) return undefined;
+    }
+    if (ts.isCatchClause(node) && node.variableDeclaration !== undefined) {
+      if (bindsName(node.variableDeclaration.name, name)) return undefined;
+    }
+    if (
+      (ts.isForOfStatement(node) ||
+        ts.isForInStatement(node) ||
+        ts.isForStatement(node)) &&
+      node.initializer !== undefined &&
+      ts.isVariableDeclarationList(node.initializer) &&
+      node.initializer.declarations.some((d) => bindsName(d.name, name))
+    ) {
+      return undefined;
+    }
+    if (ts.isBlock(node) || ts.isSourceFile(node) || ts.isModuleBlock(node)) {
+      for (const statement of node.statements) {
+        if (ts.isVariableStatement(statement)) {
+          for (const declaration of statement.declarationList.declarations) {
+            if (ts.isIdentifier(declaration.name) && declaration.name.text === name) {
+              return declaration;
+            }
+            if (bindsName(declaration.name, name)) return undefined; // destructured
+          }
+        } else if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) {
+          return statement;
+        } else if (ts.isImportDeclaration(statement)) {
+          const clause = statement.importClause;
+          if (clause !== undefined && importBinds(clause, name)) return undefined;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function bindsName(binding: ts.BindingName, name: string): boolean {
+  if (ts.isIdentifier(binding)) return binding.text === name;
+  return binding.elements.some(
+    (element) => !ts.isOmittedExpression(element) && bindsName(element.name, name),
+  );
+}
+
+function importBinds(clause: ts.ImportClause, name: string): boolean {
+  if (clause.name?.text === name) return true;
+  const bindings = clause.namedBindings;
+  if (bindings === undefined) return false;
+  if (ts.isNamespaceImport(bindings)) return bindings.name.text === name;
+  return bindings.elements.some((element) => element.name.text === name);
+}
+
+/** The object literal an expression stands for, through local constants. */
+function literalObjectOf(
+  expression: ts.Expression,
+): ts.ObjectLiteralExpression | undefined {
+  let current: ts.Expression = expression;
+  for (let depth = 0; depth < 10; depth += 1) {
+    while (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isSatisfiesExpression(current)
+    ) {
+      current = current.expression;
+    }
+    if (ts.isObjectLiteralExpression(current)) return current;
+    if (!ts.isIdentifier(current)) return undefined;
+    const declaration = resolve(current);
+    if (
+      declaration === undefined ||
+      !ts.isVariableDeclaration(declaration) ||
+      declaration.initializer === undefined
+    ) {
+      return undefined;
+    }
+    current = declaration.initializer;
+  }
+  return undefined;
+}
+
+function propertyValue(
+  object: ts.ObjectLiteralExpression | undefined,
+  property: string,
+): ts.Expression | undefined {
+  for (const element of object?.properties ?? []) {
+    if (ts.isPropertyAssignment(element) && nameOf(element.name) === property) {
+      return element.initializer;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * True if the receiver of an append() call is a FormData, URLSearchParams or
+ * Headers object rather than a DOM node: built with `new FormData()` (or declared
+ * with that type) in this file, reached as `.searchParams` or `.headers`, or named
+ * like one (form, params, query, headers).
+ */
+function isNameValueReceiver(receiver: ts.Expression): boolean {
+  if (ts.isNewExpression(receiver)) {
+    const name = calleeName(receiver.expression);
+    return name !== undefined && NAME_VALUE_TYPES.includes(name);
+  }
+  if (ts.isPropertyAccessExpression(receiver)) {
+    return (
+      NAME_VALUE_RECEIVER.test(receiver.name.text) ||
+      receiver.name.text === "searchParams"
+    );
+  }
+  if (!ts.isIdentifier(receiver)) return false;
+  if (NAME_VALUE_RECEIVER.test(receiver.text)) return true;
+  const declaration = resolveBinding(receiver);
+  if (declaration === undefined) return false;
+  const type = declaration.type;
+  if (type !== undefined && ts.isTypeReferenceNode(type)) {
+    if (NAME_VALUE_TYPES.includes(type.typeName.getText())) return true;
+  }
+  const init = ts.isVariableDeclaration(declaration)
+    ? declaration.initializer
+    : undefined;
+  return init !== undefined && ts.isNewExpression(init) && isNameValueReceiver(init);
+}
+
+/** Like resolve(), but also returns parameters, for their declared type. */
+function resolveBinding(
+  identifier: ts.Identifier,
+): ts.VariableDeclaration | ts.ParameterDeclaration | undefined {
+  const name = identifier.text;
+  for (let node: ts.Node | undefined = identifier.parent; node; node = node.parent) {
+    if (ts.isFunctionLike(node)) {
+      const parameter = node.parameters.find(
+        (p) => ts.isIdentifier(p.name) && p.name.text === name,
+      );
+      if (parameter !== undefined) return parameter;
+    }
+  }
+  const declaration = resolve(identifier);
+  return declaration !== undefined && ts.isVariableDeclaration(declaration)
+    ? declaration
+    : undefined;
+}
+
+// HTML ---------------------------------------------------------------------------
+
+/** Elements whose content is not shown as text. */
+const HTML_RAW_TEXT = ["script", "style", "template", "textarea"];
+
+/**
+ * Finds hard-coded text in an HTML page: text between tags (the <title> and
+ * <noscript> included, <script> and <style> excluded), text attributes (title,
+ * alt, placeholder, aria-label, ...) and the value of button-like inputs.
+ */
+export function findHardcodedHtmlText(
+  source: string,
+  options: ScanOptions = {},
+): Finding[] {
+  const attributes = new Set([...TEXT_ATTRIBUTES, ...(options.textAttributes ?? [])]);
+  const lineStarts = [0];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === "\n") lineStarts.push(i + 1);
+  }
+  const lineOf = (position: number): [number, number] => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if ((lineStarts[middle] ?? 0) <= position) low = middle;
+      else high = middle - 1;
+    }
+    return [low, position - (lineStarts[low] ?? 0)];
+  };
+  const ignores = new Ignores(lineOf);
+
+  for (const match of source.matchAll(/<!--([\s\S]*?)-->/g)) {
+    const text = match[1] ?? "";
+    if (IGNORE_FILE.test(text)) return [];
+    const start = match.index;
+    const [first, column] = lineOf(start);
+    const [last] = lineOf(start + match[0].length);
+    const before = source.slice(start - column, start);
+    ignores.addComment(first, last, /^\s*$/.test(before), text);
+  }
+
+  // Tags, comments and the text between them.
+  const token =
+    /<!--[\s\S]*?-->|<![^>]*>|<\/?([A-Za-z][A-Za-z0-9-]*)((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>/g;
+  const attribute = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+  const report = ignores.report.bind(ignores);
+  const text = (from: number, to: number): void => {
+    const chunk = source.slice(from, to);
+    if (isUserText(chunk)) {
+      report(from + Math.max(chunk.search(/\S/), 0), chunk, "text in HTML");
+    }
+  };
+  let position = 0;
+  let rawUntil: string | undefined;
+  let inlineScript = false;
+  const extra: Finding[] = [];
+  for (const match of source.matchAll(token)) {
+    const start = match.index;
+    const tag = match[1]?.toLowerCase();
+    const closing = match[0].startsWith("</");
+    if (rawUntil !== undefined) {
+      if (closing && tag === rawUntil) {
+        if (inlineScript) extra.push(...inlineScriptText(position, start));
+        rawUntil = undefined;
+        inlineScript = false;
+        position = start + match[0].length;
+      }
+      continue;
+    }
+    text(position, start);
+    position = start + match[0].length;
+    if (tag === undefined || closing) continue;
+    if (HTML_RAW_TEXT.includes(tag) && !match[0].endsWith("/>")) rawUntil = tag;
+
+    const values = new Map<string, { value: string; at: number }>();
+    const attributeText = match[2] ?? "";
+    const attributesAt = start + 1 + (match[1]?.length ?? 0);
+    for (const found of attributeText.matchAll(attribute)) {
+      const name = (found[1] ?? "").toLowerCase();
+      const value = found[2] ?? found[3] ?? found[4];
+      if (value === undefined) continue;
+      const valueAt = attributesAt + found.index + found[0].indexOf(value);
+      values.set(name, { value, at: valueAt });
+    }
+    const type = values.get("type")?.value.toLowerCase();
+    inlineScript =
+      rawUntil === "script" &&
+      !values.has("src") &&
+      (type === undefined || /^(?:module|(?:text|application)\/javascript)$/.test(type));
+    const buttonInput =
+      tag === "input" &&
+      BUTTON_INPUT_TYPES.includes(values.get("type")?.value.toLowerCase() ?? "");
+    for (const [name, { value, at }] of values) {
+      const shown = attributes.has(name) || (name === "value" && buttonInput);
+      if (shown && isUserText(value))
+        report(at, value, `text in the "${name}" attribute`);
+    }
+  }
+  if (rawUntil === undefined) text(position, source.length);
+  return sorted([...ignores.findings, ...extra]);
+
+  // A <script> without src is checked like a script file, with its own comments.
+  function inlineScriptText(from: number, to: number): Finding[] {
+    const [line, column] = lineOf(from);
+    return findHardcodedText("inline.ts", source.slice(from, to), options).map(
+      (finding) => ({
+        ...finding,
+        line: line + finding.line,
+        column: finding.line === 1 ? column + finding.column : finding.column,
+      }),
+    );
+  }
+}
+
+// Message bundles ----------------------------------------------------------------
+
+export interface BundleRules {
+  /** The package's messages folder, relative to the package ("src/messages"). */
+  readonly messages: string;
+  /** The interface languages; each catalog comes from <messages>/<language>.ts. */
+  readonly locales: readonly string[];
+}
+
+/**
+ * Finds defineMessages() calls that the catalog check cannot see: a call outside
+ * the package's messages folder, a catalog written inline as an object literal, or
+ * a catalog that is not imported from the message file of its language
+ * (<messages>/<language>.ts). `fileName` is relative to the package.
+ */
+export function findBundleProblems(
+  fileName: string,
+  source: string,
+  rules: BundleRules,
+): Finding[] {
   if (!source.includes("defineMessages")) return [];
   const file = ts.createSourceFile(
     fileName,
@@ -339,31 +904,98 @@ export function findInlineCatalogs(fileName: string, source: string): Finding[] 
     scriptKind(fileName),
   );
   const findings: Finding[] = [];
+  const add = (node: ts.Node, text: string, reason: string): void => {
+    const { line, character } = file.getLineAndCharacterOfPosition(node.getStart(file));
+    findings.push({ line: line + 1, column: character + 1, text, reason });
+  };
+  const folder = fileName.includes("/")
+    ? fileName.slice(0, fileName.lastIndexOf("/"))
+    : ".";
+  const inMessages = folder === rules.messages;
+
+  // Local names of defineMessages (import { defineMessages as dm } counts) and the
+  // module each default or named import comes from.
+  const defineNames = new Set(["defineMessages"]);
+  const defaultFrom = new Map<string, string>();
+  for (const statement of file.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      continue;
+    }
+    const from = statement.moduleSpecifier.text;
+    const clause = statement.importClause;
+    if (clause?.name !== undefined) defaultFrom.set(clause.name.text, from);
+    const bindings = clause?.namedBindings;
+    if (bindings !== undefined && ts.isNamedImports(bindings)) {
+      for (const element of bindings.elements) {
+        if ((element.propertyName ?? element.name).text === "defineMessages") {
+          defineNames.add(element.name.text);
+        }
+      }
+    }
+  }
+
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && calleeName(node.expression) === "defineMessages") {
+    const name = ts.isCallExpression(node) ? calleeName(node.expression) : undefined;
+    if (ts.isCallExpression(node) && name !== undefined && defineNames.has(name)) {
+      if (!inMessages) {
+        add(
+          node,
+          name,
+          `defineMessages() outside ${rules.messages}; create bundles in ${rules.messages}/index.ts, where the check compares the languages`,
+        );
+      }
       const catalogs = node.arguments[1];
-      if (catalogs !== undefined && ts.isObjectLiteralExpression(catalogs)) {
+      if (catalogs === undefined || !ts.isObjectLiteralExpression(catalogs)) {
+        if (catalogs !== undefined) {
+          add(catalogs, catalogs.getText(file), "catalogs must be given as { nb, en }");
+        }
+      } else {
         for (const property of catalogs.properties) {
-          if (
-            ts.isPropertyAssignment(property) &&
-            ts.isObjectLiteralExpression(property.initializer)
-          ) {
-            const { line, character } = file.getLineAndCharacterOfPosition(
-              property.getStart(),
-            );
-            findings.push({
-              line: line + 1,
-              column: character + 1,
-              text: property.name.getText(file),
-              reason:
-                "catalog written inline; put it in a message file (src/messages/<language>.ts)",
-            });
-          }
+          checkCatalogProperty(property);
         }
       }
     }
     ts.forEachChild(node, visit);
   };
+
+  const checkCatalogProperty = (property: ts.ObjectLiteralElementLike): void => {
+    const language = property.name === undefined ? undefined : nameOf(property.name);
+    const shown = property.name?.getText(file) ?? property.getText(file);
+    if (
+      ts.isPropertyAssignment(property) &&
+      ts.isObjectLiteralExpression(property.initializer)
+    ) {
+      add(
+        property,
+        shown,
+        `catalog written inline; put it in a message file (${rules.messages}/<language>.ts)`,
+      );
+      return;
+    }
+    const value = ts.isShorthandPropertyAssignment(property)
+      ? property.name
+      : ts.isPropertyAssignment(property)
+        ? property.initializer
+        : undefined;
+    const expected = language === undefined ? undefined : `./${language}.ts`;
+    const from =
+      value !== undefined && ts.isIdentifier(value)
+        ? defaultFrom.get(value.text)
+        : undefined;
+    if (language === undefined || !rules.locales.includes(language)) {
+      add(property, shown, `not an interface language (${rules.locales.join(", ")})`);
+    } else if (inMessages && from !== expected) {
+      add(
+        property,
+        shown,
+        `the ${language} catalog must be the default export of ${expected}, imported in this file`,
+      );
+    }
+  };
+
   visit(file);
   return findings;
 }

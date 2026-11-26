@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  findBundleProblems,
   findHardcodedText,
-  findInlineCatalogs,
   isTextName,
   isUserText,
 } from "./i18n-hardcoded.ts";
+
+const fixture = (name: string): string =>
+  readFileSync(new URL(`fixtures/${name}.txt`, import.meta.url), "utf8");
 
 const texts = (fileName: string, source: string): string[] =>
   findHardcodedText(fileName, source).map((finding) => finding.text);
@@ -104,14 +108,137 @@ describe("findHardcodedText in plain DOM code", () => {
   });
 
   it("accepts extra attributes and calls from the package configuration", () => {
-    const source = ['<List emptyText="None" />;', 'showToast("Copied");'].join("\n");
+    const source = ['<List fallback="None" />;', 'showToast("Copied");'].join("\n");
     expect(texts("x.tsx", source)).toEqual([]);
     expect(
       findHardcodedText("x.tsx", source, {
-        textAttributes: ["emptyText"],
+        textAttributes: ["fallback"],
         textCalls: ["showToast"],
       }).map((f) => f.text),
     ).toEqual(["None", "Copied"]);
+  });
+});
+
+describe("findHardcodedText in an ordinary React component", () => {
+  // The fixtures are .txt files, so they are not type-checked or built.
+  it("finds the text in the places React code usually has it", () => {
+    const findings = findHardcodedText("Toolbar.tsx", fixture("Toolbar.tsx"));
+    expect(findings.map((f) => `${f.line}: ${f.reason}: ${f.text}`)).toEqual([
+      '34: text in the "text" attribute: Save', // const names = { save: "Save" }
+      '35: text in the "emptyHint" variable: Nothing selected',
+      "38: text in JSX: No selection", // returned by selectionSummary()
+      "38: text in JSX: selected",
+      '44: text in the "label" variable: items',
+      '45: text in the "text" attribute: Hidden?', // the marker is in a string
+      '55: text in the "text" attribute: Save',
+      '56: text in the "confirmLabel" attribute: Really delete?',
+      '57: text in the "children" attribute: Delete everything',
+      '58: text in the "text" attribute: selected',
+      "58: text in JSX: element",
+      "58: text in JSX: elements",
+      '59: text in the "value" attribute: Send',
+      "66: text in JSX: Undo",
+      "66: text in JSX: Redo",
+      '68: text in the "title" attribute: Working',
+      "68: text in JSX: files",
+      '69: text in the "alt" attribute: Galatsa logo',
+      "95: text passed to append(): New item",
+    ]);
+  });
+
+  it("finds text in a plain .ts file of menu definitions and text helpers", () => {
+    const findings = findHardcodedText("menu.ts", fixture("menu.ts"));
+    expect(findings.map((f) => `${f.line}: ${f.reason}: ${f.text}`)).toEqual([
+      '8: text in the "label" property: Save',
+      '9: text in the "label" property: Open file…',
+      '9: text in the "tooltip" property: Open a presentation',
+      '13: text returned by "statusText": Saving…',
+      '13: text returned by "statusText": All changes saved',
+    ]);
+  });
+
+  it("follows local constants, objects and functions into text places", () => {
+    const source = [
+      'const greeting = "Hello";',
+      'const words = { yes: "Yes", no: "No" };',
+      "function pick(ok: boolean) {",
+      '  const inner = () => "Inner";',
+      '  return ok ? words.yes : words["no"];',
+      "}",
+      "export const A = ({ who }: { who: string }) => (",
+      "  <p title={greeting}>",
+      "    {pick(true)} {who} {greeting.toUpperCase()} {[who, 'and more'].join(', ')}",
+      "  </p>",
+      ");",
+    ].join("\n");
+    expect(texts("A.tsx", source)).toEqual(["Hello", "Yes", "No", "and more"]);
+  });
+
+  it("does not follow parameters, shadowed names or imports", () => {
+    const source = [
+      'import { label as imported } from "./x.ts";',
+      'const word = "Outer";',
+      "export function A({ word }: { word: string }) {",
+      "  return <p>{word} {imported}</p>;",
+      "}",
+      "export function B() {",
+      '  for (const word of ["x"]) void word;',
+      "  return <p>{(() => word)()}</p>;",
+      "}",
+    ].join("\n");
+    expect(texts("A.tsx", source)).toEqual([]);
+  });
+
+  it("finds text in class fields and default values", () => {
+    const source = [
+      "class Dialog {",
+      '  title = "Settings";',
+      '  get okLabel() { return "Apply"; }',
+      "}",
+      'export function Field({ placeholder = "Type here", id = "field" }) {',
+      "  return <input placeholder={placeholder} id={id} />;",
+      "}",
+      'function notify(message = "Done") {',
+      "  alert(message);",
+      "}",
+    ].join("\n");
+    expect(texts("D.tsx", source)).toEqual(["Settings", "Apply", "Type here", "Done"]);
+  });
+
+  it("checks append() only where it inserts text into the DOM", () => {
+    const source = [
+      "export function f(el: Element, data: FormData, q: URLSearchParams, url: URL) {",
+      '  data.append("title", "Report");',
+      '  q.append("sort", "Name");',
+      '  url.searchParams.append("view", "Grid");',
+      '  new Headers().append("Accept", "text/html");',
+      "  const uploadForm = new FormData();",
+      '  uploadForm.append("name", "Draft");',
+      '  el.append("Visible text");',
+      '  el.after("After text");',
+      "}",
+    ].join("\n");
+    expect(texts("f.ts", source)).toEqual(["Visible text", "After text"]);
+  });
+});
+
+describe("findHardcodedText in HTML", () => {
+  it("finds text, text attributes and button values, and honours comments", () => {
+    const findings = findHardcodedText("index.html", fixture("index.html"));
+    expect(findings.map((f) => `${f.line}:${f.column}: ${f.reason}: ${f.text}`)).toEqual([
+      "8:12: text in HTML: Presentation editor",
+      "15:15: text in HTML: This program needs JavaScript.",
+      '16:31: text in the "aria-label" attribute: Canvas',
+      '18:48: text in the "placeholder" attribute: Search',
+      '19:35: text in the "value" attribute: Go',
+      '20:36: text in the "title" attribute: Close',
+      '26:24: text assigned to "title": Set by script',
+    ]);
+  });
+
+  it("skips a page with i18n-ignore-file", () => {
+    const source = "<!-- i18n-ignore-file: test page --><p>Hello</p>";
+    expect(texts("page.html", source)).toEqual([]);
   });
 });
 
@@ -128,6 +255,16 @@ describe("opting out", () => {
       ");",
     ].join("\n");
     expect(texts("C.tsx", source)).toEqual(["Visible"]);
+  });
+
+  it("only counts i18n-ignore in comments, not in strings", () => {
+    const source = [
+      'const note = "i18n-ignore: not a comment"; el.textContent = "Shown";',
+      'el.title = "Hidden"; // i18n-ignore: a real comment',
+      'const s = "// i18n-ignore-file: not a comment either";',
+      'el.textContent = "Also shown";',
+    ].join("\n");
+    expect(texts("x.ts", source)).toEqual(["Shown", "Also shown"]);
   });
 
   it("requires a reason", () => {
@@ -166,17 +303,69 @@ describe("helpers", () => {
   });
 });
 
-describe("findInlineCatalogs", () => {
-  it("finds catalogs written inline in defineMessages()", () => {
+describe("findBundleProblems", () => {
+  const rules = { messages: "src/messages", locales: ["nb", "en"] };
+  const problems = (file: string, lines: string[]): [number, string, string][] =>
+    findBundleProblems(file, lines.join("\n"), rules).map((f) => [
+      f.line,
+      f.text,
+      f.reason,
+    ]);
+
+  it("accepts a bundle made from the message files in the messages folder", () => {
     const source = [
       'import { defineMessages } from "@galatsa/i18n";',
-      'import nb from "./messages/nb.ts";',
-      'export const ok = defineMessages("a", { nb, en: nb });',
+      'import en from "./en.ts";',
+      'import nb from "./nb.ts";',
+      'export const messages = defineMessages("editor", { nb, en });',
+    ];
+    expect(problems("src/messages/index.ts", source)).toEqual([]);
+  });
+
+  it("finds catalogs written inline", () => {
+    const source = [
+      'import { defineMessages } from "@galatsa/i18n";',
       'export const bad = defineMessages("b", { nb: { x: "X" }, en: { x: "X" } });',
-    ].join("\n");
-    expect(findInlineCatalogs("m.ts", source).map((f) => [f.line, f.text])).toEqual([
-      [4, "nb"],
-      [4, "en"],
+    ];
+    expect(problems("src/messages/index.ts", source).map(([l, t]) => [l, t])).toEqual([
+      [2, "nb"],
+      [2, "en"],
+    ]);
+  });
+
+  it("finds bundles made outside the messages folder", () => {
+    const source = [
+      'import { defineMessages as dm } from "@galatsa/i18n";',
+      'import nb from "./locales/nb.ts";',
+      'import en from "./locales/en.ts";',
+      'export const messages = dm("editor", { nb, en });',
+    ];
+    const found = problems("src/locales.ts", source);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.[2]).toMatch(/^defineMessages\(\) outside src\/messages/);
+  });
+
+  it("finds catalogs that do not come from their language's file", () => {
+    const source = [
+      'import { defineMessages } from "@galatsa/i18n";',
+      'import en from "./en.ts";',
+      'import nb from "./nb.ts";',
+      'import { extra } from "./ids.ts";',
+      'export const a = defineMessages("a", { nb, en: nb });',
+      'export const b = defineMessages("b", { nb: extra, en, de: en });',
+    ];
+    expect(problems("src/messages/index.ts", source)).toEqual([
+      [
+        5,
+        "en",
+        "the en catalog must be the default export of ./en.ts, imported in this file",
+      ],
+      [
+        6,
+        "nb",
+        "the nb catalog must be the default export of ./nb.ts, imported in this file",
+      ],
+      [6, "de", "not an interface language (nb, en)"],
     ]);
   });
 });

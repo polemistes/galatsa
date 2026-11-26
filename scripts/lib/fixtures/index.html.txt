@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- A test fixture for scripts/lib/i18n-hardcoded.test.ts, parsed as index.html. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Presentation editor</title>
+    <link rel="icon" href="/favicon.svg" />
+    <style>
+      body::before { content: "Not text in HTML"; }
+    </style>
+  </head>
+  <body>
+    <noscript>This program needs JavaScript.</noscript>
+    <div id="app" aria-label="Canvas" data-mode="edit"></div>
+    <form>
+      <input type="text" name="q" placeholder="Search" value="query" />
+      <input type="submit" value="Go" />
+      <button type="button" title='Close'>&times;</button>
+    </form>
+    <!-- i18n-ignore: the product name is not translated -->
+    <footer>Galatsa</footer>
+    <p>&copy; 2026 &middot; 100 %</p>
+    <script type="module">
+      document.title = "Set by script";
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
