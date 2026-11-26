@@ -1,0 +1,27 @@
+engine konva, 2775 frames, run 58866.84 ms, load 10096.76 ms
+frame interval mean 21.21 ms, p50 17.10 ms, p95 66.44 ms, p99 83.68 ms, max 132.88 ms
+frames over 33 ms: 278, over 100 ms: 7, over 16.7 ms: 1647
+callback interval (wall clock) p95 65.44 ms, max 127.58 ms, over 33 ms: 258, over 100 ms: 6, over 16.7 ms: 1522
+render() mean 7.70 ms, p95 16.64 ms
+text sharp after stop: 13 reported, 0 missing, p50 16.70 ms, max 37.06 ms
+memory (measureUserAgentSpecificMemory): unavailable (performance.measureUserAgentSpecificMemory is not supported by this browser)
+memory (JavaScript heap): unavailable in this browser
+viewport 1280x720 CSS px at 1x, timer step 0.02 ms
+
+Engine counters:
+{
+  "framesDrawn": 2204,
+  "stillFramesDrawn": 14,
+  "framesSkipped": 631,
+  "maxVisibleNodes": 2000,
+  "maxGlyphBoxes": 130,
+  "images": {
+    "decodedBytes": 311513456,
+    "decodes": 485,
+    "decodeMs": 87368,
+    "evictions": 0,
+    "fallbackResizes": 0,
+    "levelsReady": 485
+  },
+  "pixelRatio": 1
+}

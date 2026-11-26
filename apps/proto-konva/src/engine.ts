@@ -129,6 +129,8 @@ export function createKonvaEngine(options: KonvaEngineOptions = {}): KonvaEngine
   let stage: Konva.Stage | undefined;
   let layer: Konva.Layer | undefined;
   let images: ImageLod | undefined;
+  /** Image statistics kept from dispose(), so they can be read after a run. */
+  let finalImageStats: ImageLodStats | null = null;
   let editor: TextEditor | undefined;
   let viewport: BenchViewport = { width: 0, height: 0, devicePixelRatio: 1 };
   let reportTextSharp = (): void => {};
@@ -426,6 +428,7 @@ export function createKonvaEngine(options: KonvaEngineOptions = {}): KonvaEngine
     dispose() {
       editor?.dispose();
       editor = undefined;
+      finalImageStats = images?.stats() ?? finalImageStats;
       images?.dispose();
       images = undefined;
       stage?.destroy();
@@ -501,7 +504,7 @@ export function createKonvaEngine(options: KonvaEngineOptions = {}): KonvaEngine
     stats() {
       return {
         ...counters,
-        images: images?.stats() ?? null,
+        images: images?.stats() ?? finalImageStats,
         pixelRatio: Konva.pixelRatio,
       };
     },
