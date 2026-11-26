@@ -1,0 +1,11 @@
+{
+  // Browser code (src) and the Playwright tests and configs that run in Node share
+  // one environment, as in bench/.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "*.ts"]
+}

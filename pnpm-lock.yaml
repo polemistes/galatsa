@@ -227,6 +227,25 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
 
+  apps/proto-konva:
+    dependencies:
+      '@galatsa/bench':
+        specifier: workspace:*
+        version: link:../../bench
+      konva:
+        specifier: 10.9.1
+        version: 10.9.1
+    devDependencies:
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.65.0
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.6
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.8(@types/node@26.6.6)(yaml@2.9.1)
+
   bench:
     dependencies:
       '@galatsa/core':
@@ -781,6 +800,17 @@ packages:
 
   keyv@5.6.0:
     resolution: {integrity: sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw==}
+
+  konva@10.9.1:
+    resolution: {integrity: sha512-m49x+GatSxEUSvqahYhxpTjgKbtrLtw4P4o4B4iux953ZFpceaK52Ea+CFsAsd7W4I0Y5u6mMoRUsY/eltNZmw==}
+    peerDependencies:
+      canvas: ^3.0.0
+      skia-canvas: ^3.0.0
+    peerDependenciesMeta:
+      canvas:
+        optional: true
+      skia-canvas:
+        optional: true
 
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
@@ -1606,6 +1636,8 @@ snapshots:
   keyv@5.6.0:
     dependencies:
       '@keyv/serialize': 1.1.1
+
+  konva@10.9.1: {}
 
   levn@0.4.1:
     dependencies:
