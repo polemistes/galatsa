@@ -31,7 +31,7 @@ import {
   assetsToWrite,
   type Manifest,
 } from "./layout.ts";
-import { newerVersion, readAssets, readParts, type ReadOptions } from "./read.ts";
+import { newerVersion, readAssets, readParts, type ReadOptions } from "./parts.ts";
 import { writeZip, type ZipEntryInput } from "./zip.ts";
 
 /** Media types that are already compressed and are stored, not deflated. */
