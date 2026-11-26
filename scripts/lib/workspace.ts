@@ -431,6 +431,21 @@ function extensionOf(file: string): string {
   return dot === -1 ? "" : file.slice(dot).toLowerCase();
 }
 
+/**
+ * The name of a property: an identifier, a string key, or a computed key that is a
+ * string (["alias"]). Undefined for other computed keys.
+ */
+function nameOf(name: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name)) return name.text;
+  if (ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text;
+  if (ts.isComputedPropertyName(name)) {
+    let expression = name.expression;
+    while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+    if (ts.isStringLiteralLike(expression)) return expression.text;
+  }
+  return undefined;
+}
+
 /** The fixed text a computed string starts with, or undefined if it is not one. */
 function fixedPrefix(node: ts.Expression): string | undefined {
   if (ts.isParenthesizedExpression(node)) return fixedPrefix(node.expression);
@@ -467,8 +482,30 @@ function astReferences(file: string, text: string): Reference[] {
   };
   const found: Reference[] = [];
   const computed = (node: ts.Expression, what: string, kind: "module" | "path"): void => {
-    if (ts.isNoSubstitutionTemplateLiteral(node)) {
+    while (ts.isParenthesizedExpression(node)) node = node.expression;
+    if (ts.isStringLiteralLike(node)) {
       found.push({ specifier: node.text, kind });
+      return;
+    }
+    // Either branch of a choice may be taken: c ? "./a.ts" : "./b.ts", a || "./b.ts".
+    if (ts.isConditionalExpression(node)) {
+      computed(node.whenTrue, what, kind);
+      computed(node.whenFalse, what, kind);
+      return;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      [
+        ts.SyntaxKind.BarBarToken,
+        ts.SyntaxKind.QuestionQuestionToken,
+        ts.SyntaxKind.AmpersandAmpersandToken,
+        ts.SyntaxKind.CommaToken,
+      ].includes(node.operatorToken.kind)
+    ) {
+      if (node.operatorToken.kind !== ts.SyntaxKind.CommaToken) {
+        computed(node.left, what, kind);
+      }
+      computed(node.right, what, kind);
       return;
     }
     const prefix = fixedPrefix(node);
@@ -504,9 +541,42 @@ function astReferences(file: string, text: string): Reference[] {
       if (!ts.isStringLiteral(first)) computed(first, "new URL()", "path");
     }
     if (ts.isCallExpression(node) && isImportMeta(node.expression, "glob")) {
+      // Relative patterns are taken from the "base" option when it is given.
+      const options = node.arguments[1];
+      const baseProperty =
+        options !== undefined && ts.isObjectLiteralExpression(options)
+          ? options.properties.find(
+              (p) => p.name !== undefined && nameOf(p.name) === "base",
+            )
+          : undefined;
+      let base: string | undefined;
+      if (options !== undefined && !ts.isObjectLiteralExpression(options)) {
+        found.push({
+          specifier: options.getText(source),
+          kind: "unchecked",
+          reason: "import.meta.glob() options that cannot be read",
+        });
+      } else if (baseProperty !== undefined) {
+        const value = ts.isPropertyAssignment(baseProperty)
+          ? baseProperty.initializer
+          : undefined;
+        if (value !== undefined && ts.isStringLiteralLike(value)) {
+          base = value.text;
+        } else {
+          found.push({
+            specifier: baseProperty.getText(source),
+            kind: "unchecked",
+            reason: "an import.meta.glob() base that is not a string",
+          });
+        }
+      }
       for (const pattern of literals(node.arguments[0])) {
         // The fixed part of the pattern decides where it can reach; "!" negates.
-        const fixed = pattern.replace(/^!/, "").replace(/[*?{[].*$/, "");
+        let fixed = pattern.replace(/^!/, "").replace(/[*?{[].*$/, "");
+        if (base !== undefined && !fixed.startsWith("/")) {
+          const joined = posix.join(base, fixed);
+          fixed = /^(?:\.{1,2}\/|\/)/.test(joined) ? joined : `./${joined}`;
+        }
         found.push({ specifier: fixed === "" ? "./" : fixed, kind: "prefix" });
       }
     }
@@ -531,6 +601,11 @@ function styleReferences(text: string): Reference[] {
     /@import\s+(?:url\(\s*)?(["']?)([^"'()\s;]+)\1/g,
     /@(?:use|forward|require)\s+(["'])([^"']+)\1/g,
     /url\(\s*(["']?)([^"'()]+?)\1\s*\)/g,
+    // CSS Modules: composes: a from "./x.css"; @value a from "./x.css";
+    /\bcomposes\s*:[^;{}]*?\bfrom\s+(["'])([^"']+)\1/g,
+    /@value\s[^;{}]*?\bfrom\s+(["'])([^"']+)\1/g,
+    // Tailwind CSS: @config, @plugin, @reference and @source "<path or glob>".
+    /@(?:config|plugin|reference|source)\s+(["'])([^"']+)\1/g,
   ];
   for (const pattern of patterns) {
     for (const match of css.matchAll(pattern)) {
@@ -540,15 +615,27 @@ function styleReferences(text: string): Reference[] {
   return found;
 }
 
+/** Text inside a tag: anything but a quote or ">", or a whole quoted value. */
+const ATTRIBUTE_TEXT = `[^>"']|"[^"]*"|'[^']*'`;
+
 function htmlReferences(text: string): Reference[] {
   const html = text.replace(/<!--[\s\S]*?-->/g, "");
   const found: Reference[] = [];
-  const element =
-    /<(?:script|link|img|source|video|audio|track|iframe|embed|input)\b[^>]*?\s(?:src|href)\s*=\s*(["'])(.*?)\1/gi;
+  // Attributes are skipped as a whole, so a ">" inside a quoted value does not end
+  // the tag. Values may be quoted or not.
+  const element = new RegExp(
+    String.raw`<(?:script|link|img|source|video|audio|track|iframe|embed|input)\b(?:${ATTRIBUTE_TEXT})*?\s(?:src|href)\s*=\s*(?:(["'])(.*?)\1|([^\s"'>]+))`,
+    "gi",
+  );
   for (const match of html.matchAll(element)) {
-    if (match[2] !== undefined) found.push({ specifier: match[2], kind: "path" });
+    const value = match[2] ?? match[3];
+    if (value !== undefined) found.push({ specifier: value, kind: "path" });
   }
-  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+  const inline = new RegExp(
+    String.raw`<script\b((?:${ATTRIBUTE_TEXT})*)>([\s\S]*?)<\/script>`,
+    "gi",
+  );
+  for (const match of html.matchAll(inline)) {
     if (!/\ssrc\s*=/i.test(match[1] ?? "")) {
       found.push(...scriptReferences("inline.ts", match[2] ?? ""));
     }
@@ -563,7 +650,7 @@ function scriptReferences(file: string, text: string): Reference[] {
   return [
     ...importsOf(text).map((specifier): Reference => ({ specifier, kind: "module" })),
     ...astReferences(file, text),
-    ...(VITE_CONFIG_FILE.test(file) ? aliasReferences(file, text) : []),
+    ...(VITE_CONFIG_FILE.test(file) ? configReferences(file, text) : []),
   ];
 }
 
@@ -602,21 +689,25 @@ function tsconfigReferences(text: string): Reference[] {
 }
 
 /**
- * The targets of resolve.alias in a Vite or Vitest config file, as paths relative
- * to the file (or package names). A target is evaluated if it is a string, or
- * path.resolve() / path.join() / fileURLToPath(new URL(..., import.meta.url)) of
+ * The paths in a Vite or Vitest config file, relative to the file (or package
+ * names): the targets of resolve.alias (also under a quoted or computed key), and
+ * publicDir, root and build input entries. A target is evaluated if it is a string,
+ * or path.resolve() / path.join() / fileURLToPath(new URL(..., import.meta.url)) of
  * strings, import.meta.dirname, __dirname and process.cwd() (taken as the folder of
  * the config file, where Vite runs). Anything else is "unchecked".
+ *
+ * This is only the first line of defence: the AGPL guard in every Vite config
+ * (scripts/lib/agpl-guard.ts) checks what the build really reads.
  */
-function aliasReferences(file: string, text: string): Reference[] {
-  if (!text.includes("alias")) return [];
+function configReferences(file: string, text: string): Reference[] {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const found: Reference[] = [];
+  let what = "an alias";
   const unchecked = (node: ts.Node): void => {
     found.push({
       specifier: node.getText(source).replace(/\s+/g, " "),
       kind: "unchecked",
-      reason: "an alias whose target cannot be checked",
+      reason: `${what} whose target cannot be checked`,
     });
   };
   const constants = new Map<string, ts.Expression>();
@@ -646,11 +737,14 @@ function aliasReferences(file: string, text: string): Reference[] {
     }
     return current;
   };
+  // An alias target may be a package name; a path option is always a path.
+  let bareIsPath = false;
   const target = (node: ts.Expression): void => {
     const value = evaluatePath(deref(node), deref);
     if (value === undefined) unchecked(node);
-    else
-      found.push({ specifier: value, kind: value.startsWith(".") ? "path" : "module" });
+    else if (value.startsWith(".")) found.push({ specifier: value, kind: "path" });
+    else if (bareIsPath) found.push({ specifier: `./${value}`, kind: "path" });
+    else found.push({ specifier: value, kind: "module" });
   };
   const entries = (node: ts.Expression): void => {
     const value = deref(node);
@@ -686,13 +780,34 @@ function aliasReferences(file: string, text: string): Reference[] {
       unchecked(node);
     }
   };
+  // Paths: publicDir and root (false turns publicDir off), and the entries of
+  // build.rollupOptions.input / build.rolldownOptions.input.
+  const paths = (node: ts.Expression, many: boolean): void => {
+    const value = deref(node);
+    if (value.kind === ts.SyntaxKind.FalseKeyword) return;
+    if (many && ts.isObjectLiteralExpression(value)) {
+      for (const property of value.properties) {
+        if (ts.isPropertyAssignment(property)) target(property.initializer);
+        else if (ts.isShorthandPropertyAssignment(property)) target(property.name);
+        else unchecked(property);
+      }
+    } else if (many && ts.isArrayLiteralExpression(value)) {
+      for (const element of value.elements) target(element);
+    } else {
+      target(node);
+    }
+  };
   const visit = (node: ts.Node): void => {
-    if (
-      (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === "alias"
-    ) {
-      entries(ts.isPropertyAssignment(node) ? node.initializer : node.name);
+    if (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) {
+      const name = nameOf(node.name);
+      const value = ts.isPropertyAssignment(node) ? node.initializer : node.name;
+      if (name === "alias") {
+        [what, bareIsPath] = ["an alias", false];
+        entries(value);
+      } else if (name === "publicDir" || name === "root" || name === "input") {
+        [what, bareIsPath] = [`a "${name}" option`, true];
+        paths(value, name === "input");
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -864,7 +979,16 @@ function resolveReference(
 
 function packageOf(specifier: string): Resolved {
   const name = packageNameOf(specifier);
-  return name === undefined ? { kind: "none" } : { kind: "package", name };
+  if (name === undefined) return { kind: "none" };
+  // "pkg/../server/x.ts": a package without "exports" lets the path leave it.
+  const rest = specifier.slice(name.length).split("/");
+  if (rest.some((segment) => segment === "." || segment === "..")) {
+    return {
+      kind: "invalid",
+      reason: `"${specifier}" has a "." or ".." segment, which can lead out of the package`,
+    };
+  }
+  return { kind: "package", name };
 }
 
 /** True if a key of package.json "imports" matches the specifier ("#x" or "#x/*"). */

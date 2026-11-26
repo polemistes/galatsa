@@ -4,8 +4,13 @@
 // fields, nothing reaching the AGPL server package (by name, alias, path or a link
 // in pnpm-lock.yaml), no undeclared imports and no relative paths out of a package
 // (scripts, stylesheets, HTML, aliases and symbolic links, compared on real paths),
-// and no .tsx reachable from code that Node runs from source. Rules are in scripts/lib/workspace.ts; docs/new-package.md explains
-// them.
+// and no .tsx reachable from code that Node runs from source. Rules are in
+// scripts/lib/workspace.ts; docs/new-package.md explains them.
+//
+// Those rules read files and can be outwitted, so they are only the first line. The
+// second is the AGPL guard that every Vite and Vitest config must contain
+// (scripts/lib/vite-configs.ts): this check loads each config with Vite and fails if
+// the guard is missing.
 //
 // Usage: node scripts/check-workspace.ts   (or `pnpm check:workspace`)
 
@@ -13,7 +18,15 @@ import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveConfig } from "vite";
 import { parseLockfile, type Lockfile } from "./lib/lockfile.ts";
+import { SERVER_PATH } from "./lib/project-license.ts";
+import {
+  checkBuildScripts,
+  guardProblem,
+  VITE_CONFIG_PATTERN,
+  type PluginLike,
+} from "./lib/vite-configs.ts";
 import { checkWorkspace, type Manifest, type WorkspacePackage } from "./lib/workspace.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -123,7 +136,64 @@ function readLockfile(): Lockfile {
   }
 }
 
-function main(): void {
+/** The server folder where it really is (or would be), as the guard computes it. */
+function realServerDir(): string {
+  const folder = join(root, ...SERVER_PATH.split("/"));
+  try {
+    return realpathSync.native(folder);
+  } catch {
+    return join(realRoot, ...SERVER_PATH.split("/"));
+  }
+}
+
+/**
+ * Loads every Vite and Vitest config of the workspace, and every config a package
+ * script names with --config, with Vite itself (as for `vite build`), and checks
+ * that each contains the AGPL guard. Also applies the script rules.
+ */
+async function checkViteConfigs(
+  packages: readonly WorkspacePackage[],
+): Promise<string[]> {
+  const problems: string[] = [];
+  const configs = new Map<string, string>(); // absolute path -> package folder
+  for (const pkg of packages) {
+    const folder = join(root, ...pkg.path.split("/"));
+    for (const file of pkg.files) {
+      if (VITE_CONFIG_PATTERN.test(file))
+        configs.set(join(folder, ...file.split("/")), folder);
+    }
+    const scripts = checkBuildScripts(pkg);
+    problems.push(...scripts.problems);
+    for (const file of scripts.configs) {
+      const absolute = join(folder, file);
+      if (!existsSync(absolute)) {
+        problems.push(
+          `${pkg.path}/package.json: a script names the config ${file}, which does not exist.`,
+        );
+      } else {
+        configs.set(absolute, folder);
+      }
+    }
+  }
+  const serverDir = realServerDir();
+  for (const [configFile, folder] of configs) {
+    const shown = relative(root, configFile).split(sep).join("/");
+    try {
+      const resolved = await resolveConfig(
+        { configFile, root: folder, logLevel: "silent" },
+        "build",
+        "production",
+      );
+      const problem = guardProblem(resolved.plugins as readonly PluginLike[], serverDir);
+      if (problem !== undefined) problems.push(`${shown} ${problem}.`);
+    } catch (error) {
+      problems.push(`${shown} could not be loaded by Vite: ${String(error)}`);
+    }
+  }
+  return problems;
+}
+
+async function main(): Promise<void> {
   const paths = listPackagePaths();
   if (!paths.includes("."))
     fail(["Workspace check: pnpm did not list the root package."]);
@@ -159,7 +229,10 @@ function main(): void {
     };
   });
 
-  const problems = checkWorkspace(packages, readLockfile());
+  const problems = [
+    ...checkWorkspace(packages, readLockfile()),
+    ...(await checkViteConfigs(packages)),
+  ];
   if (problems.length > 0) {
     fail([
       `Workspace check failed: ${problems.length} problem(s).`,
@@ -170,4 +243,4 @@ function main(): void {
   console.log(`Workspace check passed: ${packages.length} workspace packages.`);
 }
 
-main();
+await main();
