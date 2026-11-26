@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The zip container of a Galatsa file. Writing uses fflate's zipSync. Reading
-// parses the archive directory here and uses only fflate's inflate, so that every
-// entry's CRC-32 is verified and declared sizes are checked before anything is
-// inflated. Sections 9.1, 9.7 and 9.8 of
+// parses the archive directory here and uses only fflate's streaming inflate, so
+// that entries cannot overlap, every entry's CRC-32 is verified, and no entry can
+// inflate past its declared size. Sections 9.1, 9.7 and 9.8 of
 // docs/adr/0001-document-model-and-file-format.md.
 
 import { Inflate, zipSync, type Zippable } from "fflate";
@@ -169,7 +169,7 @@ export function readZip(
   const zip64 = () =>
     new FileFormatError(
       "unsupported",
-      "The file uses zip64, which this version of Galatsa cannot read.",
+      "The file is larger than 4 GiB (zip64) and needs a newer version of Galatsa.",
     );
   if (end >= 20 && u32(end - 20) === SIG_END64_LOCATOR) throw zip64();
   const disk = u16(end + 4);

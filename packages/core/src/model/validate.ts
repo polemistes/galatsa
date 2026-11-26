@@ -437,7 +437,22 @@ function checkAsset(id: string, value: unknown, problems: Problems): void {
   const path = `assets.${id}`;
   if (!ASSET_ID_PATTERN.test(id)) problems.push(`${path}: invalid asset id`);
   if (!isObject(value)) return void problems.push(`${path}: must be an object`);
-  onlyKeys(value, ["mediaType", "byteLength", "name", "width", "height"], path, problems);
+  onlyKeys(
+    value,
+    ["mediaType", "byteLength", "name", "width", "height", "external"],
+    path,
+    problems,
+  );
+  if (value.external !== undefined) {
+    const external = value.external;
+    if (
+      !isObject(external) ||
+      typeof external.path !== "string" ||
+      !isPlainFileName(external.path)
+    ) {
+      problems.push(`${path}.external: must be { path } with a plain file name`);
+    } else onlyKeys(external, ["path"], `${path}.external`, problems);
+  }
   if (typeof value.mediaType !== "string" || !value.mediaType.includes("/")) {
     problems.push(`${path}.mediaType: must be a media type`);
   }
@@ -452,6 +467,17 @@ function checkAsset(id: string, value: unknown, problems: Problems): void {
       problems.push(`${path}.${key}: must be a finite number`);
     }
   }
+}
+
+/** A file name without folders, drive letters or special names. */
+function isPlainFileName(name: string): boolean {
+  return (
+    name.length > 0 &&
+    name.length <= 255 &&
+    [...name].every((ch) => ch >= " " && ch !== "/" && ch !== "\\" && ch !== ":") &&
+    name !== "." &&
+    name !== ".."
+  );
 }
 
 function checkRecord(

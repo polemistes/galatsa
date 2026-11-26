@@ -387,6 +387,11 @@ export interface AssetInfo {
   /** Pixel size of images and video, if known. */
   width?: number;
   height?: number;
+  /**
+   * For very large media kept outside the file: the file name, relative to the
+   * presentation file's folder. The bytes are then not in the archive (section 8.4).
+   */
+  external?: { path: string };
 }
 
 // ---------------------------------------------------------------------------

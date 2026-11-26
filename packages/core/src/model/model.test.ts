@@ -431,6 +431,19 @@ describe("validation", () => {
     expect(validateSnapshot(null)).toEqual(["document: must be an object"]);
   });
 
+  it("accepts external media next to the file, but only by plain file name", () => {
+    const asset = `sha256-${"b".repeat(64)}` as const;
+    const withExternal = (path: string) => {
+      const doc = JSON.parse(JSON.stringify(valid)) as DocumentSnapshot;
+      doc.assets[asset] = { mediaType: "video/mp4", byteLength: 9, external: { path } };
+      return validateSnapshot(doc);
+    };
+    expect(withExternal("film.mp4")).toEqual([]);
+    for (const bad of ["../film.mp4", "a/b.mp4", "C:film", "..", ""]) {
+      expect(withExternal(bad).some((p) => p.includes("external"))).toBe(true);
+    }
+  });
+
   it("rejects order keys outside the syntax, and __proto__ as an id", () => {
     for (const bad of ["", "a", "Z", "abc0", "0", "a1 ", "A" + "0".repeat(26)]) {
       expect(isValidOrderKey(bad)).toBe(false);
