@@ -1,0 +1,11 @@
+{
+  // The engine runs in the browser; the Playwright tests and configs run in Node and
+  // drive a browser. One environment for both: DOM and Node types.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["*.ts", "src/**/*.ts", "tests/**/*.ts"]
+}

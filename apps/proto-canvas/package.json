@@ -1,0 +1,23 @@
+{
+  "name": "@galatsa/proto-canvas",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Throwaway rendering engine prototype: custom Canvas 2D drawing with in-place text editing, measured with the bench",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@galatsa/bench": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "vite": "catalog:"
+  }
+}
