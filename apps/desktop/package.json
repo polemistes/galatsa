@@ -1,0 +1,28 @@
+{
+  "name": "@galatsa/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Desktop shell prototype (Tauri 2) that runs the rendering-engine benchmark with each engine prototype and saves the results",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@galatsa/bench": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "@galatsa/proto-canvas": "workspace:*",
+    "@galatsa/proto-dom": "workspace:*",
+    "@galatsa/proto-konva": "workspace:*",
+    "@tauri-apps/api": "2.12.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "@types/node": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

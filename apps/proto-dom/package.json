@@ -5,6 +5,12 @@
   "description": "Throwaway prototype of a rendering engine built from DOM elements with CSS transforms, measured with the Galatsa benchmark",
   "license": "GPL-3.0-or-later",
   "type": "module",
+  "exports": {
+    "./engines": {
+      "@galatsa/source": "./src/engines.ts",
+      "default": "./src/engines.ts"
+    }
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

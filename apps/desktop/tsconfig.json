@@ -1,0 +1,10 @@
+{
+  // The pages run in the web view (DOM); vite.config.ts runs in Node.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vite/client"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "*.ts"]
+}

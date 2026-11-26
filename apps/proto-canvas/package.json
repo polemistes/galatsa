@@ -5,6 +5,12 @@
   "description": "Throwaway rendering engine prototype: custom Canvas 2D drawing with in-place text editing, measured with the bench",
   "license": "GPL-3.0-or-later",
   "type": "module",
+  "exports": {
+    "./engine": {
+      "@galatsa/source": "./src/engine.ts",
+      "default": "./src/engine.ts"
+    }
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

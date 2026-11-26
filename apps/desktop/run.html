@@ -1,0 +1,41 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!doctype html>
+<html lang="nb">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title></title>
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        font:
+          14px system-ui,
+          sans-serif;
+        background: #fff;
+        color: #111;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .progress {
+        font-weight: 600;
+      }
+      pre {
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+      .stage {
+        outline: 1px solid #ccc;
+        background: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/run.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Galatsa-maaling",
+  "version": "0.1.0",
+  "identifier": "org.galatsa.benchshell",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm run dev",
+    "beforeBuildCommand": "pnpm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Galatsa",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 960,
+        "minHeight": 560,
+        "center": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "license": "GPL-3.0-or-later",
+    "category": "Utility",
+    "shortDescription": "Galatsa rendering-engine measurement",
+    "longDescription": "Runs the Galatsa rendering-engine benchmark in the system web view and saves the results.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

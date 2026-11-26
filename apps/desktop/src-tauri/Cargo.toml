@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Desktop shell prototype: runs the rendering-engine benchmark in the system's web
+# view and samples the memory of the whole program from outside the page.
+
+[package]
+name = "galatsa-bench-shell"
+version = "0.0.0"
+description = "Galatsa desktop shell prototype for running the rendering-engine benchmark"
+license = "GPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[lib]
+name = "galatsa_bench_shell_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.5", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = { version = "=0.40.3", default-features = false, features = ["system"] }
+libc = "0.2"
+
+# Graphics adapter names on macOS and Windows. Not on Linux: sysinfo's Linux GPU
+# code loads NVML and Vulkan into the process (see src/host.rs).
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+sysinfo = { version = "=0.40.3", default-features = false, features = ["system", "gpu"] }
+
+[profile.release]
+# Symbols are useful when someone reports a crash from a measurement run.
+debug = "line-tables-only"

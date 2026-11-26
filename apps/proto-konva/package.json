@@ -5,6 +5,12 @@
   "description": "Throwaway prototype of a Galatsa rendering engine built on Konva, run against the benchmark",
   "license": "GPL-3.0-or-later",
   "type": "module",
+  "exports": {
+    "./engine": {
+      "@galatsa/source": "./src/engine.ts",
+      "default": "./src/engine.ts"
+    }
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
