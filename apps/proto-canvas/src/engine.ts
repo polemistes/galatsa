@@ -86,6 +86,8 @@ export interface CanvasEngine extends BenchEngine {
   endEdit(): void;
   editState(): EditState | null;
   textElement(id: string): TextElement | undefined;
+  /** The current text of a text element (after edits). */
+  textOf(id: string): string | undefined;
   /** CSS pixels in the container for a caret offset of a text (middle of the line). */
   caretScreenPoint(id: string, offset: number): { x: number; y: number } | null;
   /** True while image decodes are running or waiting. */
@@ -638,6 +640,8 @@ export function createCanvasEngine(options: CanvasEngineOptions = {}): CanvasEng
       const item = byId.get(id);
       return item?.el.kind === "text" ? item.el : undefined;
     },
+
+    textOf: (id) => byId.get(id)?.layout?.text,
 
     caretScreenPoint(id, offset) {
       const item = byId.get(id);
