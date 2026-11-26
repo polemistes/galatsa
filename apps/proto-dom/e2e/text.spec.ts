@@ -18,7 +18,7 @@ const Y = 6600;
 const CLIP = { x: 0, y: 0, width: 1280, height: 720 };
 
 const VARIANTS = (
-  process.env["TEXT_VARIANTS"] ?? "dom,dom-screen,dom-layer,dom-layer-wc"
+  process.env["TEXT_VARIANTS"] ?? "dom,dom-wc-text,dom-screen,dom-layer,dom-layer-wc"
 ).split(",");
 
 /** The camera for each zoom: the whole card at 0.1 and 1, the body text start at 8 and 40. */
