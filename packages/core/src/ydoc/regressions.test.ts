@@ -29,7 +29,13 @@ import {
   setVisibility,
 } from "./ops.ts";
 import { createUndoManager, roots } from "./schema.ts";
-import { fromSnapshot, hiddenContent, lineageOf, toSnapshot, yLookup } from "./snapshot.ts";
+import {
+  fromSnapshot,
+  hiddenContent,
+  lineageOf,
+  toSnapshot,
+  yLookup,
+} from "./snapshot.ts";
 import { MergeIdentityError, forkDoc, syncDocs } from "./sync.ts";
 import { seededOptions } from "./testing.ts";
 
@@ -51,9 +57,21 @@ function base(): Y.Doc {
   doc.clientID = 100;
   const o = seededOptions(7);
   initDocument(doc, { id: "base" }, o);
-  addElement(doc, { id: "F", type: FRAME_TYPE, x: 1000, y: 1000, size: { w: 800, h: 600 } }, o);
-  addElement(doc, { id: "G", type: FRAME_TYPE, x: 5000, y: 0, size: { w: 800, h: 600 } }, o);
-  addElement(doc, { id: "X", type: SHAPE, parent: "F", x: 10, y: 10, size: { w: 10, h: 10 } }, o);
+  addElement(
+    doc,
+    { id: "F", type: FRAME_TYPE, x: 1000, y: 1000, size: { w: 800, h: 600 } },
+    o,
+  );
+  addElement(
+    doc,
+    { id: "G", type: FRAME_TYPE, x: 5000, y: 0, size: { w: 800, h: 600 } },
+    o,
+  );
+  addElement(
+    doc,
+    { id: "X", type: SHAPE, parent: "F", x: 10, y: 10, size: { w: 10, h: 10 } },
+    o,
+  );
   addElement(doc, { id: "Y", type: SHAPE, x: 400, y: 200, size: { w: 10, h: 10 } }, o);
   return doc;
 }
@@ -122,59 +140,98 @@ describe("merge identity (section 9.3)", () => {
 
 describe("the JSON form is total and lossless (section 3.4)", () => {
   const cases: Array<[string, (d: Y.Doc) => void]> = [
-    ["a shared map embedded in text", (d) => {
-      const t = new Y.Text();
-      dataMap(d, "E").set("t", t);
-      t.insert(0, "ab");
-      t.insertEmbed(1, new Y.Map());
-    }],
+    [
+      "a shared map embedded in text",
+      (d) => {
+        const t = new Y.Text();
+        dataMap(d, "E").set("t", t);
+        t.insert(0, "ab");
+        t.insertEmbed(1, new Y.Map());
+      },
+    ],
     ["an undefined value", (d) => dataMap(d, "E").set("u", undefined)],
     ["binary data", (d) => dataMap(d, "E").set("b", new Uint8Array([1, 2, 255]))],
-    ["binary nested in plain data", (d) => dataMap(d, "E").set("n", { a: [new Uint8Array([7])], u: undefined })],
-    ["an attribute on XML text (Lexical style)", (d) => {
-      const f = new Y.XmlFragment();
-      dataMap(d, "E").set("x", f);
-      const t = new Y.XmlText();
-      f.insert(0, [t]);
-      t.insert(0, "hi");
-      t.setAttribute("__type", "paragraph");
-    }],
-    ["an attribute on text", (d) => {
-      const t = new Y.Text();
-      dataMap(d, "E").set("t", t);
-      t.insert(0, "hi");
-      t.setAttribute("dir", "rtl");
-    }],
-    ["a shared type as an XML attribute", (d) => {
-      const f = new Y.XmlFragment();
-      dataMap(d, "E").set("x", f);
-      const e = new Y.XmlElement("p");
-      f.insert(0, [e]);
-      e.setAttribute("m", new Y.Map() as unknown as string);
-    }],
-    ["an XML hook", (d) => {
-      const f = new Y.XmlFragment();
-      dataMap(d, "E").set("x", f);
-      const hook = new Y.XmlHook("h");
-      f.insert(0, [hook as unknown as Y.XmlElement]);
-      hook.set("k", 1);
-    }],
-    ["XML text embedded in XML text (Lexical)", (d) => {
-      const t = new Y.XmlText();
-      dataMap(d, "E").set("root", t);
-      t.insertEmbed(0, new Y.XmlText());
-    }],
+    [
+      "binary nested in plain data",
+      (d) => dataMap(d, "E").set("n", { a: [new Uint8Array([7])], u: undefined }),
+    ],
+    [
+      "an attribute on XML text (Lexical style)",
+      (d) => {
+        const f = new Y.XmlFragment();
+        dataMap(d, "E").set("x", f);
+        const t = new Y.XmlText();
+        f.insert(0, [t]);
+        t.insert(0, "hi");
+        t.setAttribute("__type", "paragraph");
+      },
+    ],
+    [
+      "an attribute on text",
+      (d) => {
+        const t = new Y.Text();
+        dataMap(d, "E").set("t", t);
+        t.insert(0, "hi");
+        t.setAttribute("dir", "rtl");
+      },
+    ],
+    [
+      "a shared type as an XML attribute",
+      (d) => {
+        const f = new Y.XmlFragment();
+        dataMap(d, "E").set("x", f);
+        const e = new Y.XmlElement("p");
+        f.insert(0, [e]);
+        e.setAttribute("m", new Y.Map() as unknown as string);
+      },
+    ],
+    [
+      "an XML hook",
+      (d) => {
+        const f = new Y.XmlFragment();
+        dataMap(d, "E").set("x", f);
+        const hook = new Y.XmlHook("h");
+        f.insert(0, [hook as unknown as Y.XmlElement]);
+        hook.set("k", 1);
+      },
+    ],
+    [
+      "XML text embedded in XML text (Lexical)",
+      (d) => {
+        const t = new Y.XmlText();
+        dataMap(d, "E").set("root", t);
+        t.insertEmbed(0, new Y.XmlText());
+      },
+    ],
     ["a data key named __proto__", (d) => dataMap(d, "E").set("__proto__", { a: 1 })],
-    ["a nested __proto__ key in plain data", (d) => dataMap(d, "E").set("k", JSON.parse('{"__proto__": {"a": 1}, "b": 2}'))],
-    ["an element id __proto__", (d) => {
-      addElement(d, { id: "__proto__", type: "other.ext/thing", x: 0, y: 0, size: { w: 1, h: 1 } });
-    }],
+    [
+      "a nested __proto__ key in plain data",
+      (d) => dataMap(d, "E").set("k", JSON.parse('{"__proto__": {"a": 1}, "b": 2}')),
+    ],
+    [
+      "an element id __proto__",
+      (d) => {
+        addElement(d, {
+          id: "__proto__",
+          type: "other.ext/thing",
+          x: 0,
+          y: 0,
+          size: { w: 1, h: 1 },
+        });
+      },
+    ],
   ];
   for (const [name, change] of cases) {
     it(`never throws, and round-trips locally: ${name}`, () => {
       const d = new Y.Doc();
       initDocument(d, { id: "d" });
-      addElement(d, { id: "E", type: "other.ext/thing", x: 0, y: 0, size: { w: 1, h: 1 } });
+      addElement(d, {
+        id: "E",
+        type: "other.ext/thing",
+        x: 0,
+        y: 0,
+        size: { w: 1, h: 1 },
+      });
       edit(d, () => change(d));
       const s = toSnapshot(d);
       expect(toSnapshot(fromSnapshot(s))).toEqual(s);
@@ -185,7 +242,13 @@ describe("the JSON form is total and lossless (section 3.4)", () => {
   it("keeps an element id __proto__ as an own key", () => {
     const d = new Y.Doc();
     initDocument(d, { id: "d" });
-    addElement(d, { id: "__proto__", type: FRAME_TYPE, x: 0, y: 0, size: { w: 1, h: 1 } });
+    addElement(d, {
+      id: "__proto__",
+      type: FRAME_TYPE,
+      x: 0,
+      y: 0,
+      size: { w: 1, h: 1 },
+    });
     const s = toSnapshot(d);
     expect(Object.keys(s.elements)).toEqual(["__proto__"]);
     expect(JSON.stringify(s.elements)).toContain('"__proto__"');
@@ -220,7 +283,14 @@ describe("undo never hard-deletes records (section 10)", () => {
     const undo = createUndoManager(a, 0);
     group(a, ["X", "Y"], { id: "G" });
     const b = forkDoc(a, 2);
-    addElement(b, { id: "Z", type: SHAPE, parent: "G", x: 50, y: 50, size: { w: 10, h: 10 } });
+    addElement(b, {
+      id: "Z",
+      type: SHAPE,
+      parent: "G",
+      x: 50,
+      y: 50,
+      size: { w: 10, h: 10 },
+    });
     const before = resolve(b).worldOrigin("Z");
     undo.undo();
     syncDocs(a, b);
@@ -245,14 +315,20 @@ describe("undo never hard-deletes records (section 10)", () => {
       data: { text: { $y: "text", delta: [{ insert: "hi" }] } },
     });
     const b = forkDoc(a, 2);
-    edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " -- written offline"), {
-      touch: ["T"],
-    });
+    edit(
+      b,
+      () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " -- written offline"),
+      {
+        touch: ["T"],
+      },
+    );
     undo.undo();
     syncDocs(a, b);
     expect(roots(a).elements.has("T")).toBe(true);
     expect(resolve(a).isDeleted("T")).toBe(false);
-    expect((dataMap(a, "T").get("text") as Y.Text).toString()).toBe("hi -- written offline");
+    expect((dataMap(a, "T").get("text") as Y.Text).toString()).toBe(
+      "hi -- written offline",
+    );
   });
 
   it("undo and redo of a creation, with nobody else involved", () => {
@@ -271,11 +347,45 @@ describe("precision of operations (section 7.3)", () => {
   it("reparenting and grouping deep inside a frame far from the origin stay exact", () => {
     const d = new Y.Doc();
     initDocument(d, { id: "p" });
-    addElement(d, { id: "Far", type: FRAME_TYPE, x: 2 ** 60, y: 0, size: { w: 1, h: 1 } });
-    addElement(d, { id: "A", type: FRAME_TYPE, parent: "Far", x: 0, y: 0, size: { w: 1e-6, h: 1e-6 } });
-    addElement(d, { id: "B", type: FRAME_TYPE, parent: "Far", x: 0, y: 0, size: { w: 1e-6, h: 1e-6 } });
-    addElement(d, { id: "X", type: SHAPE, parent: "A", x: 3e-7, y: 3e-7, size: { w: 1e-8, h: 1e-8 } });
-    addElement(d, { id: "Y", type: SHAPE, parent: "A", x: 5e-7, y: 5e-7, size: { w: 1e-8, h: 1e-8 } });
+    addElement(d, {
+      id: "Far",
+      type: FRAME_TYPE,
+      x: 2 ** 60,
+      y: 0,
+      size: { w: 1, h: 1 },
+    });
+    addElement(d, {
+      id: "A",
+      type: FRAME_TYPE,
+      parent: "Far",
+      x: 0,
+      y: 0,
+      size: { w: 1e-6, h: 1e-6 },
+    });
+    addElement(d, {
+      id: "B",
+      type: FRAME_TYPE,
+      parent: "Far",
+      x: 0,
+      y: 0,
+      size: { w: 1e-6, h: 1e-6 },
+    });
+    addElement(d, {
+      id: "X",
+      type: SHAPE,
+      parent: "A",
+      x: 3e-7,
+      y: 3e-7,
+      size: { w: 1e-8, h: 1e-8 },
+    });
+    addElement(d, {
+      id: "Y",
+      type: SHAPE,
+      parent: "A",
+      x: 5e-7,
+      y: 5e-7,
+      size: { w: 1e-8, h: 1e-8 },
+    });
     reparent(d, "X", "B");
     expect(resolve(d).localPosition("X")).toEqual({ x: 3e-7, y: 3e-7 });
     group(d, ["Y"], { id: "Gr" });
@@ -312,7 +422,9 @@ describe("gone containers in operations (section 4.2, 6.4)", () => {
 
   it("a stop that hides a dissolved group no longer hides its former members", () => {
     const d = ungrouped();
-    const stop = addStop(d, { view: { kind: "rect", space: null, x: 0, y: 0, w: 1, h: 1 } });
+    const stop = addStop(d, {
+      view: { kind: "rect", space: null, x: 0, y: 0, w: 1, h: 1 },
+    });
     const route = addRoute(d);
     insertRouteEntry(d, route, stop);
     setVisibility(d, stop, "Gr", "hide");
@@ -332,10 +444,14 @@ describe("gone containers in operations (section 4.2, 6.4)", () => {
     late.clientID = 6;
     Y.applyUpdate(late, Y.encodeStateAsUpdate(d));
     const element = roots(peer).elements.get("Y")!;
-    edit(late, () => {
-      const map = roots(late).elements.get("Y")!;
-      map.set("parent", element.get("parent"));
-    }, { origin: "simulated-delivery" });
+    edit(
+      late,
+      () => {
+        const map = roots(late).elements.get("Y")!;
+        map.set("parent", element.get("parent"));
+      },
+      { origin: "simulated-delivery" },
+    );
     moveElement(late, "Y", 1, 2);
     expect(roots(late).elements.get("Y")!.get("parent")).toBe("H");
   });
@@ -344,7 +460,14 @@ describe("gone containers in operations (section 4.2, 6.4)", () => {
 describe("tidy up and paste (sections 3.5, 5.8)", () => {
   it("tidy up removes what is gone and keeps what the user sees", () => {
     const d = base();
-    addElement(d, { id: "Z", type: SHAPE, parent: "G", x: 5, y: 5, size: { w: 1, h: 1 } });
+    addElement(d, {
+      id: "Z",
+      type: SHAPE,
+      parent: "G",
+      x: 5,
+      y: 5,
+      size: { w: 1, h: 1 },
+    });
     const stop = addStop(d, { view: { kind: "frame", frame: "G", padding: 0.1 } });
     deleteElements(d, ["G"]);
     reparent(d, "Y", "F");
@@ -411,4 +534,3 @@ describe("tidy up and paste (sections 3.5, 5.8)", () => {
     expect(hiddenContent(d)).toEqual(["root secretRoot", "elements.X.smuggled"]);
   });
 });
-

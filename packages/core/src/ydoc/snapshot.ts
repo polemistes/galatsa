@@ -6,6 +6,7 @@
 
 import * as Y from "yjs";
 import { newId, type RandomBytes } from "../model/ids.ts";
+import { DEFAULT_ORDER_KEY, isValidOrderKey } from "../model/order.ts";
 import type { ElementEnvelope, ElementLookup } from "../model/resolve.ts";
 import {
   FRAME_TYPE,
@@ -69,6 +70,21 @@ function obj(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * Order keys and revisions can be missing after an undo that races a remote
+ * change, or invalid when written by a faulty peer. Every reader substitutes the
+ * same defaults, so all replicas and the JSON form agree (section 4.1).
+ */
+function orderKey(value: unknown): string {
+  return typeof value === "string" && isValidOrderKey(value) ? value : DEFAULT_ORDER_KEY;
+}
+
+function revision(value: unknown): string {
+  return typeof value === "string" && value.length > 0 && value.length <= 64
+    ? value
+    : "0";
+}
+
 function readPos(value: unknown): Position {
   const v = obj(value);
   return { x: num(v.x), y: num(v.y), space: idOrNull(v.space) };
@@ -122,11 +138,11 @@ export function readEnvelope(map: Y.Map<unknown>): ElementEnvelope {
   const envelope: { -readonly [K in keyof ElementEnvelope]: ElementEnvelope[K] } = {
     type,
     parent: idOrNull(map.get("parent")),
-    order: str(map.get("order")),
+    order: orderKey(map.get("order")),
     pos: readPos(map.get("pos")),
     rebase: readRebase(map.get("rebase")),
     locked: map.get("locked") === true,
-    rev: str(map.get("rev")),
+    rev: revision(map.get("rev")),
     deleted: readDeleteMark(map.get("deleted")),
     dissolved: map.get("dissolved") === true,
   };
@@ -174,7 +190,7 @@ export function readElement(map: Y.Map<unknown>): Element {
     rebase: envelope.rebase ?? null,
     name: str(map.get("name")),
     locked: envelope.locked,
-    rev: envelope.rev ?? "",
+    rev: envelope.rev ?? "0",
     deleted: envelope.deleted ?? null,
     dissolved: envelope.dissolved ?? false,
     refs: readIds(map.get("refs")),
@@ -240,7 +256,7 @@ export function readStop(map: Y.Map<unknown>): Stop {
     notes: notes instanceof Y.Text ? textFromY(notes) : { $y: "text", delta: [] },
     visibility,
     transition: jsonOr(map.get("transition") ?? null, null),
-    rev: str(map.get("rev")),
+    rev: revision(map.get("rev")),
     removed: readRemovalMark(map.get("removed")),
     ext: readSlots(map.get("ext")),
   };
@@ -269,16 +285,16 @@ export function readRoute(map: Y.Map<unknown>): Route {
   if (raw instanceof Y.Map) {
     for (const [id, entry] of raw.entries()) {
       const e = obj(entry);
-      if (typeof e.stop === "string" && typeof e.order === "string") {
-        setOwn(entries, id, { stop: e.stop, order: e.order });
+      if (typeof e.stop === "string") {
+        setOwn(entries, id, { stop: e.stop, order: orderKey(e.order) });
       }
     }
   }
   return {
     name: str(map.get("name")),
-    order: str(map.get("order")),
+    order: orderKey(map.get("order")),
     entries,
-    rev: str(map.get("rev")),
+    rev: revision(map.get("rev")),
     removed: readRemovalMark(map.get("removed")),
     ext: readSlots(map.get("ext")),
   };

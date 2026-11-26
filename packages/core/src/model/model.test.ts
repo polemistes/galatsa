@@ -14,7 +14,13 @@ import {
   zoomToFit,
 } from "./geometry.ts";
 import { newId } from "./ids.ts";
-import { compareCodeUnits, isValidOrderKey, keyAt, keyBetween, sortOrdered } from "./order.ts";
+import {
+  compareCodeUnits,
+  isValidOrderKey,
+  keyAt,
+  keyBetween,
+  sortOrdered,
+} from "./order.ts";
 import { Resolver, lookupFromRecord } from "./resolve.ts";
 import {
   hiddenAt,
@@ -204,12 +210,21 @@ describe("resolution", () => {
       back: el({ order: "a0" }),
       Gr: el({ type: GROUP_TYPE, order: "a3", dissolved: true }),
       g1: el({ parent: "Gr" }),
-      D: el({ type: GROUP_TYPE, order: "a4", deleted: { action: "k", root: "D", rev: "r0" } }),
+      D: el({
+        type: GROUP_TYPE,
+        order: "a4",
+        deleted: { action: "k", root: "D", rev: "r0" },
+      }),
       d1: el({ parent: "D", deleted: { action: "k", root: "D", rev: "r0" } }),
       // Added to D after the delete (no mark): survives in D's slot.
       d2: el({ parent: "D", order: "a1" }),
       // Marked, but changed since (different rev): survives.
-      d3: el({ parent: "D", order: "a2", rev: "r1", deleted: { action: "k", root: "D", rev: "r0" } }),
+      d3: el({
+        parent: "D",
+        order: "a2",
+        rev: "r1",
+        deleted: { action: "k", root: "D", rev: "r0" },
+      }),
     };
     const r = new Resolver(lookupFromRecord(elements));
     expect(r.drawOrder()).toEqual(["back", "F", "b", "a", "top", "g1", "d2", "d3"]);
@@ -290,12 +305,25 @@ describe("routes and visibility", () => {
         ext: {},
         entries: { e1: { stop: "s1", order: "a0" }, e4: { stop: "s4", order: "a1" } },
       },
-      old: { name: "", order: "Zz", rev: "r0", removed: { rev: "r0" }, ext: {}, entries: {} },
+      old: {
+        name: "",
+        order: "Zz",
+        rev: "r0",
+        removed: { rev: "r0" },
+        ext: {},
+        entries: {},
+      },
     },
   };
 
   it("plays entries in order, skipping removed and missing stops", () => {
-    expect(routeSteps(doc, "full").map((s) => s.stop)).toEqual(["s1", "s2", "s3", "s4", "kept"]);
+    expect(routeSteps(doc, "full").map((s) => s.stop)).toEqual([
+      "s1",
+      "s2",
+      "s3",
+      "s4",
+      "kept",
+    ]);
     expect(routeSteps(doc, "old")).toEqual([]);
     expect(liveRoutes(doc)).toEqual(["full", "short"]);
   });
@@ -394,9 +422,9 @@ describe("validation", () => {
     } as DocumentSnapshot["assets"];
     const problems = validateSnapshot(broken);
     expect(problems.some((p) => p.includes("pos.x"))).toBe(true);
-    expect(problems.some((p) => p.includes("only frames and groups can be dissolved"))).toBe(
-      true,
-    );
+    expect(
+      problems.some((p) => p.includes("only frames and groups can be dissolved")),
+    ).toBe(true);
     expect(problems.some((p) => p.includes("smuggled: unknown field"))).toBe(true);
     expect(problems.some((p) => p.includes("unknown shared type"))).toBe(true);
     expect(problems.some((p) => p.includes("invalid asset id"))).toBe(true);
@@ -410,7 +438,8 @@ describe("validation", () => {
       (doc.elements.a as { order: string }).order = bad;
       expect(validateSnapshot(doc).some((p) => p.includes("order key"))).toBe(true);
     }
-    for (const good of ["a0", "a1V", "Zz", "b00", "a0ab1"]) expect(isValidOrderKey(good)).toBe(true);
+    for (const good of ["a0", "a1V", "Zz", "b00", "a0ab1"])
+      expect(isValidOrderKey(good)).toBe(true);
     const doc = JSON.parse(JSON.stringify(valid)) as DocumentSnapshot;
     Object.defineProperty(doc.elements, "__proto__", {
       value: doc.elements.a,
@@ -424,7 +453,14 @@ describe("validation", () => {
       expect(() => keyBetween(bad, null)).not.toThrow();
       expect(isValidOrderKey(keyBetween(bad, null))).toBe(true);
     }
-    const k = keyAt([{ id: "x", order: "" }, { id: "y", order: "abc0" }, { id: "z", order: "a5" }], 2);
+    const k = keyAt(
+      [
+        { id: "x", order: "" },
+        { id: "y", order: "abc0" },
+        { id: "z", order: "a5" },
+      ],
+      2,
+    );
     expect(isValidOrderKey(k)).toBe(true);
     expect(compareCodeUnits(k, "a5")).toBeLessThan(0);
   });

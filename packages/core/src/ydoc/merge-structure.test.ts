@@ -335,7 +335,9 @@ describe("frames and reparenting (section 5.7)", () => {
     scenario(
       (a, b) => {
         deleteElements(a, ["F"]);
-        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, "!"), { touch: ["T"] });
+        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, "!"), {
+          touch: ["T"],
+        });
       },
       ({ resolver, snapshot }) => {
         expect(resolver.isDeleted("F")).toBe(true);
@@ -359,7 +361,14 @@ describe("frames and reparenting (section 5.7)", () => {
   });
 
   it("three replicas: A moves X into G, B deletes G, C moves X: X survives in every order", () => {
-    for (const ids of [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]] as const) {
+    for (const ids of [
+      [1, 2, 3],
+      [1, 3, 2],
+      [2, 1, 3],
+      [2, 3, 1],
+      [3, 1, 2],
+      [3, 2, 1],
+    ] as const) {
       const start = base();
       const [a, b, c] = ids.map((id) => forkDoc(start, id)) as [Y.Doc, Y.Doc, Y.Doc];
       reparent(a, "X", "G");

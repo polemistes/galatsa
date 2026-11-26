@@ -10,7 +10,7 @@ import type { DataValue, ElementData } from "../model/types.ts";
 import { dataValueFromY, dataValueToY } from "./encode.ts";
 import { addElement, initDocument } from "./ops.ts";
 import { fromSnapshot, toSnapshot } from "./snapshot.ts";
-import { forkDoc, syncDocs } from "./sync.ts";
+import { MergeIdentityError, forkDoc, syncDocs } from "./sync.ts";
 import { buildSampleDocument } from "./testing.ts";
 
 /** Every kind of value, as an element of an unknown type would carry. */
@@ -100,11 +100,19 @@ describe("generic data encoding", () => {
     });
   });
 
-  it("rejects values that are not JSON", () => {
+  it("encodes values JSON cannot express losslessly, and rejects them as plain JSON input", () => {
     expect(() => dataValueToY(Number.NaN)).toThrow();
     const doc = new Y.Doc();
-    doc.getMap<unknown>("m").set("bin", new Uint8Array([1]));
-    expect(() => dataValueFromY(doc.getMap<unknown>("m").get("bin"))).toThrow();
+    const m = doc.getMap<unknown>("m");
+    m.set("bin", new Uint8Array([1, 2, 3]));
+    m.set("u", undefined);
+    m.set("nested", { list: [new Uint8Array([9]), undefined, 1] });
+    const bin = dataValueFromY(m.get("bin"));
+    expect(bin).toEqual({ $y: "any", value: { b: "AQID" } });
+    expect(dataValueToY(bin)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(dataValueFromY(m.get("u"))).toEqual({ $y: "any", value: { u: 1 } });
+    const nested = dataValueFromY(m.get("nested"));
+    expect(dataValueToY(nested)).toEqual({ list: [new Uint8Array([9]), undefined, 1] });
   });
 });
 
@@ -133,15 +141,10 @@ describe("snapshot conversion", () => {
     expect(toSnapshot(fromSnapshot(snapshot)).elements.u).toEqual(snapshot.elements.u);
   });
 
-  it("gives a rebuilt document fresh identity: it does not merge with the original", () => {
+  it("gives a rebuilt document fresh identity: it refuses to merge with the original", () => {
     const original = buildSampleDocument();
     const rebuilt = fromSnapshot(toSnapshot(original));
     const fork = forkDoc(original);
-    syncDocs(fork, rebuilt);
-    // Same content written twice under different identities: map keys collide and
-    // one write wins per key, so the merge keeps the content but not two copies.
-    expect(Object.keys(toSnapshot(fork).elements).sort()).toEqual(
-      Object.keys(toSnapshot(original).elements).sort(),
-    );
+    expect(() => syncDocs(fork, rebuilt)).toThrow(MergeIdentityError);
   });
 });

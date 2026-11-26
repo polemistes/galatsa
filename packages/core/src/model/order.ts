@@ -40,6 +40,8 @@ export type RandomSource = () => number;
 
 const DIGITS = BASE_62_DIGITS;
 const JITTER_DIGITS = 3;
+/** The key readers substitute for a missing or invalid one (section 4.1). */
+export const DEFAULT_ORDER_KEY = "a0";
 /** Longest key accepted. Keys grow by about one character per six insertions at one spot. */
 export const MAX_ORDER_KEY_LENGTH = 1024;
 
