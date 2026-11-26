@@ -11,6 +11,7 @@ packages:
 catalog:
   "@playwright/test": 1.65.0
   "@types/node": 26.6.6
+  vite: 8.3.8
   vitest: 5.1.0
 
 # Install the optional platform packages (native and wasm binaries) for every

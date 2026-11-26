@@ -84,6 +84,8 @@ describe("runBenchmark", () => {
     expect(rendered.slice(0, 5)).toEqual(Array(5).fill(pose(0)));
     expect(rendered.slice(5)).toEqual(shortRun.poses);
     expect(result.frames.intervalMs).toEqual(Array(12).fill(16));
+    expect(result.frames.callbackIntervalMs).toHaveLength(12);
+    expect(result.stats.callbackInterval.count).toBe(12);
     expect(result.timings.runMs).toBe(12 * 16);
     expect(result.stats.interval.p95).toBe(16);
     expect(result.stats.intervalByKind.hold?.count).toBe(5);

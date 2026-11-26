@@ -12,7 +12,7 @@
 //   values unless started with --enable-precise-memory-info.
 
 export interface JsHeapSample {
-  /** Frame index of the run (-1 for before load, after the run: the frame count). */
+  /** Frame index: -1 before load, 0 to frames - 1 during the run, frames after it. */
   readonly frame: number;
   readonly usedBytes: number;
   readonly totalBytes: number;
@@ -31,6 +31,7 @@ export interface MemoryReport {
   /** performance.memory samples, or available: false. */
   readonly jsHeap: {
     readonly available: boolean;
+    /** Highest used size from the start of the run (frame 0) to its end. */
     readonly peakUsedBytes: number | null;
     readonly samples: readonly JsHeapSample[];
   };
@@ -143,7 +144,7 @@ export class MemoryRecorder {
   }
 
   report(): MemoryReport {
-    const used = this.samples.map((s) => s.usedBytes);
+    const used = this.samples.filter((s) => s.frame >= 0).map((s) => s.usedBytes);
     return {
       userAgentSpecific: {
         available: this.enabled && this.uaNote === null && this.uaError === null,

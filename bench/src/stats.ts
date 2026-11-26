@@ -78,13 +78,18 @@ export interface Comparison {
 /** The parts of a result that compareRuns reads. */
 export interface ComparableRun {
   readonly timings: { readonly runMs: number };
-  readonly stats: { readonly interval: FrameStats; readonly script: FrameStats };
+  readonly stats: {
+    readonly interval: FrameStats;
+    readonly callbackInterval: FrameStats;
+    readonly script: FrameStats;
+  };
 }
 
 /**
  * Compares two runs. The decisive metrics are the frame count, the total run time and
  * the mean, median, 95th and 99th percentile of the frame interval. The maximum, the
- * threshold counts and the script times are shown but do not decide: a single
+ * threshold counts, the callback intervals and the script times are shown but do
+ * not decide: a single
  * garbage-collection pause moves the maximum, and script times of a near-empty engine
  * are a few microseconds, where timer resolution dominates.
  */
@@ -118,6 +123,10 @@ export function compareRuns(
     const key = String(threshold);
     add(`frames over ${key} ms`, ia.over[key] ?? 0, ib.over[key] ?? 0, false);
   }
+  const ca = a.stats.callbackInterval;
+  const cb = b.stats.callbackInterval;
+  add("callback interval p95 (ms)", ca.p95, cb.p95, false);
+  add("callback interval max (ms)", ca.max, cb.max, false);
   add("script mean (ms)", a.stats.script.mean, b.stats.script.mean, false);
   add("script p95 (ms)", a.stats.script.p95, b.stats.script.p95, false);
   return {

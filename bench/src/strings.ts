@@ -38,6 +38,12 @@ export const STRINGS = {
       `frame interval mean ${ms(mean)}, p50 ${ms(p50)}, p95 ${ms(p95)}, p99 ${ms(p99)}, max ${ms(max)}`,
     over: (counts: readonly (readonly [string, number])[]) =>
       `frames ${counts.map(([threshold, n]) => `over ${threshold} ms: ${n}`).join(", ")}`,
+    callback: (
+      p95: number,
+      max: number,
+      counts: readonly (readonly [string, number])[],
+    ) =>
+      `callback interval (wall clock) p95 ${ms(p95)}, max ${ms(max)}, ${counts.map(([threshold, n]) => `over ${threshold} ms: ${n}`).join(", ")}`,
     script: (mean: number, p95: number) => `render() mean ${ms(mean)}, p95 ${ms(p95)}`,
     textSharp: (
       reported: number,

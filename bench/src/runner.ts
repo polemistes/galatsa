@@ -5,7 +5,18 @@
 // Frame time is the interval between consecutive requestAnimationFrame callbacks.
 // It covers everything between two frames: the engine's render(), any work the
 // engine schedules, and the browser's style, layout, paint and compositing, as
-// paced by the display. Time spent in render() itself is recorded separately.
+// paced by the display. Two versions are recorded per frame:
+//
+// - intervalMs: difference of the timestamps the browser passes to the callbacks.
+//   Browsers set these to the start of the display frame (vsync), so they have no
+//   scheduling jitter and count dropped display frames well. But a long frame is
+//   rounded down to a whole number of display frames: in Chromium, a frame that
+//   blocks for 40 ms reads as 33.3 ms at 60 Hz.
+// - callbackIntervalMs: difference of performance.now() at the start of the
+//   callbacks. Wall-clock time, so long stalls show at their real length, but with
+//   some jitter around the display interval.
+//
+// Time spent in render() itself is recorded separately.
 //
 // The page must stay visible: browsers pause or slow down animation frames in
 // hidden tabs. A result whose page was hidden is marked.
@@ -141,6 +152,7 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
     options.onPhase?.("run");
     const n = run.poses.length;
     const intervals = new Float64Array(n);
+    const callbackIntervals = new Float64Array(n);
     const scriptMs = new Float64Array(n);
     const warmupIntervals: number[] = [];
     const firstPose = run.poses[0];
@@ -149,14 +161,21 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
     await new Promise<void>((resolve, reject) => {
       let index = -warmupFrames;
       let previousTimestamp: number | undefined;
+      let previousCallback = 0;
       const step = (timestamp: number) => {
+        const callback = performance.now();
         try {
           const previous = index - 1;
           if (previousTimestamp !== undefined) {
-            if (previous >= 0) intervals[previous] = timestamp - previousTimestamp;
-            else warmupIntervals.push(timestamp - previousTimestamp);
+            if (previous >= 0) {
+              intervals[previous] = timestamp - previousTimestamp;
+              callbackIntervals[previous] = callback - previousCallback;
+            } else {
+              warmupIntervals.push(timestamp - previousTimestamp);
+            }
           }
           previousTimestamp = timestamp;
+          previousCallback = callback;
           if (index >= n) {
             resolve();
             return;
@@ -218,9 +237,14 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
         warmupFrames,
         runMs,
       },
-      frames: { intervalMs: round3(intervals), scriptMs: round3(scriptMs) },
+      frames: {
+        intervalMs: round3(intervals),
+        callbackIntervalMs: round3(callbackIntervals),
+        scriptMs: round3(scriptMs),
+      },
       stats: {
         interval: frameStats(intervals),
+        callbackInterval: frameStats(callbackIntervals),
         script: frameStats(scriptMs),
         intervalByKind: statsByKind(intervals, run.segments),
       },

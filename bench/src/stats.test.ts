@@ -61,6 +61,7 @@ describe("compareRuns", () => {
     timings: { runMs: intervals.reduce((a, b) => a + b, 0) },
     stats: {
       interval: frameStats(intervals),
+      callbackInterval: frameStats(intervals),
       script: frameStats(intervals.map(() => 0.01)),
     },
   });

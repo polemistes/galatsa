@@ -56,13 +56,16 @@ export interface BenchResult {
   };
   /** Per frame, in run order. */
   readonly frames: {
-    /** From this frame's animation frame callback to the next one. */
+    /** From this frame's animation frame timestamp to the next one (display frames). */
     readonly intervalMs: readonly number[];
+    /** From the start of this frame's callback to the next one (wall clock). */
+    readonly callbackIntervalMs: readonly number[];
     /** Time spent in engine.render() for this frame. */
     readonly scriptMs: readonly number[];
   };
   readonly stats: {
     readonly interval: FrameStats;
+    readonly callbackInterval: FrameStats;
     readonly script: FrameStats;
     /** Frame intervals grouped by segment kind. */
     readonly intervalByKind: Readonly<Partial<Record<SegmentKind, FrameStats>>>;
@@ -125,6 +128,11 @@ export function formatSummary(result: BenchResult): string {
     s.run(result.engine, i.count, result.timings.runMs, result.timings.loadMs),
     s.interval(i.mean, i.p50, i.p95, i.p99, i.max),
     s.over(Object.entries(i.over)),
+    s.callback(
+      result.stats.callbackInterval.p95,
+      result.stats.callbackInterval.max,
+      Object.entries(result.stats.callbackInterval.over),
+    ),
     s.script(result.stats.script.mean, result.stats.script.p95),
     s.textSharp(
       result.textSharp.reported,
