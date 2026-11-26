@@ -741,7 +741,12 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
           if (chance(0.5)) act(other, "dissolve", () => ops.dissolve(peer, target, o));
           else act(other, "delete", () => ops.deleteElements(peer, [target], o));
           const inside = pick(visible);
-          if (chance(0.5) && inside !== target && !theirs.isGone(inside))
+          if (
+            chance(0.5) &&
+            inside !== target &&
+            theirs.get(inside) &&
+            !theirs.isGone(inside)
+          )
             act(other, "move", () =>
               ops.moveElement(peer, inside, int(400), int(400), o),
             );
