@@ -58,6 +58,17 @@ env -u WAYLAND_DISPLAY GDK_BACKEND=x11 GALATSA_RESULTS_DIR=/tmp/results \
 
 `results/linux-xvfb/` holds one such run from the development machine (software rendering in Xvfb, no GPU). It shows that the app works end to end; its numbers say nothing about the engines.
 
+## Comparing results across machines
+
+Compare engines within one machine first, and machines only by verdicts:
+
+- On one machine, all three engines ran in the same web view, display and power state, so their numbers compare directly. Use the two timing runs; the capture run is never valid. If the two timing runs disagree on a target, the engine sits near that target's limit there.
+- Across machines, compare which targets each engine passes, not raw milliseconds. The frame targets depend on the web engine: WebView2 on Windows is Chromium (the 16.7 ms target applies), WebKitGTK on Linux and WKWebView on macOS are WebKit (the 33 ms target applies).
+- Check `verdictInputs.valid` and `problems`, the measured refresh rate, and `targets.*.judgedBy` before trusting a run. At 75, 100 or 144 Hz the frame targets are judged by main-thread work only. WKWebView may cap animation frames at 60 Hz even on 120 Hz displays, and at 30 Hz in Low Power Mode (the run is then marked not valid).
+- Memory figures differ by method (PSS on Linux, physical footprint on macOS, summed working sets on Windows, which count shared pages more than once and so read high). Compare engines on one machine; across machines, only whether they stay under 1.5 GB, and only where `hostMemory.withoutTotal` is 0.
+- Text-sharpness latency of the DOM engine is a lower bound everywhere (the browser re-rasterises text later than the page can see); look at the captures of the canvas engines and at the engine prototypes' own screenshots.
+- Load time (`loadMs`) and image generation time depend on the CPU and on the web engine's JPEG encoder and decoders, and are not part of the targets.
+
 ## Builds on GitHub
 
 `.github/workflows/bench-shell.yml` runs `pnpm check` and builds the app unsigned for Linux (deb, AppImage and the plain program file), Windows (NSIS installer) and macOS (universal dmg, ad-hoc signed) on every push to a `bench-shell/**` branch and on manual start. The files are kept as workflow artifacts for 30 days; nothing is released. The runners are virtual machines without a real graphics card: their numbers must not be used to choose an engine.

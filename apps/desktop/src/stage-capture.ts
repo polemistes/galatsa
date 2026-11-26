@@ -9,6 +9,15 @@
 import type { HostCapture } from "@galatsa/bench/harness";
 
 export const captureStageCanvases: HostCapture = async (rect) => {
+  try {
+    return composeStage(rect);
+  } catch {
+    // A canvas the page may not read (tainted) or no memory: no image, run goes on.
+    return null;
+  }
+};
+
+function composeStage(rect: Parameters<HostCapture>[0]): string | null {
   const stage = document.querySelector(".stage");
   const canvases = stage === null ? [] : [...stage.querySelectorAll("canvas")];
   const visible = canvases.filter((c) => {
@@ -37,4 +46,4 @@ export const captureStageCanvases: HostCapture = async (rect) => {
     );
   }
   return out.toDataURL("image/png");
-};
+}
