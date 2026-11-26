@@ -121,15 +121,27 @@ export type ElementData = { [key: string]: DataValue };
 
 /**
  * A position in a container's local coordinate space, tagged with that container.
- * `space` is the element's parent at the time the position was written. When it
- * differs from the current parent (after concurrent edits), readers convert the
- * position through world coordinates. Section 5.3.
+ * `space` is the element's parent at the time the position was written. Moving an
+ * element into another container does not rewrite its position (that would
+ * overwrite a concurrent move); it records a Rebase instead. Section 5.3.
  */
 export interface Position {
   x: number;
   y: number;
   /** Container whose local space x and y are in; null for the canvas root. */
   space: ElementId | null;
+}
+
+/**
+ * Translation from the space a position was written in (`from`) to the parent the
+ * element was moved into (`to`), recorded when the element changed container:
+ * local position in `to` = position in `from` + (dx, dy). Section 5.3.
+ */
+export interface Rebase {
+  from: ElementId | null;
+  to: ElementId | null;
+  dx: number;
+  dy: number;
 }
 
 /** Width and height in world units. Never negative. */
@@ -169,6 +181,8 @@ export interface ElementBase {
   /** Stacking order among siblings; higher keys are drawn in front. */
   order: OrderKey;
   pos: Position;
+  /** Set when the element changed container after `pos` was written; else null. */
+  rebase: Rebase | null;
   /** User-visible name; empty string when unnamed. */
   name: string;
   /** Locked elements cannot be selected or changed in the editor. Inherited. */

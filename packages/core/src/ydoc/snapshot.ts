@@ -19,6 +19,7 @@ import {
   type Json,
   type JsonObject,
   type Position,
+  type Rebase,
   type Removal,
   type Route,
   type RouteEntry,
@@ -47,6 +48,13 @@ function readPos(value: unknown): Position {
   };
 }
 
+function readRebase(value: unknown): Rebase | null {
+  if (typeof value !== "object" || value === null) return null;
+  const v = value as Partial<Rebase>;
+  const id = (x: unknown) => (typeof x === "string" ? x : null);
+  return { from: id(v.from), to: id(v.to), dx: num(v.dx), dy: num(v.dy) };
+}
+
 function readSize(value: unknown): Size {
   const v = (value ?? {}) as Partial<Size>;
   return { w: num(v.w), h: num(v.h) };
@@ -67,6 +75,7 @@ export function readEnvelope(map: Y.Map<unknown>): ElementEnvelope {
     parent: typeof parent === "string" ? parent : null,
     order: str(map.get("order")),
     pos: readPos(map.get("pos")),
+    rebase: readRebase(map.get("rebase")),
     locked: map.get("locked") === true,
     removed: readRemoval(map.get("removed")),
   };
@@ -104,6 +113,7 @@ export function readElement(map: Y.Map<unknown>): Element {
     parent: envelope.parent,
     order: envelope.order,
     pos: envelope.pos,
+    rebase: envelope.rebase ?? null,
     name: str(map.get("name")),
     locked: envelope.locked,
     assets: Array.isArray(assets)
@@ -124,6 +134,7 @@ export function writeElement(map: Y.Map<unknown>, element: Element): void {
   map.set("parent", element.parent);
   map.set("order", element.order);
   map.set("pos", cloneJson(element.pos));
+  map.set("rebase", element.rebase ? cloneJson(element.rebase) : null);
   if ("size" in element) map.set("size", cloneJson(element.size));
   if ("rot" in element) map.set("rot", element.rot);
   map.set("name", element.name);

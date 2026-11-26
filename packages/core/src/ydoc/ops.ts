@@ -136,6 +136,7 @@ export function addElement(doc: Y.Doc, init: NewElement, options?: OpOptions): E
       parent,
       order: keyAt(siblings, init.index ?? siblings.length, options?.random),
       pos: { x: init.x, y: init.y, space: parent },
+      rebase: null,
       name: init.name ?? "",
       locked: init.locked ?? false,
       assets: init.assets ?? [],
@@ -159,8 +160,8 @@ export function addElement(doc: Y.Doc, init: NewElement, options?: OpOptions): E
 }
 
 /**
- * Moves an element within its parent. The position is tagged with the parent, so
- * a concurrent reparent can convert it (section 5.3).
+ * Moves an element within its parent. The position is tagged with the parent and
+ * any rebase is cleared, so a concurrent reparent can still place it (section 5.3).
  */
 export function moveElement(
   doc: Y.Doc,
@@ -174,6 +175,7 @@ export function moveElement(
     const parent = resolver(doc).parentOf(id);
     if (map.get("parent") !== parent) map.set("parent", parent);
     map.set("pos", { x, y, space: parent });
+    if (map.get("rebase") !== null) map.set("rebase", null);
   });
 }
 
@@ -291,8 +293,40 @@ export function sendBackward(doc: Y.Doc, id: ElementId, options?: OpOptions): vo
 // ---------------------------------------------------------------------------
 
 /**
+ * Puts an element into `parent` (whose world origin is `origin`) without moving it
+ * on the canvas. The stored position is left alone and a rebase is recorded, so a
+ * concurrent move of the element (which writes `pos`) is not overwritten
+ * (section 5.3). Only when the element returns to the space its position was
+ * written in is the position itself rewritten.
+ */
+function place(
+  map: Y.Map<unknown>,
+  r: Resolver,
+  id: ElementId,
+  parent: ElementId | null,
+  origin: { x: number; y: number },
+): void {
+  const world = r.worldOrigin(id);
+  const local = { x: world.x - origin.x, y: world.y - origin.y };
+  const pos = r.get(id)!.pos;
+  map.set("parent", parent);
+  if (pos.space === parent) {
+    if (pos.x !== local.x || pos.y !== local.y)
+      map.set("pos", { ...local, space: parent });
+    if (map.get("rebase") !== null) map.set("rebase", null);
+  } else {
+    map.set("rebase", {
+      from: pos.space,
+      to: parent,
+      dx: local.x - pos.x,
+      dy: local.y - pos.y,
+    });
+  }
+}
+
+/**
  * Moves an element into another container (or the root) without moving it on the
- * canvas: parent, tagged position and order key are written together.
+ * canvas: writes the parent, a rebase and the order key.
  */
 export function reparent(
   doc: Y.Doc,
@@ -310,12 +344,9 @@ export function reparent(
       if (r.isWithin(parent, id))
         throw new Error("An element cannot be moved into itself");
     }
-    const world = r.worldOrigin(id);
-    const origin = r.spaceOrigin(parent);
     const siblings = liveSiblings(r, parent, id);
     const map = elementMap(doc, id);
-    map.set("parent", parent);
-    map.set("pos", { x: world.x - origin.x, y: world.y - origin.y, space: parent });
+    place(map, r, id, parent, r.spaceOrigin(parent));
     map.set("order", keyAt(siblings, options?.index ?? siblings.length, options?.random));
   });
 }
@@ -323,8 +354,8 @@ export function reparent(
 /**
  * Groups elements that share a parent. The group takes the frontmost member's
  * place in the stacking order; members keep their order keys, now among each
- * other, and their positions become relative to the group's origin (the top-left
- * corner of their bounds).
+ * other. The group's origin is the top-left corner of their bounds; members get a
+ * rebase into the group rather than rewritten positions (section 5.4).
  */
 export function group(
   doc: Y.Doc,
@@ -359,18 +390,15 @@ export function group(
       parent,
       order: front.order,
       pos: { x: gx, y: gy, space: parent },
+      rebase: null,
       name: "",
       locked: false,
       assets: [],
       removed: null,
       data: {},
     });
-    for (const id of ids) {
-      const local = r.localPosition(id);
-      const m = elementMap(doc, id);
-      m.set("parent", groupId);
-      m.set("pos", { x: local.x - gx, y: local.y - gy, space: groupId });
-    }
+    const groupOrigin = { x: origin.x + gx, y: origin.y + gy };
+    for (const id of ids) place(elementMap(doc, id), r, id, groupId, groupOrigin);
     return groupId;
   });
 }

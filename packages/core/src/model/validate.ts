@@ -144,6 +144,20 @@ function checkPosition(value: unknown, path: string, problems: Problems): void {
   }
 }
 
+function checkRebase(value: unknown, path: string, problems: Problems): void {
+  if (value === null) return;
+  if (!isObject(value)) return void problems.push(`${path}: must be an object or null`);
+  for (const key of ["from", "to"] as const) {
+    if (value[key] !== null && typeof value[key] !== "string") {
+      problems.push(`${path}.${key}: must be an id or null`);
+    }
+  }
+  for (const key of ["dx", "dy"] as const) {
+    if (!isFiniteNumber(value[key]))
+      problems.push(`${path}.${key}: must be a finite number`);
+  }
+}
+
 function checkSize(value: unknown, path: string, problems: Problems): void {
   if (!isObject(value)) return void problems.push(`${path}: must be an object`);
   for (const key of ["w", "h"] as const) {
@@ -168,6 +182,7 @@ function checkElement(id: string, value: unknown, problems: Problems): void {
   }
   if (typeof value.order !== "string") problems.push(`${path}.order: must be a string`);
   checkPosition(value.pos, `${path}.pos`, problems);
+  checkRebase(value.rebase, `${path}.rebase`, problems);
   if (typeof value.name !== "string") problems.push(`${path}.name: must be a string`);
   if (typeof value.locked !== "boolean")
     problems.push(`${path}.locked: must be a boolean`);

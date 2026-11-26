@@ -16,6 +16,7 @@ import {
   type ElementId,
   type OrderKey,
   type Position,
+  type Rebase,
   type Rect,
   type Removal,
   type Size,
@@ -27,6 +28,7 @@ export interface ElementEnvelope {
   readonly parent: ElementId | null;
   readonly order: OrderKey;
   readonly pos: Position;
+  readonly rebase?: Rebase | null;
   readonly locked: boolean;
   readonly removed: Removal | null;
   readonly size?: Size;
@@ -158,30 +160,53 @@ export class Resolver {
     return this.#children.get(parent) ?? [];
   }
 
-  /** World position of a container's origin, ignoring position tags. */
-  #rawWorldOrigin(id: ElementId | null): Point {
+  /**
+   * Local position from the element's own record alone: the stored position if it
+   * was written in the current parent's space, shifted by the rebase if the
+   * element was moved into its parent after that, otherwise unconverted.
+   */
+  #ownLocal(id: ElementId): Point | null {
+    const element = this.#lookup.get(id);
+    if (!element) return null;
+    const { x, y, space } = element.pos;
+    const parent = this.parentOf(id);
+    if (space === parent) return { x, y };
+    const rebase = element.rebase;
+    if (rebase && rebase.from === space && rebase.to === parent) {
+      return { x: x + rebase.dx, y: y + rebase.dy };
+    }
+    return null;
+  }
+
+  /** World origin of a container from own records only (no tag conversion). */
+  #simpleOrigin(id: ElementId | null): Point {
     if (id === null) return { x: 0, y: 0 };
     const cached = this.#rawWorld.get(id);
     if (cached) return cached;
-    const base = this.#rawWorldOrigin(this.parentOf(id));
+    const base = this.#simpleOrigin(this.parentOf(id));
     const pos = this.#lookup.get(id)?.pos;
-    const point = { x: base.x + (pos?.x ?? 0), y: base.y + (pos?.y ?? 0) };
+    const local = this.#ownLocal(id) ?? { x: pos?.x ?? 0, y: pos?.y ?? 0 };
+    const point = { x: base.x + local.x, y: base.y + local.y };
     this.#rawWorld.set(id, point);
     return point;
   }
 
   /**
-   * Position in the effective parent's space (section 5.3). A position written in
-   * another space is converted through world coordinates, using the stored
-   * positions of that space's ancestors as they are. If the space is gone, is not
-   * a container, or lies inside the element itself, x and y are used as they are.
+   * Position in the effective parent's space (section 5.3):
+   * 1. written in the parent's space: as stored;
+   * 2. written in the space a recorded rebase starts from, and the rebase leads to
+   *    the parent: shifted by the rebase;
+   * 3. otherwise (only after conflicting concurrent edits) converted through world
+   *    coordinates, with container origins computed from rules 1 and 2 alone; if
+   *    the space is gone, is not a container, or lies inside the element itself,
+   *    x and y are used as they are.
    */
   localPosition(id: ElementId): Point {
     const element = this.#lookup.get(id);
     if (!element) return { x: 0, y: 0 };
+    const own = this.#ownLocal(id);
+    if (own) return own;
     const { x, y, space } = element.pos;
-    const parent = this.parentOf(id);
-    if (space === parent) return { x, y };
     if (space !== null) {
       const spaceElement = this.#lookup.get(space);
       if (
@@ -192,8 +217,8 @@ export class Resolver {
         return { x, y };
       }
     }
-    const from = this.#rawWorldOrigin(space);
-    const to = this.#rawWorldOrigin(parent);
+    const from = this.#simpleOrigin(space);
+    const to = this.#simpleOrigin(this.parentOf(id));
     return { x: from.x + x - to.x, y: from.y + y - to.y };
   }
 
