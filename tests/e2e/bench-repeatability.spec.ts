@@ -56,7 +56,8 @@ test("the meter repeats for the empty and the synthetic engine", async ({
   }
 
   // The empty engine passes the frame targets; the synthetic one, by construction,
-  // has 829 frames over 16.7 ms, 286 over 33 ms and 16 over 100 ms (see
+  // has 830 frames over 16.7 ms, 293 over 33 ms and 16 over 100 ms among the timed
+  // frames (render calls 60 to 2834, after 60 warm-up calls; see
   // syntheticBusyMs).
   for (const result of outputs["noop"]!.results) {
     const t = result.verdictInputs.targets;
@@ -70,10 +71,10 @@ test("the meter repeats for the empty and the synthetic engine", async ({
   }
   for (const result of outputs["synthetic"]!.results) {
     const t = result.verdictInputs.targets;
-    expect(t.frames16_7.workOver).toBe(829);
-    expect(t.frames16_7.count).toBeLessThan(829 * 1.02);
-    expect(t.frames33.workOver).toBe(286);
-    expect(t.frames33.count).toBeLessThan(286 * 1.02);
+    expect(t.frames16_7.workOver).toBe(830);
+    expect(t.frames16_7.count).toBeLessThan(830 * 1.02);
+    expect(t.frames33.workOver).toBe(293);
+    expect(t.frames33.count).toBeLessThan(293 * 1.02);
     expect(t.stalls.count).toBeGreaterThanOrEqual(16);
     expect(t.stalls.count).toBeLessThanOrEqual(17);
     expect(t.frames16_7.pass).toBe(false);
