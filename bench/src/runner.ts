@@ -21,7 +21,8 @@
 //   first task after the browser's rendering step, that is render() plus style,
 //   layout and paint. No display rounds it, so it can be judged against a target in
 //   milliseconds on any refresh rate. It does not see work on other threads
-//   (rasterisation, the GPU); delays there show in frameMs.
+//   (rasterisation, the GPU); delays there show in frameMs. If the next callback
+//   starts before that task (WebKit does this), the frame's work ends there.
 // See stats.ts for how the targets use the two. The timestamps the browser passes to
 // the callbacks are recorded for reference only: they are display-frame start times,
 // not durations.
@@ -398,10 +399,15 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
     if (firstPose === undefined) throw new Error("The camera run has no frames");
     let runStart = 0;
     let runEnd = 0;
+    // A frame's work ends at the first task after its rendering step, or when the
+    // next frame's callback starts, whichever comes first: WebKit sometimes runs the
+    // next callback before delivering the message, and by then the frame is done.
+    workMs.fill(Number.NaN);
     channel.port1.onmessage = (message: MessageEvent<number>) => {
       const frame = message.data;
-      if (frame >= 0 && frame < n)
+      if (frame >= 0 && frame < n && Number.isNaN(workMs[frame]!)) {
         workMs[frame] = performance.now() - (callbackStart[frame] ?? 0);
+      }
     };
 
     await new Promise<void>((resolve, reject) => {
@@ -415,6 +421,8 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
           if (previous >= 0 && previousTimestamp !== undefined) {
             frameMs[previous] = callback - previousCallback;
             timestampMs[previous] = timestamp - previousTimestamp;
+            if (Number.isNaN(workMs[previous]!))
+              workMs[previous] = callback - previousCallback;
           }
           previousTimestamp = timestamp;
           previousCallback = callback;

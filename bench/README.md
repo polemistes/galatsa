@@ -83,7 +83,7 @@ A run first settles: it waits at least 2 seconds; then, where the browser has `r
 
 Per frame, in `frames` of the JSON result:
 
-- `workMs`: main-thread time of the frame, from the start of its animation-frame callback to the first task after the browser's rendering step (a message posted after `render()`). It includes `render()` and the browser's style, layout and paint on the main thread, and no display rounds it. It does not see rasterisation or GPU work on other threads.
+- `workMs`: main-thread time of the frame, from the start of its animation-frame callback to the first task after the browser's rendering step (a message posted after `render()`), or to the start of the next callback if that comes first (WebKit sometimes runs the next callback before delivering the message). It includes `render()` and the browser's style, layout and paint on the main thread, and no display rounds it. It does not see rasterisation or GPU work on other threads.
 - `frameMs`: wall-clock interval between the starts of consecutive callbacks: what the display paced. On a vsync-paced display it is a whole number of refreshes; it also shows delays from other threads.
 - `timestampMs`: differences of the timestamps the browser passes to the callbacks, for reference only (display-frame start times, not durations).
 - `renderMs`: time inside `render()`.
