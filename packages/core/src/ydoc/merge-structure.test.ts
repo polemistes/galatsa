@@ -335,9 +335,7 @@ describe("frames and reparenting (section 5.7)", () => {
     scenario(
       (a, b) => {
         deleteElements(a, ["F"]);
-        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, "!"), {
-          touch: ["T"],
-        });
+        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, "!"));
       },
       ({ resolver, snapshot }) => {
         expect(resolver.isDeleted("F")).toBe(true);
@@ -456,9 +454,7 @@ describe("deletion and locking (section 5.7)", () => {
     scenario(
       (a, b) => {
         deleteElements(a, ["T"]);
-        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " there"), {
-          touch: ["T"],
-        });
+        edit(b, () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " there"));
         moveElement(b, "T", 20, 30);
       },
       ({ snapshot, resolver }) => {
@@ -512,7 +508,7 @@ describe("shared stops and routes (section 6.5)", () => {
     scenario(
       (a, b) => {
         renameStop(a, "S", "Opening");
-        edit(b, () => stopNotes(b, "S").insert(0, "Say hello"), { touch: ["S"] });
+        edit(b, () => stopNotes(b, "S").insert(0, "Say hello"));
       },
       ({ snapshot }) => {
         const stop = snapshot.stops.S!;

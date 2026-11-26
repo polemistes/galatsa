@@ -7,10 +7,11 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { copyFragment } from "../model/fragment.ts";
-import { Resolver, type Point } from "../model/resolve.ts";
+import { purgeSnapshot } from "../model/purge.ts";
+import { Resolver, lookupFromRecord, type Point } from "../model/resolve.ts";
 import { hiddenAt, isHiddenBy, stopRegion, regionToWorld } from "../model/route.ts";
 import { FRAME_TYPE } from "../model/types.ts";
-import { validateSnapshot } from "../model/validate.ts";
+import { validateSnapshot } from "../model/grammar.ts";
 import { pasteFragment, tidyUp } from "./document-ops.ts";
 import {
   addElement,
@@ -28,10 +29,11 @@ import {
   reparent,
   setVisibility,
 } from "./ops.ts";
-import { createUndoManager, roots } from "./schema.ts";
+import { roots } from "./schema.ts";
+import { createUndoManager } from "./track.ts";
 import {
   fromSnapshot,
-  hiddenContent,
+  inspectDocument,
   lineageOf,
   toSnapshot,
   yLookup,
@@ -208,18 +210,6 @@ describe("the JSON form is total and lossless (section 3.4)", () => {
       "a nested __proto__ key in plain data",
       (d) => dataMap(d, "E").set("k", JSON.parse('{"__proto__": {"a": 1}, "b": 2}')),
     ],
-    [
-      "an element id __proto__",
-      (d) => {
-        addElement(d, {
-          id: "__proto__",
-          type: "other.ext/thing",
-          x: 0,
-          y: 0,
-          size: { w: 1, h: 1 },
-        });
-      },
-    ],
   ];
   for (const [name, change] of cases) {
     it(`never throws, and round-trips locally: ${name}`, () => {
@@ -239,19 +229,22 @@ describe("the JSON form is total and lossless (section 3.4)", () => {
     });
   }
 
-  it("keeps an element id __proto__ as an own key", () => {
+  it("a record a peer stored under the key __proto__ is not an element, and breaks nothing", () => {
     const d = new Y.Doc();
     initDocument(d, { id: "d" });
-    addElement(d, {
-      id: "__proto__",
-      type: FRAME_TYPE,
-      x: 0,
-      y: 0,
-      size: { w: 1, h: 1 },
-    });
+    addElement(d, { id: "E", type: FRAME_TYPE, x: 0, y: 0, size: { w: 1, h: 1 } });
+    d.transact(() => {
+      const map = new Y.Map<unknown>();
+      roots(d).elements.set("__proto__", map);
+      map.set("type", FRAME_TYPE);
+    }, "remote-peer");
     const s = toSnapshot(d);
-    expect(Object.keys(s.elements)).toEqual(["__proto__"]);
-    expect(JSON.stringify(s.elements)).toContain('"__proto__"');
+    expect(Object.keys(s.elements)).toEqual(["E"]);
+    expect(Object.getPrototypeOf(s.elements)).toBe(Object.prototype);
+    expect(resolve(d).drawOrder()).toEqual(["E"]);
+    expect(inspectDocument(d).problems).toEqual([
+      "elements.__proto__: not a valid id, left out",
+    ]);
   });
 
   it("a peer injecting an odd value does not break saving for anyone", () => {
@@ -280,7 +273,7 @@ describe("undo never hard-deletes records (section 10)", () => {
     addElement(d, { id: "X", type: SHAPE, x: 100, y: 100, size: { w: 10, h: 10 } });
     addElement(d, { id: "Y", type: SHAPE, x: 300, y: 100, size: { w: 10, h: 10 } });
     const a = forkDoc(d, 1);
-    const undo = createUndoManager(a, 0);
+    const undo = createUndoManager(a, { captureTimeout: 0 });
     group(a, ["X", "Y"], { id: "G" });
     const b = forkDoc(a, 2);
     addElement(b, {
@@ -305,7 +298,7 @@ describe("undo never hard-deletes records (section 10)", () => {
   it("undoing a creation while someone edits the element keeps their work", () => {
     const d = base();
     const a = forkDoc(d, 1);
-    const undo = createUndoManager(a, 0);
+    const undo = createUndoManager(a, { captureTimeout: 0 });
     addElement(a, {
       id: "T",
       type: "galatsa.text/text",
@@ -318,9 +311,6 @@ describe("undo never hard-deletes records (section 10)", () => {
     edit(
       b,
       () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " -- written offline"),
-      {
-        touch: ["T"],
-      },
     );
     undo.undo();
     syncDocs(a, b);
@@ -333,7 +323,7 @@ describe("undo never hard-deletes records (section 10)", () => {
 
   it("undo and redo of a creation, with nobody else involved", () => {
     const a = base();
-    const undo = createUndoManager(a, 0);
+    const undo = createUndoManager(a, { captureTimeout: 0 });
     addElement(a, { id: "T", type: SHAPE, x: 0, y: 0, size: { w: 1, h: 1 } });
     undo.undo();
     expect(roots(a).elements.has("T")).toBe(true);
@@ -477,16 +467,28 @@ describe("tidy up and paste (sections 3.5, 5.8)", () => {
     const order = before.drawOrder();
     const world = Object.fromEntries(order.map((id) => [id, before.worldOrigin(id)]));
     const region = regionToWorld(before, stopRegion(toSnapshot(d), before, stop)!);
+    const full = purgeSnapshot(toSnapshot(d));
     const summary = tidyUp(d);
-    expect(summary.elements).toBe(3);
+    // Z is deleted; the frame G and the group Gx stay as empty place markers.
+    expect(summary).toMatchObject({ elements: 1, containers: 2 });
     const after = resolve(d);
     expect(after.drawOrder()).toEqual(order);
     for (const id of order) close(after.worldOrigin(id), world[id]!);
     const s = toSnapshot(d);
     expect(validateSnapshot(s)).toEqual([]);
-    expect(Object.keys(s.elements).sort()).toEqual(["F", "X", "Y"]);
-    expect(s.stops[stop]!.view.kind).toBe("rect");
+    expect(Object.keys(s.elements).sort()).toEqual(["F", "G", "Gx", "X", "Y"]);
+    expect(s.elements.G).toMatchObject({ dissolved: true, deleted: {}, data: {} });
+    // The stop still shows where the frame was.
     expect(regionToWorld(after, stopRegion(s, after, stop)!)).toEqual(region);
+
+    // An export for sharing purges completely: no markers, positions rewritten.
+    expect(validateSnapshot(full)).toEqual([]);
+    expect(Object.keys(full.elements).sort()).toEqual(["F", "X", "Y"]);
+    const shared = new Resolver(lookupFromRecord(full.elements));
+    expect(shared.drawOrder()).toEqual(order);
+    for (const id of order) close(shared.worldOrigin(id), world[id]!);
+    expect(full.stops[stop]!.view.kind).toBe("rect");
+    expect(regionToWorld(shared, stopRegion(full, shared, stop)!)).toEqual(region);
   });
 
   it("paste gives new ids and remaps references inside data of unknown types", () => {
@@ -504,7 +506,7 @@ describe("tidy up and paste (sections 3.5, 5.8)", () => {
     const stop = addStop(d, { view: { kind: "frame", frame: "F", padding: 0 } });
     setVisibility(d, stop, "X", "show");
     const fragment = copyFragment(toSnapshot(d), ["F"], [stop]);
-    const undo = createUndoManager(d, 0);
+    const undo = createUndoManager(d, { captureTimeout: 0 });
     const { ids } = pasteFragment(d, fragment, { dx: 5000, dy: 0 });
     const s = toSnapshot(d);
     const f2 = ids.get("F")!;
@@ -528,9 +530,12 @@ describe("tidy up and paste (sections 3.5, 5.8)", () => {
 
   it("a document read from JSON has no hidden content", () => {
     const d = fromSnapshot(toSnapshot(base()));
-    expect(hiddenContent(d)).toEqual([]);
+    expect(inspectDocument(d).problems).toEqual([]);
     d.getMap("secretRoot").set("payload", 1);
     roots(d).elements.get("X")!.set("smuggled", 1);
-    expect(hiddenContent(d)).toEqual(["root secretRoot", "elements.X.smuggled"]);
+    expect(inspectDocument(d).problems).toEqual([
+      "elements.X.smuggled: unknown field, left out",
+      "root secretRoot: unknown root type",
+    ]);
   });
 });

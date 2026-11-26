@@ -12,13 +12,15 @@
 //   └─ "assets"    Y.Map   AssetId -> AssetInfo (JSON)
 //
 //   element Y.Map: type, typeVersion, parent, order, pos, rebase, size, rot, name,
-//                  locked, rev, deleted, dissolved, refs (JSON values, last writer
-//                  wins per key); ext and data (Y.Map: JSON values or nested
-//                  shared types)
-//   stop Y.Map:    name, view, transition, rev, removed (JSON); notes (Y.Text);
-//                  visibility (Y.Map: ElementId -> {action}); ext (Y.Map)
-//   route Y.Map:   name, order, rev, removed (JSON); entries (Y.Map: EntryId ->
-//                  {stop, order}); ext (Y.Map)
+//                  locked, dissolved, refs (JSON values, last writer wins per
+//                  key); ext and data (Y.Map: JSON values or nested shared
+//                  types); rev and deleted (below)
+//   stop Y.Map:    name, view, transition (JSON); notes (Y.Text); visibility
+//                  (Y.Map: ElementId -> {action}); ext (Y.Map); rev, deleted
+//   route Y.Map:   name, order (JSON); entries (Y.Map: EntryId -> {stop, order});
+//                  ext (Y.Map); rev, deleted
+//   rev:           Y.Map: writer key -> Y.Array whose length is the counter
+//   deleted:       Y.Map: action id -> Y.Map { seen: JSON }
 
 import * as Y from "yjs";
 
@@ -64,10 +66,10 @@ export const STOP_KEYS = [
   "visibility",
   "transition",
   "rev",
-  "removed",
+  "deleted",
   "ext",
 ] as const;
-export const ROUTE_KEYS = ["name", "order", "entries", "rev", "removed", "ext"] as const;
+export const ROUTE_KEYS = ["name", "order", "entries", "rev", "deleted", "ext"] as const;
 
 /** Typed access to the root maps of a document. */
 export interface DocRoots {
@@ -91,11 +93,12 @@ export function roots(doc: Y.Doc): DocRoots {
 }
 
 /**
- * Transaction origins (section 10). Undo (Y.UndoManager) tracks only `local`, so
- * it never undoes remote changes, loading, record creation or tidying.
+ * Transaction origins (sections 5.5 and 10). Every local transaction counts as
+ * work on the records it changes and can be undone, whatever its origin, except
+ * the ones listed here.
  */
 export const ORIGIN = {
-  /** A change made by the local user through a command. Undoable. */
+  /** A change made by the local user through an operation. */
   local: "galatsa:local",
   /** Creating records (they are created removed, then restored by a local change). */
   create: "galatsa:create",
@@ -103,13 +106,29 @@ export const ORIGIN = {
   load: "galatsa:load",
   /** Purging removed records ("tidy up"). Not undoable. */
   tidy: "galatsa:tidy",
+  /** Recording work: revisions and refreshed delete marks (section 5.5). */
+  track: "galatsa:track",
 } as const;
 
-/** The undo manager configuration that keeps the guarantees of section 10. */
-export function createUndoManager(doc: Y.Doc, captureTimeout = 500): Y.UndoManager {
-  const r = roots(doc);
-  return new Y.UndoManager([r.elements, r.stops, r.routes, r.settings, r.meta], {
-    trackedOrigins: new Set([ORIGIN.local]),
-    captureTimeout,
-  });
+/** Origins whose transactions are neither work nor undoable. */
+export const INTERNAL_ORIGINS: ReadonlySet<unknown> = new Set([
+  ORIGIN.create,
+  ORIGIN.load,
+  ORIGIN.tidy,
+  ORIGIN.track,
+]);
+
+/** Raised when a document needs a newer version of the format than this code reads. */
+export class NewerVersionError extends Error {
+  readonly needed: number;
+  readonly supported: number;
+
+  constructor(needed: number, supported: number) {
+    super(
+      `The document needs format version ${needed}; this version reads up to ${supported}.`,
+    );
+    this.name = "NewerVersionError";
+    this.needed = needed;
+    this.supported = supported;
+  }
 }

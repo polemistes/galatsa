@@ -9,9 +9,12 @@ import type { Point, Resolver } from "./resolve.ts";
 import {
   FRAME_TYPE,
   GROUP_TYPE,
+  sameRevision,
+  type DeleteMarks,
   type DocumentSnapshot,
   type ElementId,
   type Rect,
+  type Revision,
   type RouteEntryId,
   type RouteId,
   type Stop,
@@ -27,16 +30,24 @@ export interface RouteStep {
 type StopsAndRoutes = Pick<DocumentSnapshot, "stops" | "routes">;
 
 /**
- * A stop or route is removed while its removal mark carries its current
- * revision; a concurrent change of the record cancels the removal (section 5.5).
+ * A stop or route is removed while one of its delete marks lists its current
+ * revision; work on the record that the remover did not see cancels the removal
+ * (section 5.5).
  */
-export function isRemoved(record: Pick<Stop, "rev" | "removed">): boolean {
-  return record.removed !== null && record.removed.rev === record.rev;
+export function isRemoved(
+  id: string,
+  record: { readonly rev: Revision; readonly deleted: DeleteMarks },
+): boolean {
+  for (const action of Object.keys(record.deleted)) {
+    const seen = record.deleted[action]!.seen;
+    if (Object.hasOwn(seen, id) && sameRevision(seen[id], record.rev)) return true;
+  }
+  return false;
 }
 
 function liveStop(doc: StopsAndRoutes, id: StopId): Stop | undefined {
   const stop = Object.hasOwn(doc.stops, id) ? doc.stops[id] : undefined;
-  return stop && !isRemoved(stop) ? stop : undefined;
+  return stop && !isRemoved(id, stop) ? stop : undefined;
 }
 
 /**
@@ -45,7 +56,7 @@ function liveStop(doc: StopsAndRoutes, id: StopId): Stop | undefined {
  */
 export function routeSteps(doc: StopsAndRoutes, routeId: RouteId): RouteStep[] {
   const route = Object.hasOwn(doc.routes, routeId) ? doc.routes[routeId] : undefined;
-  if (!route || isRemoved(route)) return [];
+  if (!route || isRemoved(routeId, route)) return [];
   return Object.entries(route.entries)
     .map(([id, entry]) => ({ id, order: entry.order, stop: entry.stop }))
     .sort(compareOrdered)
@@ -56,7 +67,7 @@ export function routeSteps(doc: StopsAndRoutes, routeId: RouteId): RouteStep[] {
 /** Routes that are not removed, in list order. */
 export function liveRoutes(doc: StopsAndRoutes): RouteId[] {
   return Object.entries(doc.routes)
-    .filter(([, route]) => !isRemoved(route))
+    .filter(([id, route]) => !isRemoved(id, route))
     .map(([id, route]) => ({ id, order: route.order }))
     .sort(compareOrdered)
     .map((route) => route.id);

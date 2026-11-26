@@ -12,7 +12,8 @@ import { compareOrdered } from "./order.ts";
 import {
   FRAME_TYPE,
   GROUP_TYPE,
-  type DeleteMark,
+  sameRevision,
+  type DeleteMarks,
   type Element,
   type ElementId,
   type OrderKey,
@@ -32,7 +33,7 @@ export interface ElementEnvelope {
   readonly rebase?: Rebase | null;
   readonly locked: boolean;
   readonly rev?: Revision;
-  readonly deleted?: DeleteMark | null;
+  readonly deleted?: DeleteMarks;
   readonly dissolved?: boolean;
   readonly size?: Size;
   readonly rot?: number;
@@ -63,39 +64,61 @@ export function isContainerType(type: string): boolean {
   return type === FRAME_TYPE || type === GROUP_TYPE;
 }
 
+/** One delete that hides an element: the action, and the element it is stored on. */
+export interface Deleter {
+  root: ElementId;
+  action: string;
+}
+
+const NO_DELETERS: readonly Deleter[] = [];
+const NO_REVISION: Revision = {};
+
+/** A lookup that does not see the given delete marks ("root action" keys). */
+export function withoutMarks(
+  lookup: ElementLookup,
+  ignored: ReadonlySet<string>,
+): ElementLookup {
+  if (ignored.size === 0) return lookup;
+  return {
+    ids: () => lookup.ids(),
+    get(id) {
+      const element = lookup.get(id);
+      if (!element?.deleted) return element;
+      const actions = Object.keys(element.deleted);
+      if (!actions.some((action) => ignored.has(`${id} ${action}`))) return element;
+      const deleted: DeleteMarks = {};
+      for (const action of actions) {
+        if (!ignored.has(`${id} ${action}`)) deleted[action] = element.deleted[action]!;
+      }
+      return { ...element, deleted };
+    },
+  };
+}
+
 /**
  * Resolves one state of the document. Results are cached, so create a new
- * Resolver after the document changes.
+ * Resolver after the document changes. Everything is computed on demand: asking
+ * about one element reads only that element and the containers above it, unless
+ * the question is about children.
  */
 export class Resolver {
   readonly #lookup: ElementLookup;
+  readonly #envelope = new Map<ElementId, ElementEnvelope | undefined>();
   readonly #parent = new Map<ElementId, ElementId | null>();
-  readonly #children = new Map<ElementId | null, ElementId[]>();
+  #children: Map<ElementId | null, ElementId[]> | null = null;
   readonly #local = new Map<ElementId, Point>();
   readonly #simpleLocal = new Map<ElementId, Point>();
-  readonly #deleted = new Map<ElementId, boolean>();
+  readonly #deleters = new Map<ElementId, readonly Deleter[]>();
 
   constructor(lookup: ElementLookup) {
     this.#lookup = lookup;
-    this.#resolveParents();
-    for (const id of lookup.ids()) {
-      const parent = this.#parent.get(id) ?? null;
-      let list = this.#children.get(parent);
-      if (!list) this.#children.set(parent, (list = []));
-      list.push(id);
-    }
-    for (const list of this.#children.values()) {
-      list.sort((a, b) =>
-        compareOrdered(
-          { id: a, order: this.#lookup.get(a)?.order ?? "" },
-          { id: b, order: this.#lookup.get(b)?.order ?? "" },
-        ),
-      );
-    }
   }
 
   get(id: ElementId): ElementEnvelope | undefined {
-    return this.#lookup.get(id);
+    if (this.#envelope.has(id)) return this.#envelope.get(id);
+    const envelope = this.#lookup.get(id);
+    this.#envelope.set(id, envelope);
+    return envelope;
   }
 
   ids(): Iterable<ElementId> {
@@ -104,7 +127,7 @@ export class Resolver {
 
   isContainer(id: ElementId | null): boolean {
     if (id === null) return true;
-    const element = this.#lookup.get(id);
+    const element = this.get(id);
     return element !== undefined && isContainerType(element.type);
   }
 
@@ -114,45 +137,42 @@ export class Resolver {
 
   /** The stored parent if it exists and is a container; otherwise null. */
   #validParent(id: ElementId): ElementId | null {
-    const parent = this.#lookup.get(id)?.parent ?? null;
+    const parent = this.get(id)?.parent ?? null;
     if (parent === null) return null;
-    const element = this.#lookup.get(parent);
+    const element = this.get(parent);
     return element && isContainerType(element.type) ? parent : null;
   }
 
   /**
-   * Effective parents: a missing or non-container parent means the root, and each
-   * parent cycle is broken at the member with the smallest id, which is moved to
-   * the root. The result does not depend on iteration order.
+   * Effective parent: the container whose space the element is in. A missing or
+   * non-container parent means the root, and each parent cycle is broken at the
+   * member with the smallest id, which is moved to the root. The result does not
+   * depend on the order in which elements are asked about.
    */
-  #resolveParents(): void {
-    for (const start of this.#lookup.ids()) {
-      if (this.#parent.has(start)) continue;
-      const path: ElementId[] = [];
-      const onPath = new Map<ElementId, number>();
-      let current: ElementId | null = start;
-      while (current !== null && !this.#parent.has(current)) {
-        const seenAt = onPath.get(current);
-        if (seenAt !== undefined) {
-          const cycle = path.slice(seenAt);
-          const breaker = cycle.reduce((min, id) => (id < min ? id : min));
-          for (const id of cycle) {
-            this.#parent.set(id, id === breaker ? null : this.#validParent(id));
-          }
-          break;
-        }
-        onPath.set(current, path.length);
-        path.push(current);
-        current = this.#validParent(current);
-      }
-      for (const id of path) {
-        if (!this.#parent.has(id)) this.#parent.set(id, this.#validParent(id));
-      }
-    }
-  }
-
-  /** Effective parent: the container whose space the element is in. */
   parentOf(id: ElementId): ElementId | null {
+    const known = this.#parent.get(id);
+    if (known !== undefined) return known;
+    if (!this.get(id)) return null;
+    const path: ElementId[] = [];
+    const onPath = new Map<ElementId, number>();
+    let current: ElementId | null = id;
+    while (current !== null && !this.#parent.has(current)) {
+      const seenAt = onPath.get(current);
+      if (seenAt !== undefined) {
+        const cycle = path.slice(seenAt);
+        const breaker = cycle.reduce((min, member) => (member < min ? member : min));
+        for (const member of cycle) {
+          this.#parent.set(member, member === breaker ? null : this.#validParent(member));
+        }
+        break;
+      }
+      onPath.set(current, path.length);
+      path.push(current);
+      current = this.#validParent(current);
+    }
+    for (const member of path) {
+      if (!this.#parent.has(member)) this.#parent.set(member, this.#validParent(member));
+    }
     return this.#parent.get(id) ?? null;
   }
 
@@ -166,7 +186,50 @@ export class Resolver {
 
   /** Children in the effective tree, back to front, removed ones included. */
   children(parent: ElementId | null): readonly ElementId[] {
+    if (!this.#children) {
+      const index = new Map<ElementId | null, ElementId[]>();
+      for (const id of this.#lookup.ids()) {
+        if (!this.get(id)) continue;
+        const key = this.parentOf(id);
+        let list = index.get(key);
+        if (!list) index.set(key, (list = []));
+        list.push(id);
+      }
+      for (const list of index.values()) {
+        list.sort((a, b) =>
+          compareOrdered(
+            { id: a, order: this.get(a)?.order ?? "" },
+            { id: b, order: this.get(b)?.order ?? "" },
+          ),
+        );
+      }
+      this.#children = index;
+    }
     return this.#children.get(parent) ?? [];
+  }
+
+  /**
+   * Walks the effective tree below `root` in drawing order without recursion.
+   * `enter` is called for each element and says whether to go into it.
+   */
+  #walk(root: ElementId | null, enter: (id: ElementId) => boolean): void {
+    const stack = [...this.children(root)].reverse();
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (!enter(id)) continue;
+      const children = this.children(id);
+      for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]!);
+    }
+  }
+
+  /** Everything inside `id` in the effective tree, in drawing order. */
+  descendants(id: ElementId): ElementId[] {
+    const out: ElementId[] = [];
+    this.#walk(id, (child) => {
+      out.push(child);
+      return true;
+    });
+    return out;
   }
 
   // -------------------------------------------------------------------------
@@ -174,34 +237,89 @@ export class Resolver {
   // -------------------------------------------------------------------------
 
   /**
-   * Deleted: the element carries a delete mark, its revision is unchanged since
-   * the mark was written, and the delete is still in effect (its root carries the
-   * same action with an unchanged revision and is not dissolved). Anything changed
-   * concurrently with the delete, and anything added to a deleted container,
-   * therefore survives.
+   * The deletes that hide an element. A delete stored on element R hides element
+   * E while E and every container between E and R (R included) still have
+   * exactly the revision the delete lists for them. So work on E, or on anything
+   * E is inside up to the deleted element, done without knowing about the delete,
+   * keeps E; and anything the delete does not list (it was added or moved in
+   * meanwhile) is never hidden by it.
    */
+  deleters(id: ElementId): readonly Deleter[] {
+    const chain: ElementId[] = [];
+    for (
+      let at: ElementId | null = id;
+      at !== null && !this.#deleters.has(at);
+      at = this.parentOf(at)
+    ) {
+      chain.push(at);
+    }
+    for (let i = chain.length - 1; i >= 0; i--) {
+      this.#deleters.set(chain[i]!, this.#computeDeleters(chain[i]!));
+    }
+    return this.#deleters.get(id) ?? NO_DELETERS;
+  }
+
+  #computeDeleters(id: ElementId): readonly Deleter[] {
+    const element = this.get(id);
+    if (!element) return NO_DELETERS;
+    const rev = element.rev ?? NO_REVISION;
+    let out: Deleter[] | null = null;
+    const marks = element.deleted;
+    if (marks) {
+      for (const action of Object.keys(marks)) {
+        const seen = marks[action]!.seen;
+        if (Object.hasOwn(seen, id) && sameRevision(seen[id], rev)) {
+          (out ??= []).push({ root: id, action });
+        }
+      }
+    }
+    const parent = this.parentOf(id);
+    if (parent !== null) {
+      for (const deleter of this.#deleters.get(parent) ?? NO_DELETERS) {
+        const seen = this.get(deleter.root)?.deleted?.[deleter.action]?.seen;
+        if (seen && Object.hasOwn(seen, id) && sameRevision(seen[id], rev)) {
+          (out ??= []).push(deleter);
+        }
+      }
+    }
+    return out ?? NO_DELETERS;
+  }
+
+  /**
+   * What a delete of `id` made now lists: the element and everything inside it,
+   * each with its current revision. If the element is already gone, the visible
+   * elements inside it are not part of it for the user (they survived an earlier
+   * removal), so they and what is inside them are left out.
+   */
+  coverage(id: ElementId): { [id: ElementId]: Revision } {
+    const seen: { [id: ElementId]: Revision } = {};
+    const list = (element: ElementId) => {
+      Object.defineProperty(seen, element, {
+        value: { ...(this.get(element)?.rev ?? NO_REVISION) },
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    };
+    if (!this.get(id)) return seen;
+    list(id);
+    const gone = this.isGone(id);
+    this.#walk(id, (child) => {
+      if (gone && !this.isGone(child)) return false;
+      list(child);
+      return true;
+    });
+    return seen;
+  }
+
+  /** Deleted: hidden by at least one delete (see `deleters`). */
   isDeleted(id: ElementId): boolean {
-    const cached = this.#deleted.get(id);
-    if (cached !== undefined) return cached;
-    const result = this.#computeDeleted(id);
-    this.#deleted.set(id, result);
-    return result;
+    return this.deleters(id).length > 0;
   }
 
-  #computeDeleted(id: ElementId): boolean {
-    const element = this.#lookup.get(id);
-    const mark = element?.deleted;
-    if (!element || !mark || element.rev !== mark.rev) return false;
-    const root = this.#lookup.get(mark.root);
-    const rootMark = root?.deleted;
-    if (!root || !rootMark || rootMark.action !== mark.action) return false;
-    if (root.rev !== rootMark.rev) return false;
-    return !(root.dissolved === true && isContainerType(root.type));
-  }
-
-  /** A container that was ungrouped or removed with "keep contents". */
+  /** A container that was ungrouped, removed with "keep contents", or tidied. */
   isDissolved(id: ElementId): boolean {
-    const element = this.#lookup.get(id);
+    const element = this.get(id);
     return (
       element !== undefined && element.dissolved === true && isContainerType(element.type)
     );
@@ -213,7 +331,7 @@ export class Resolver {
    * in the z-order for any children that are not gone themselves.
    */
   isGone(id: ElementId): boolean {
-    return this.isDeleted(id) || this.isDissolved(id);
+    return this.isDissolved(id) || this.isDeleted(id);
   }
 
   /** Nearest effective ancestor that is not gone: the parent the user sees. */
@@ -229,13 +347,11 @@ export class Resolver {
    */
   logicalChildren(parent: ElementId | null): ElementId[] {
     const out: ElementId[] = [];
-    const visit = (at: ElementId | null): void => {
-      for (const id of this.children(at)) {
-        if (!this.isGone(id)) out.push(id);
-        else if (this.isContainer(id)) visit(id);
-      }
-    };
-    visit(parent);
+    this.#walk(parent, (id) => {
+      if (this.isGone(id)) return this.isContainer(id);
+      out.push(id);
+      return false;
+    });
     return out;
   }
 
@@ -255,9 +371,9 @@ export class Resolver {
 
   /** Locked, or inside a locked container the user still sees (not gone). */
   isLocked(id: ElementId): boolean {
-    if (this.#lookup.get(id)?.locked) return true;
+    if (this.get(id)?.locked) return true;
     for (let at = this.logicalParentOf(id); at !== null; at = this.logicalParentOf(at)) {
-      if (this.#lookup.get(at)?.locked) return true;
+      if (this.get(at)?.locked) return true;
     }
     return false;
   }
@@ -269,13 +385,10 @@ export class Resolver {
    */
   drawOrder(): ElementId[] {
     const out: ElementId[] = [];
-    const visit = (parent: ElementId | null): void => {
-      for (const id of this.children(parent)) {
-        if (!this.isGone(id)) out.push(id);
-        if (this.isContainer(id)) visit(id);
-      }
-    };
-    visit(null);
+    this.#walk(null, (id) => {
+      if (!this.isGone(id)) out.push(id);
+      return this.isContainer(id);
+    });
     return out;
   }
 
@@ -288,7 +401,7 @@ export class Resolver {
    * or null if neither applies.
    */
   #ownLocal(id: ElementId): Point | null {
-    const element = this.#lookup.get(id);
+    const element = this.get(id);
     if (!element) return null;
     const { x, y, space } = element.pos;
     const parent = this.parentOf(id);
@@ -310,7 +423,7 @@ export class Resolver {
   #simple(id: ElementId): Point {
     const cached = this.#simpleLocal.get(id);
     if (cached) return cached;
-    const pos = this.#lookup.get(id)?.pos;
+    const pos = this.get(id)?.pos;
     const point = this.#ownLocal(id) ?? { x: pos?.x ?? 0, y: pos?.y ?? 0 };
     this.#simpleLocal.set(id, point);
     return point;
@@ -329,7 +442,7 @@ export class Resolver {
   localPosition(id: ElementId): Point {
     const cached = this.#local.get(id);
     if (cached) return cached;
-    const element = this.#lookup.get(id);
+    const element = this.get(id);
     let point: Point;
     if (!element) point = { x: 0, y: 0 };
     else {
@@ -414,23 +527,25 @@ export class Resolver {
    * Gone elements other than containers have no bounds.
    */
   boundsIn(id: ElementId, space: ElementId | null): Rect | null {
-    const element = this.#lookup.get(id);
-    if (!element) return null;
-    if (element.type === GROUP_TYPE || (this.isGone(id) && this.isContainer(id))) {
-      let result: Rect | null = null;
-      for (const child of this.children(id)) {
-        const b = this.boundsIn(child, space);
-        if (b) result = result ? unionRect(result, b) : b;
-      }
-      return result;
-    }
-    if (this.isGone(id)) return null;
-    const origin = this.positionIn(id, space);
-    const size = element.size ?? { w: 0, h: 0 };
-    return rotatedBounds(
-      { x: origin.x, y: origin.y, w: size.w, h: size.h },
-      element.rot ?? 0,
-    );
+    if (!this.get(id)) return null;
+    let result: Rect | null = null;
+    const visit = (at: ElementId): boolean => {
+      const element = this.get(at);
+      if (!element) return false;
+      const gone = this.isGone(at);
+      if (element.type === GROUP_TYPE || (gone && this.isContainer(at))) return true;
+      if (gone) return false;
+      const origin = this.positionIn(at, space);
+      const size = element.size ?? { w: 0, h: 0 };
+      const box = rotatedBounds(
+        { x: origin.x, y: origin.y, w: size.w, h: size.h },
+        element.rot ?? 0,
+      );
+      result = result ? unionRect(result, box) : box;
+      return false;
+    };
+    if (visit(id)) this.#walk(id, visit);
+    return result;
   }
 
   /** World bounds; see boundsIn. */

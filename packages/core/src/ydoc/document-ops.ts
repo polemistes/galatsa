@@ -1,116 +1,220 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Operations on a whole Y.Doc: tidy up (purge removed content) and paste a
-// fragment with new ids. Sections 3.5 and 5.8 of
-// docs/adr/0001-document-model-and-file-format.md.
+// Operations on a whole Y.Doc: tidy up (purge removed content), paste a fragment
+// with new ids, and import another copy of a document as new content. Sections
+// 3.5, 5.8 and 9.3 of docs/adr/0001-document-model-and-file-format.md.
 
 import * as Y from "yjs";
-import type { Fragment } from "../model/fragment.ts";
+import { copyFragment, type Fragment } from "../model/fragment.ts";
+import {
+  ASSET_ID_PATTERN,
+  ID_PATTERN,
+  InvalidDocumentError,
+  Problems,
+  readAsset,
+  readRouteEntry,
+  readSnapshot,
+} from "../model/grammar.ts";
 import { newId } from "../model/ids.ts";
-import { keysBetween } from "../model/order.ts";
-import { purgeSnapshot, purgeSummary } from "../model/purge.ts";
-import { Resolver } from "../model/resolve.ts";
+import { keysBetween, sortOrdered } from "../model/order.ts";
+import { Resolver, lookupFromRecord } from "../model/resolve.ts";
+import { isRemoved, liveRoutes } from "../model/route.ts";
 import {
   setOwn,
   type AssetId,
+  type DocumentSnapshot,
   type Element,
   type ElementId,
+  type Revision,
+  type Route,
+  type RouteId,
   type Stop,
   type StopId,
 } from "../model/types.ts";
-import { remapStrings } from "../model/walk.ts";
-import { cloneJson } from "./encode.ts";
-import { addAsset, type OpOptions } from "./ops.ts";
-import { ORIGIN, roots } from "./schema.ts";
-import { toSnapshot, writeElement, writeStop, yLookup } from "./snapshot.ts";
+import { referencedAssets, remapStrings } from "../model/walk.ts";
+import { jsonFromY } from "./encode.ts";
+import { addAsset, assertWritable, slots, type OpOptions } from "./ops.ts";
+import { META_KEYS, ORIGIN, roots } from "./schema.ts";
+import {
+  RECORD_KEYS,
+  marksOf,
+  revisionOf,
+  toSnapshot,
+  writeElement,
+  writeRoute,
+  writeStop,
+  yLookup,
+} from "./snapshot.ts";
+import { trackWork } from "./track.ts";
 
-function same(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+export interface TidySummary {
+  /** Removed elements whose records were deleted. */
+  elements: number;
+  /** Removed frames and groups that were emptied and kept as place markers. */
+  containers: number;
+  stops: number;
+  routes: number;
+  assets: number;
+  /** Records and keys that this version of the format does not define. */
+  other: number;
+}
+
+function dropUnknownKeys(record: Y.Map<unknown>, known: readonly string[]): number {
+  let dropped = 0;
+  for (const key of [...record.keys()]) {
+    if (known.includes(key)) continue;
+    record.delete(key);
+    dropped++;
+  }
+  return dropped;
+}
+
+function clearMap(value: unknown): void {
+  if (value instanceof Y.Map) for (const key of [...value.keys()]) value.delete(key);
 }
 
 /**
- * Tidy up (section 5.8): permanently removes deleted and dissolved elements,
- * removed stops and routes, and unused asset descriptions, keeping what the user
- * sees unchanged. It cannot be undone, and edits that long-offline copies made to
- * purged records are lost when they merge, which is why it only runs on request.
+ * Tidy up (section 5.8): permanently removes what the user no longer sees. What
+ * the user sees does not change, and nothing that is kept is rewritten, so the
+ * purge conflicts with no edit made elsewhere.
+ *
+ * - Removed elements are deleted, except frames and groups: those are emptied
+ *   (name, data, ext, references and marks cleared) and stay as dissolved place
+ *   markers, so that work done offline inside them still lands in the right
+ *   place when it merges.
+ * - Removed stops and routes are deleted, with route entries and visibility
+ *   entries that point at deleted records.
+ * - Delete marks that are no longer in effect, asset descriptions nothing refers
+ *   to, and records and keys this version does not define are deleted.
+ *
+ * It cannot be undone, and edits that offline copies made to purged records are
+ * lost when they merge, which is why it only runs on request.
  */
-export function tidyUp(doc: Y.Doc): ReturnType<typeof purgeSummary> {
-  const before = toSnapshot(doc);
-  const after = purgeSnapshot(before);
+export function tidyUp(doc: Y.Doc): TidySummary {
+  assertWritable(doc);
   const r = roots(doc);
+  const summary: TidySummary = {
+    elements: 0,
+    containers: 0,
+    stops: 0,
+    routes: 0,
+    assets: 0,
+    other: 0,
+  };
+  // Decide everything on the state before the purge.
+  const view = new Resolver(yLookup(doc));
+  type Fate = "junk" | "delete" | "marker" | "keep";
+  const fates = new Map<string, Fate>();
+  for (const [id, record] of r.elements.entries()) {
+    if (!(record instanceof Y.Map) || !ID_PATTERN.test(id) || !view.get(id)) {
+      fates.set(id, "junk");
+    } else if (!view.isGone(id)) fates.set(id, "keep");
+    else fates.set(id, view.isContainer(id) ? "marker" : "delete");
+  }
+  const removed = (id: string, record: unknown): Fate => {
+    if (!(record instanceof Y.Map) || !ID_PATTERN.test(id)) return "junk";
+    const map = record as Y.Map<unknown>;
+    return isRemoved(id, { rev: revisionOf(map), deleted: marksOf(map) })
+      ? "delete"
+      : "keep";
+  };
+  const stopFates = new Map<string, Fate>();
+  for (const [id, record] of r.stops.entries()) stopFates.set(id, removed(id, record));
+  const routeFates = new Map<string, Fate>();
+  for (const [id, record] of r.routes.entries()) routeFates.set(id, removed(id, record));
+
   doc.transact(() => {
-    for (const id of [...r.elements.keys()]) {
-      const next = Object.hasOwn(after.elements, id) ? after.elements[id] : undefined;
-      if (!next) {
+    for (const [id, fate] of fates) {
+      const record = r.elements.get(id) as Y.Map<unknown>;
+      if (fate === "junk" || fate === "delete") {
         r.elements.delete(id);
+        if (fate === "junk") summary.other++;
+        else summary.elements++;
         continue;
       }
-      const map = r.elements.get(id)!;
-      const prev = before.elements[id]!;
-      for (const key of [
-        "parent",
-        "order",
-        "pos",
-        "rebase",
-        "deleted",
-        "dissolved",
-        "refs",
-      ] as const) {
-        if (!same(prev[key], next[key])) map.set(key, cloneJson(next[key]));
+      summary.other += dropUnknownKeys(record, RECORD_KEYS.elements);
+      // A visible element has no delete in effect; a marker is gone for good.
+      clearMap(record.get("deleted"));
+      if (fate === "marker") {
+        summary.containers++;
+        if (record.get("dissolved") !== true) record.set("dissolved", true);
+        if (record.get("name") !== "") record.set("name", "");
+        if (record.get("locked") !== false) record.set("locked", false);
+        const refs = record.get("refs");
+        if (!Array.isArray(refs) || refs.length > 0) record.set("refs", []);
+        clearMap(record.get("data"));
+        clearMap(record.get("ext"));
       }
     }
-    for (const id of [...r.stops.keys()]) {
-      const next = Object.hasOwn(after.stops, id) ? after.stops[id] : undefined;
-      if (!next) {
+    for (const [id, fate] of stopFates) {
+      if (fate !== "keep") {
         r.stops.delete(id);
+        if (fate === "junk") summary.other++;
+        else summary.stops++;
         continue;
       }
-      const map = r.stops.get(id)!;
-      const prev = before.stops[id]!;
-      if (!same(prev.view, next.view)) map.set("view", cloneJson(next.view));
-      if (prev.removed !== null) map.set("removed", null);
-      const visibility = map.get("visibility");
+      const record = r.stops.get(id) as Y.Map<unknown>;
+      summary.other += dropUnknownKeys(record, RECORD_KEYS.stops);
+      clearMap(record.get("deleted"));
+      const visibility = record.get("visibility");
       if (visibility instanceof Y.Map) {
         for (const element of [...visibility.keys()]) {
-          if (!Object.hasOwn(next.visibility, element)) visibility.delete(element);
+          if (!r.elements.has(element)) visibility.delete(element);
         }
       }
     }
-    for (const id of [...r.routes.keys()]) {
-      const next = Object.hasOwn(after.routes, id) ? after.routes[id] : undefined;
-      if (!next) {
+    for (const [id, fate] of routeFates) {
+      if (fate !== "keep") {
         r.routes.delete(id);
+        if (fate === "junk") summary.other++;
+        else summary.routes++;
         continue;
       }
-      const map = r.routes.get(id)!;
-      if (before.routes[id]!.removed !== null) map.set("removed", null);
-      const entries = map.get("entries");
+      const record = r.routes.get(id) as Y.Map<unknown>;
+      summary.other += dropUnknownKeys(record, RECORD_KEYS.routes);
+      clearMap(record.get("deleted"));
+      const entries = record.get("entries");
       if (entries instanceof Y.Map) {
-        for (const entry of [...entries.keys()]) {
-          if (!Object.hasOwn(next.entries, entry)) entries.delete(entry);
+        const quiet = new Problems(0);
+        for (const [entry, value] of [...entries.entries()]) {
+          const read = ID_PATTERN.test(entry)
+            ? readRouteEntry(jsonFromY(value), quiet)
+            : null;
+          if (!read || !r.stops.has(read.stop)) entries.delete(entry);
         }
       }
     }
-    for (const id of [...r.assets.keys()]) {
-      if (!Object.hasOwn(after.assets, id)) r.assets.delete(id);
+    summary.other += dropUnknownKeys(r.meta, META_KEYS);
+    const used = referencedAssets(toSnapshot(doc));
+    const quiet = new Problems(0);
+    for (const [id, info] of [...r.assets.entries()]) {
+      if (!ASSET_ID_PATTERN.test(id) || !readAsset(jsonFromY(info), quiet)) {
+        r.assets.delete(id);
+        summary.other++;
+      } else if (!used.has(id as AssetId)) {
+        r.assets.delete(id);
+        summary.assets++;
+      }
     }
   }, ORIGIN.tidy);
-  return purgeSummary(before, after);
+  return summary;
 }
 
 export interface PasteResult {
-  /** Old id -> new id, for elements and stops. */
+  /** Old id -> new id, for elements, stops and routes. */
   ids: Map<string, string>;
   /** Assets the pasted content refers to; copy their bytes into this document's store. */
   assets: AssetId[];
 }
 
+const NO_REVISION: Revision = {};
+
 /**
  * Pastes a fragment with new ids (section 3.5). Roots go into `parent` (default:
  * the root), moved by (dx, dy), in front of what is there. Inside each element,
  * strings equal to an id the element lists in `refs` are remapped if that id was
- * pasted too; so are parents, position spaces, frame stops, stop spaces and
- * visibility entries. Undo removes the pasted records softly.
+ * pasted too; so are parents, position spaces, frame stops, stop spaces,
+ * visibility entries and route entries. Undo removes the pasted records softly.
  */
 export function pasteFragment(
   doc: Y.Doc,
@@ -118,66 +222,145 @@ export function pasteFragment(
   target: { parent?: ElementId | null; dx?: number; dy?: number } = {},
   options?: OpOptions,
 ): PasteResult {
+  assertWritable(doc);
+  trackWork(doc, options?.randomBytes);
   const parent = target.parent ?? null;
   const dx = target.dx ?? 0;
   const dy = target.dy ?? 0;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+    throw new InvalidDocumentError("offset", ["offset: must be finite numbers"]);
+  }
+  const r0 = roots(doc);
   const ids = new Map<string, string>();
-  for (const id of [...Object.keys(fragment.elements), ...Object.keys(fragment.stops)]) {
+  for (const id of [
+    ...Object.keys(fragment.elements),
+    ...Object.keys(fragment.stops),
+    ...Object.keys(fragment.routes),
+  ]) {
     ids.set(id, newId(options?.randomBytes));
   }
   const mapId = (id: string | null) => (id === null ? null : (ids.get(id) ?? id));
 
-  const r = new Resolver(yLookup(doc));
-  const front = r
-    .children(parent)
-    .filter((id) => !r.isGone(id))
-    .map((id) => r.get(id)!.order)
-    .pop();
-  const rootKeys = keysBetween(front ?? null, null, fragment.roots.length);
-  const rootSet = new Set(fragment.roots);
-  const action = newId(options?.randomBytes);
+  // In front of everything the user sees in the target container.
+  const front = slots(new Resolver(yLookup(doc)), parent).pop();
+  const rootKeys = keysBetween(front?.order ?? null, null, fragment.roots.length);
+  const rootIndex = new Map(fragment.roots.map((id, i) => [id, i]));
+  // Each root is created removed, with a mark that covers what is pasted inside it.
+  const inside = new Map<ElementId, ElementId[]>();
+  for (const oldId of Object.keys(fragment.elements)) {
+    let at: ElementId | null = oldId;
+    const seenOnWay = new Set<ElementId>();
+    while (at !== null && !rootIndex.has(at) && !seenOnWay.has(at)) {
+      seenOnWay.add(at);
+      at = Object.hasOwn(fragment.elements, at) ? fragment.elements[at]!.parent : null;
+    }
+    if (at !== null && rootIndex.has(at)) {
+      const list = inside.get(at) ?? [];
+      list.push(oldId);
+      inside.set(at, list);
+    }
+  }
+  const actions = new Map<Y.Map<unknown> | string, string>();
 
   const elements: [ElementId, Element][] = [];
   for (const [oldId, element] of Object.entries(fragment.elements)) {
     const id = ids.get(oldId)!;
     const own = new Map([...ids].filter(([from]) => element.refs.includes(from)));
-    const isRoot = rootSet.has(oldId);
-    const rev = newId(options?.randomBytes);
+    const index = rootIndex.get(oldId);
     const next: Element = {
       ...element,
-      parent: isRoot ? parent : mapId(element.parent),
-      order: isRoot ? rootKeys[fragment.roots.indexOf(oldId)]! : element.order,
-      pos: isRoot
-        ? { x: element.pos.x + dx, y: element.pos.y + dy, space: parent }
-        : { ...element.pos, space: mapId(element.pos.space) },
+      parent: index !== undefined ? parent : mapId(element.parent),
+      order: index !== undefined ? rootKeys[index]! : element.order,
+      pos:
+        index !== undefined
+          ? { x: element.pos.x + dx, y: element.pos.y + dy, space: parent }
+          : { ...element.pos, space: mapId(element.pos.space) },
       rebase: null,
-      rev,
-      deleted: { action, root: id, rev },
+      rev: {},
+      deleted: {},
       dissolved: false,
       refs: element.refs.map((ref) => ids.get(ref) ?? ref),
       ext: remapStrings(element.ext, own),
       data: remapStrings(element.data, own),
     };
+    if (index !== undefined) {
+      const seen: { [id: string]: Revision } = {};
+      for (const member of inside.get(oldId) ?? [oldId]) {
+        setOwn(seen, ids.get(member)!, NO_REVISION);
+      }
+      const action = newId(options?.randomBytes);
+      actions.set(`elements ${id}`, action);
+      next.deleted = { [action]: { seen } };
+    }
     elements.push([id, next]);
   }
+  const selfMark = (kind: string, id: string) => {
+    const action = newId(options?.randomBytes);
+    actions.set(`${kind} ${id}`, action);
+    return { [action]: { seen: { [id]: NO_REVISION } } };
+  };
   const stops: [StopId, Stop][] = [];
   for (const [oldId, stop] of Object.entries(fragment.stops)) {
-    const rev = newId(options?.randomBytes);
-    const view =
-      stop.view.kind === "frame"
-        ? { ...stop.view, frame: mapId(stop.view.frame)! }
-        : { ...stop.view, space: mapId(stop.view.space) };
+    const id = ids.get(oldId)!;
+    let view = stop.view;
+    if (view.kind === "frame") view = { ...view, frame: mapId(view.frame)! };
+    else if (view.space === null)
+      view = { ...view, space: parent, x: view.x + dx, y: view.y + dy };
+    else view = { ...view, space: mapId(view.space) };
     const visibility: Stop["visibility"] = {};
     for (const element of Object.keys(stop.visibility)) {
       if (ids.has(element))
         setOwn(visibility, ids.get(element)!, stop.visibility[element]!);
     }
-    stops.push([ids.get(oldId)!, { ...stop, view, visibility, rev, removed: { rev } }]);
+    stops.push([
+      id,
+      { ...stop, view, visibility, rev: {}, deleted: selfMark("stops", id) },
+    ]);
   }
+  const routes: [RouteId, Route][] = [];
+  const liveOrders = sortOrdered(
+    [...r0.routes.entries()]
+      .filter(
+        ([id, record]) =>
+          record instanceof Y.Map &&
+          !isRemoved(id, { rev: revisionOf(record), deleted: marksOf(record) }),
+      )
+      .map(([id, record]) => {
+        const order = (record as Y.Map<unknown>).get("order");
+        return { id, order: typeof order === "string" ? order : "" };
+      }),
+  );
+  const routeKeys = keysBetween(
+    liveOrders[liveOrders.length - 1]?.order ?? null,
+    null,
+    Object.keys(fragment.routes).length,
+  );
+  Object.entries(fragment.routes).forEach(([oldId, route], i) => {
+    const id = ids.get(oldId)!;
+    const entries: Route["entries"] = {};
+    for (const entry of Object.keys(route.entries)) {
+      const stop = route.entries[entry]!.stop;
+      // An entry is kept if its stop is pasted too or exists in this document.
+      if (!ids.has(stop) && !r0.stops.has(stop)) continue;
+      setOwn(entries, newId(options?.randomBytes), {
+        ...route.entries[entry]!,
+        stop: ids.get(stop) ?? stop,
+      });
+    }
+    routes.push([
+      id,
+      {
+        ...route,
+        order: routeKeys[i]!,
+        entries,
+        rev: {},
+        deleted: selfMark("routes", id),
+      },
+    ]);
+  });
 
   for (const [id, info] of Object.entries(fragment.assets))
     addAsset(doc, id as AssetId, info);
-  const r0 = roots(doc);
   doc.transact(() => {
     for (const [id, element] of elements) {
       const map = new Y.Map<unknown>();
@@ -189,10 +372,51 @@ export function pasteFragment(
       r0.stops.set(id, map);
       writeStop(map, stop);
     }
+    for (const [id, route] of routes) {
+      const map = new Y.Map<unknown>();
+      r0.routes.set(id, map);
+      writeRoute(map, route);
+    }
   }, ORIGIN.create);
   doc.transact(() => {
-    for (const [id] of elements) r0.elements.get(id)!.set("deleted", null);
-    for (const [id] of stops) r0.stops.get(id)!.set("removed", null);
+    const restore = (kind: "elements" | "stops" | "routes", id: string) => {
+      const action = actions.get(`${kind} ${id}`);
+      const record = r0[kind].get(id);
+      if (action === undefined || !(record instanceof Y.Map)) return;
+      const marks = record.get("deleted") as unknown;
+      if (marks instanceof Y.Map) marks.delete(action);
+    };
+    for (const [id] of elements) restore("elements", id);
+    for (const [id] of stops) restore("stops", id);
+    for (const [id] of routes) restore("routes", id);
   }, options?.origin ?? ORIGIN.local);
   return { ids, assets: Object.keys(fragment.assets) as AssetId[] };
+}
+
+/**
+ * Imports everything visible in another copy of a document as new content with
+ * new ids: its elements (in front of what is here, moved by an offset), stops
+ * and routes. This is the way to bring work together when two copies no longer
+ * share merge identity and cannot be synced (section 9.3): nothing is merged
+ * record by record, so nothing is overwritten; the user removes what is double.
+ */
+export function importCopy(
+  doc: Y.Doc,
+  source: DocumentSnapshot,
+  target: { parent?: ElementId | null; dx?: number; dy?: number } = {},
+  options?: OpOptions,
+): PasteResult {
+  const snapshot = readSnapshot(source).snapshot;
+  if (!snapshot) throw new InvalidDocumentError("document", ["must be an object"]);
+  const r = new Resolver(lookupFromRecord(snapshot.elements));
+  const stops = Object.keys(snapshot.stops).filter(
+    (id) => !isRemoved(id, snapshot.stops[id]!),
+  );
+  const fragment = copyFragment(
+    snapshot,
+    r.logicalChildren(null),
+    stops,
+    liveRoutes(snapshot),
+  );
+  return pasteFragment(doc, fragment, target, options);
 }

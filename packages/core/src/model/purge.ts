@@ -24,7 +24,8 @@ import { referencedAssets } from "./walk.ts";
  * of gone containers are moved into the container the user sees them in, at the
  * same place on the canvas and in the same stacking order; frame stops whose
  * frame is gone become rectangle stops showing the same region. Positions are
- * normalized (no rebases), and stale removal marks are cleared.
+ * normalized (no rebases), and revisions and delete marks are cleared: the
+ * result is for a file without merge identity (section 5.8).
  */
 export function purgeSnapshot(snapshot: DocumentSnapshot): DocumentSnapshot {
   const r = new Resolver(lookupFromRecord(snapshot.elements));
@@ -47,7 +48,8 @@ export function purgeSnapshot(snapshot: DocumentSnapshot): DocumentSnapshot {
       parent,
       pos: { x: pos.x, y: pos.y, space: parent },
       rebase: null,
-      deleted: null,
+      rev: {},
+      deleted: {},
       dissolved: false,
     });
   }
@@ -75,7 +77,7 @@ export function purgeSnapshot(snapshot: DocumentSnapshot): DocumentSnapshot {
   const stops: { [id: string]: Stop } = {};
   for (const id of Object.keys(snapshot.stops)) {
     const stop = snapshot.stops[id]!;
-    if (isRemoved(stop)) continue;
+    if (isRemoved(id, stop)) continue;
     let view = stop.view;
     if (view.kind === "frame" && !live(view.frame)) {
       const region = stopRegion(snapshot, r, id);
@@ -100,19 +102,19 @@ export function purgeSnapshot(snapshot: DocumentSnapshot): DocumentSnapshot {
     for (const element of Object.keys(stop.visibility)) {
       if (live(element)) setOwn(visibility, element, stop.visibility[element]!);
     }
-    setOwn(stops, id, { ...stop, view, visibility, removed: null });
+    setOwn(stops, id, { ...stop, view, visibility, rev: {}, deleted: {} });
   }
 
   const routes: { [id: string]: Route } = {};
   for (const id of Object.keys(snapshot.routes)) {
     const route = snapshot.routes[id]!;
-    if (isRemoved(route)) continue;
+    if (isRemoved(id, route)) continue;
     const entries: Route["entries"] = {};
     for (const entry of Object.keys(route.entries)) {
       if (Object.hasOwn(stops, route.entries[entry]!.stop))
         setOwn(entries, entry, route.entries[entry]!);
     }
-    setOwn(routes, id, { ...route, entries, removed: null });
+    setOwn(routes, id, { ...route, entries, rev: {}, deleted: {} });
   }
 
   for (const element of Object.values(elements)) {

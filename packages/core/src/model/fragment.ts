@@ -14,80 +14,110 @@ import {
   type DocumentSnapshot,
   type Element,
   type ElementId,
+  type Route,
+  type RouteId,
   type Stop,
   type StopId,
 } from "./types.ts";
 import { referencedAssets } from "./walk.ts";
 
 export interface Fragment {
-  /** Normalized copies: no rebases or removal marks; roots have parent null. */
+  /**
+   * Normalized copies: no rebases, revisions or delete marks; roots have parent
+   * null.
+   */
   elements: { [id: ElementId]: Element };
   /** Top-level elements, back to front. Their positions are in a common space. */
   roots: ElementId[];
+  /**
+   * Stops. A rectangle view whose space is null is in the same space as the
+   * roots' positions.
+   */
   stops: { [id: StopId]: Stop };
+  /** Routes, with all their entries (also those whose stop is not in the fragment). */
+  routes: { [id: RouteId]: Route };
   /** Descriptions of the assets the fragment refers to; the bytes travel separately. */
   assets: { [id: AssetId]: AssetInfo };
 }
 
 /**
- * Copies the given elements (with everything visible inside them) and stops.
- * Elements inside a selected element are not separate roots. Root positions are
- * expressed in the space the first root is seen in.
+ * Copies the given elements (with everything visible inside them), stops and
+ * routes. Elements inside a selected element are not separate roots. Root
+ * positions are expressed in the space the first root is seen in.
  */
 export function copyFragment(
   snapshot: DocumentSnapshot,
   elementIds: readonly ElementId[],
   stopIds: readonly StopId[] = [],
+  routeIds: readonly RouteId[] = [],
 ): Fragment {
   const r = new Resolver(lookupFromRecord(snapshot.elements));
   const selected = elementIds.filter(
     (id) => Object.hasOwn(snapshot.elements, id) && !r.isGone(id),
   );
-  const roots = selected.filter(
-    (id) => !selected.some((other) => other !== id && r.isWithin(id, other)),
-  );
-  const order = r.drawOrder();
-  roots.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const chosen = new Set(selected);
+  const insideAnother = (id: ElementId): boolean => {
+    for (let at = r.parentOf(id); at !== null; at = r.parentOf(at)) {
+      if (chosen.has(at)) return true;
+    }
+    return false;
+  };
+  const position = new Map(r.drawOrder().map((id, i) => [id, i]));
+  const roots = [...chosen]
+    .filter((id) => !insideAnother(id))
+    .sort((a, b) => (position.get(a) ?? 0) - (position.get(b) ?? 0));
   const space = roots.length > 0 ? r.logicalParentOf(roots[0]!) : null;
 
   const elements: { [id: ElementId]: Element } = {};
-  const copy = (id: ElementId, parent: ElementId | null, posSpace: ElementId | null) => {
-    const element = snapshot.elements[id]!;
+  // Copies one element; its visible children follow, with fresh order keys.
+  const pending: Array<[ElementId, ElementId | null, ElementId | null, string]> = [];
+  const rootKeys = keysBetween(null, null, roots.length);
+  roots.forEach((id, i) => pending.push([id, null, space, rootKeys[i]!]));
+  while (pending.length > 0) {
+    const [id, parent, posSpace, order] = pending.pop()!;
     const pos = r.positionIn(id, posSpace);
     setOwn(elements, id, {
-      ...structuredJson(element),
+      ...structuredJson(snapshot.elements[id]!),
       parent,
+      order,
       pos: { x: pos.x, y: pos.y, space: parent },
       rebase: null,
-      deleted: null,
+      rev: {},
+      deleted: {},
       dissolved: false,
     });
     const children = r.logicalChildren(id);
     const keys = keysBetween(null, null, children.length);
-    children.forEach((child, i) => {
-      copy(child, id, id);
-      elements[child]!.order = keys[i]!;
-    });
-  };
-  const rootKeys = keysBetween(null, null, roots.length);
-  roots.forEach((id, i) => {
-    copy(id, null, space);
-    elements[id]!.order = rootKeys[i]!;
-  });
+    children.forEach((child, i) => pending.push([child, id, id, keys[i]!]));
+  }
 
   const stops: { [id: StopId]: Stop } = {};
   for (const id of stopIds) {
     const stop = Object.hasOwn(snapshot.stops, id) ? snapshot.stops[id] : undefined;
-    if (stop && !isRemoved(stop))
-      setOwn(stops, id, { ...structuredJson(stop), removed: null });
+    if (!stop || isRemoved(id, stop)) continue;
+    const copy: Stop = { ...structuredJson(stop), rev: {}, deleted: {} };
+    const view = copy.view;
+    if (view.kind === "rect" && !(view.space !== null && Object.hasOwn(elements, view.space))) {
+      // A rectangle outside the copied elements is expressed in the roots' space.
+      const from = view.space !== null && r.isContainer(view.space) ? view.space : null;
+      const d = r.offset(from, space);
+      copy.view = { ...view, space: null, x: view.x + d.x, y: view.y + d.y };
+    }
+    setOwn(stops, id, copy);
+  }
+  const routes: { [id: RouteId]: Route } = {};
+  for (const id of routeIds) {
+    const route = Object.hasOwn(snapshot.routes, id) ? snapshot.routes[id] : undefined;
+    if (route && !isRemoved(id, route))
+      setOwn(routes, id, { ...structuredJson(route), rev: {}, deleted: {} });
   }
 
-  const fragment: Fragment = { elements, roots, stops, assets: {} };
+  const fragment: Fragment = { elements, roots, stops, routes, assets: {} };
   const used = referencedAssets({
     ...snapshot,
     elements,
     stops,
-    routes: {},
+    routes,
     settings: {},
   });
   for (const id of used) {
@@ -97,7 +127,7 @@ export function copyFragment(
   return fragment;
 }
 
-/** Deep copy of plain JSON-form data. */
+/** Deep copy of plain JSON-form data ("__proto__" keys included). */
 function structuredJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

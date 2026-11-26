@@ -28,8 +28,13 @@ export type OrderKey = string;
  * "galatsa.text/text". Section 3.2.
  */
 export type ElementTypeId = string;
-/** Random token rewritten by every change of a record (section 5.5). */
-export type Revision = string;
+/**
+ * Revision of a record (section 5.5): one counter per writer that has worked on
+ * the record. It is opaque and only compared for equality: every unit of work
+ * changes the writer's own entry, so two revisions are equal exactly when no work
+ * happened between them.
+ */
+export type Revision = { [writer: string]: number };
 
 /** A JSON value. Numbers must be finite (JSON has no NaN or Infinity). */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -49,7 +54,7 @@ export type JsonObject = { [key: string]: Json };
 
 /** One run of a rich text delta, as in Yjs `Y.Text.toDelta()`. */
 export interface TextRun {
-  /** Inserted string, an embedded JSON object, or an embedded shared type. */
+  /** Inserted string, or an embed: any value that is not a string. */
   insert: string | DataValue;
   /** Formatting attributes (Yjs stores these as JSON). */
   attributes?: JsonObject;
@@ -141,12 +146,15 @@ export type AnyTree =
   | { i: string };
 
 /**
- * A value that could not be represented (an unknown shared type). Kept so a save
- * never fails; writing it back yields null (section 3.4).
+ * A value this version cannot represent: a shared type it does not know, a value
+ * nested too deep, or a tagged value from a newer version. Kept so that reading
+ * and saving never fail. `raw` holds the original JSON when there is one, so a
+ * version that understands it can restore it (section 3.4).
  */
 export interface UnsupportedValue {
   $y: "unsupported";
   note: string;
+  raw?: Json;
 }
 
 /** A shared-type (or escaped) value in the JSON form. */
@@ -231,18 +239,21 @@ export interface Rect {
 // ---------------------------------------------------------------------------
 
 /**
- * Mark written by a delete (section 5.5) on the deleted element (the root of the
- * delete) and on every descendant the deleting user saw. A record is deleted only
- * while the delete is in effect and the record's `rev` still equals `rev` here.
+ * One delete (section 5.5), stored on the record the user deleted. `seen` lists
+ * what the deleting user saw: the record itself and, for an element, everything
+ * inside it, each with its revision at that moment. The delete hides a record
+ * only while the record, and every container between it and the deleted element,
+ * still has exactly the revision listed.
  */
 export interface DeleteMark {
-  /** Random id of the delete action. */
-  action: string;
-  /** The element the user deleted. */
-  root: ElementId;
-  /** The record's revision when the delete was made. */
-  rev: Revision;
+  seen: { [id: string]: Revision };
 }
+
+/** The deletes of one record, keyed by a random action id. Empty: not deleted. */
+export type DeleteMarks = { [action: string]: DeleteMark };
+
+/** Open slot of a plain JSON value (asset, route entry, stop view, visibility). */
+export type JsonExt = { [key: string]: Json };
 
 /** Fields every element has, whatever its type. */
 export interface ElementBase {
@@ -260,11 +271,11 @@ export interface ElementBase {
   name: string;
   /** Locked elements cannot be selected or changed in the editor. Inherited. */
   locked: boolean;
-  /** Rewritten by every change of the element (section 5.5). */
+  /** Changed by every unit of work on the element (section 5.5). */
   rev: Revision;
-  /** Set by a delete; see DeleteMark. */
-  deleted: DeleteMark | null;
-  /** Containers only: dissolved (ungrouped). Beats a concurrent delete. */
+  /** Deletes of this element; see DeleteMark. */
+  deleted: DeleteMarks;
+  /** Containers only: dissolved (ungrouped, or emptied by tidy up). */
   dissolved: boolean;
   /** Ids of elements and stops that `data` or `ext` refer to (section 3.5). */
   refs: string[];
@@ -317,6 +328,7 @@ export interface FrameView {
   frame: ElementId;
   /** Margin around the frame, as a fraction of the frame's larger side. */
   padding: number;
+  ext?: JsonExt;
 }
 
 /** A stop that shows a free rectangle, in the local space of a container. */
@@ -328,6 +340,7 @@ export interface RectView {
   y: number;
   w: number;
   h: number;
+  ext?: JsonExt;
 }
 
 /** What a stop shows: a region, not a camera pose. The player fits it to the screen. */
@@ -336,11 +349,8 @@ export type StopView = FrameView | RectView;
 /** What happens to an element when the presentation arrives at a stop. */
 export interface VisibilityChange {
   action: "show" | "hide";
-}
-
-/** Removal of a stop or route: in effect while the record's rev equals `rev`. */
-export interface RemovalMark {
-  rev: Revision;
+  /** Additive hints (for example an effect); readers keep what they do not know. */
+  ext?: JsonExt;
 }
 
 export interface Stop {
@@ -353,7 +363,8 @@ export interface Stop {
   /** Transition into this stop, defined by the transition extension; null = default. */
   transition: Json;
   rev: Revision;
-  removed: RemovalMark | null;
+  /** Removals of this stop; `seen` lists only the stop itself. */
+  deleted: DeleteMarks;
   ext: ExtSlots;
 }
 
@@ -361,6 +372,7 @@ export interface Stop {
 export interface RouteEntry {
   stop: StopId;
   order: OrderKey;
+  ext?: JsonExt;
 }
 
 export interface Route {
@@ -369,7 +381,7 @@ export interface Route {
   order: OrderKey;
   entries: { [entry: RouteEntryId]: RouteEntry };
   rev: Revision;
-  removed: RemovalMark | null;
+  deleted: DeleteMarks;
   ext: ExtSlots;
 }
 
@@ -392,16 +404,19 @@ export interface AssetInfo {
    * presentation file's folder. The bytes are then not in the archive (section 8.4).
    */
   external?: { path: string };
+  ext?: JsonExt;
 }
 
 // ---------------------------------------------------------------------------
 // The document (section 2)
 // ---------------------------------------------------------------------------
 
-/** The format and schema version this code writes (section 9.4). */
+/** The format and schema version this code writes and reads (section 9.4). */
 export const SCHEMA_VERSION = 1;
 /** The oldest reader version that can read what this code writes. */
 export const MIN_READER_VERSION = 1;
+/** The id a document reads as when it has none (a replica that has not synced yet). */
+export const UNKNOWN_DOCUMENT_ID = "unknown";
 
 export interface DocumentSnapshot {
   /** Format version of the content (the highest version that wrote it). */
@@ -448,4 +463,15 @@ export function getOwn<T>(
   key: string,
 ): T | undefined {
   return Object.hasOwn(target, key) ? target[key] : undefined;
+}
+
+/** True if two revisions are equal: the same writers with the same counters. */
+export function sameRevision(a: Revision | undefined, b: Revision | undefined): boolean {
+  if (a === undefined || b === undefined) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) {
+    if (!Object.hasOwn(b, key) || a[key] !== b[key]) return false;
+  }
+  return true;
 }

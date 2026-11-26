@@ -38,7 +38,7 @@ import {
   type Element,
   type Stop,
 } from "./types.ts";
-import { nestingDepth, validateSnapshot } from "./validate.ts";
+import { MAX_DEPTH, nestingDepth, readSnapshot, validateSnapshot } from "./grammar.ts";
 
 function seeded(seed: number): () => number {
   let s = seed;
@@ -58,8 +58,8 @@ function el(partial: Record<string, unknown>): Element {
     rebase: null,
     name: "",
     locked: false,
-    rev: "r0",
-    deleted: null,
+    rev: { w: 1 },
+    deleted: {},
     dissolved: false,
     refs: [],
     ext: {},
@@ -210,31 +210,87 @@ describe("resolution", () => {
       back: el({ order: "a0" }),
       Gr: el({ type: GROUP_TYPE, order: "a3", dissolved: true }),
       g1: el({ parent: "Gr" }),
+      // The delete of D lists what its user saw: D, d1, d3, sub and s1.
       D: el({
         type: GROUP_TYPE,
         order: "a4",
-        deleted: { action: "k", root: "D", rev: "r0" },
+        deleted: {
+          k: {
+            seen: {
+              D: { w: 1 },
+              d1: { w: 1 },
+              d3: { w: 1 },
+              sub: { w: 1 },
+              s1: { w: 1 },
+            },
+          },
+        },
       }),
-      d1: el({ parent: "D", deleted: { action: "k", root: "D", rev: "r0" } }),
-      // Added to D after the delete (no mark): survives in D's slot.
+      d1: el({ parent: "D" }),
+      // Added to D after the delete (not listed): survives in D's slot.
       d2: el({ parent: "D", order: "a1" }),
-      // Marked, but changed since (different rev): survives.
-      d3: el({
-        parent: "D",
-        order: "a2",
-        rev: "r1",
-        deleted: { action: "k", root: "D", rev: "r0" },
-      }),
+      // Listed, but worked on since (another revision): survives.
+      d3: el({ parent: "D", order: "a2", rev: { w: 1, v: 3 } }),
+      // A group inside D that was worked on: it survives, and so does what is in
+      // it, although s1 itself is as the delete saw it.
+      sub: el({ type: GROUP_TYPE, parent: "D", order: "a3", rev: { w: 2 } }),
+      s1: el({ parent: "sub" }),
     };
     const r = new Resolver(lookupFromRecord(elements));
-    expect(r.drawOrder()).toEqual(["back", "F", "b", "a", "top", "g1", "d2", "d3"]);
+    expect(r.drawOrder()).toEqual([
+      "back",
+      "F",
+      "b",
+      "a",
+      "top",
+      "g1",
+      "d2",
+      "d3",
+      "sub",
+      "s1",
+    ]);
     expect(r.isDeleted("D")).toBe(true);
-    expect(r.isDeleted("d1")).toBe(true);
+    expect(r.deleters("d1")).toEqual([{ root: "D", action: "k" }]);
     expect(r.isDeleted("d2")).toBe(false);
     expect(r.isDeleted("d3")).toBe(false);
+    expect(r.isDeleted("sub")).toBe(false);
+    expect(r.isDeleted("s1")).toBe(false);
     expect(r.logicalParentOf("g1")).toBe(null);
     expect(r.logicalParentOf("d2")).toBe(null);
-    expect(r.logicalChildren(null)).toEqual(["back", "F", "top", "g1", "d2", "d3"]);
+    expect(r.logicalChildren(null)).toEqual(["back", "F", "top", "g1", "d2", "d3", "sub"]);
+    // What a delete of a visible container lists, and of one that is gone already.
+    expect(Object.keys(r.coverage("F")).sort()).toEqual(["F", "a", "b"]);
+    expect(Object.keys(r.coverage("D")).sort()).toEqual(["D", "d1"]);
+  });
+
+  it("a delete stops applying when the deleted element itself was worked on", () => {
+    const seen = { D: { w: 1 }, d1: { w: 1 } };
+    const make = (rev: Record<string, number>, dissolved: boolean) =>
+      new Resolver(
+        lookupFromRecord({
+          D: el({ type: GROUP_TYPE, rev, dissolved, deleted: { k: { seen } } }),
+          d1: el({ parent: "D" }),
+        }),
+      );
+    expect(make({ w: 1 }, false).isDeleted("d1")).toBe(true);
+    // Worked on (for example dissolved by someone who did not see the delete).
+    expect(make({ w: 1, v: 64 }, true).isDeleted("d1")).toBe(false);
+    // Dissolved knowingly, after the delete: still deleted.
+    expect(make({ w: 1 }, true).isDeleted("d1")).toBe(true);
+  });
+
+  it("resolves very deep trees without overflowing the stack", () => {
+    const elements: Record<string, Element> = {};
+    for (let i = 0; i < 30_000; i++) {
+      elements[`g${i}`] = el({ type: GROUP_TYPE, parent: i === 0 ? null : `g${i - 1}` });
+    }
+    elements.leaf = el({ parent: "g29999" });
+    const r = new Resolver(lookupFromRecord(elements));
+    expect(r.drawOrder().length).toBe(30_001);
+    expect(r.isDeleted("leaf")).toBe(false);
+    expect(r.bounds("g0")).toEqual({ x: 0, y: 0, w: 10, h: 10 });
+    expect(r.logicalChildren(null)).toEqual(["g0"]);
+    expect(Object.keys(r.coverage("g0")).length).toBe(30_001);
   });
 
   it("computes group bounds from live children", () => {
@@ -245,7 +301,7 @@ describe("resolution", () => {
       c: el({
         parent: "Gr",
         pos: { x: 500, y: 500, space: "Gr" },
-        deleted: { action: "k", root: "c", rev: "r0" },
+        deleted: { k: { seen: { c: { w: 1 } } } },
       }),
       Empty: el({ type: GROUP_TYPE }),
     };
@@ -262,8 +318,8 @@ function stop(partial: Partial<Stop>): Stop {
     notes: { $y: "text", delta: [] },
     visibility: {},
     transition: null,
-    rev: "r0",
-    removed: null,
+    rev: { w: 1 },
+    deleted: {},
     ext: {},
     ...partial,
   };
@@ -276,16 +332,16 @@ describe("routes and visibility", () => {
       s2: stop({ visibility: { title: { action: "hide" } } }),
       s3: stop({ visibility: { chart: { action: "show" } } }),
       s4: stop({ visibility: { chart: { action: "hide" } } }),
-      gone: stop({ removed: { rev: "r0" } }),
-      // Removed, but changed concurrently: the removal does not apply.
-      kept: stop({ rev: "r1", removed: { rev: "r0" } }),
+      gone: stop({ deleted: { k: { seen: { gone: { w: 1 } } } } }),
+      // Removed, but worked on concurrently: the removal does not apply.
+      kept: stop({ rev: { w: 1, v: 2 }, deleted: { k: { seen: { kept: { w: 1 } } } } }),
     },
     routes: {
       full: {
         name: "",
         order: "a0",
-        rev: "r0",
-        removed: null,
+        rev: {},
+        deleted: {},
         ext: {},
         entries: {
           e1: { stop: "s1", order: "a0" },
@@ -300,16 +356,16 @@ describe("routes and visibility", () => {
       short: {
         name: "",
         order: "a1",
-        rev: "r0",
-        removed: null,
+        rev: {},
+        deleted: {},
         ext: {},
         entries: { e1: { stop: "s1", order: "a0" }, e4: { stop: "s4", order: "a1" } },
       },
       old: {
         name: "",
         order: "Zz",
-        rev: "r0",
-        removed: { rev: "r0" },
+        rev: {},
+        deleted: { k: { seen: { old: {} } } },
         ext: {},
         entries: {},
       },
@@ -396,8 +452,8 @@ describe("validation", () => {
       r: {
         name: "",
         order: "a0",
-        rev: "r0",
-        removed: null,
+        rev: {},
+        deleted: {},
         ext: {},
         entries: { e: { stop: "s", order: "a0" } },
       },
@@ -426,8 +482,8 @@ describe("validation", () => {
       problems.some((p) => p.includes("only frames and groups can be dissolved")),
     ).toBe(true);
     expect(problems.some((p) => p.includes("smuggled: unknown field"))).toBe(true);
-    expect(problems.some((p) => p.includes("unknown shared type"))).toBe(true);
-    expect(problems.some((p) => p.includes("invalid asset id"))).toBe(true);
+    expect(problems.some((p) => p.includes("unknown kind of value"))).toBe(true);
+    expect(problems.some((p) => p.includes("not a valid id"))).toBe(true);
     expect(validateSnapshot(null)).toEqual(["document: must be an object"]);
   });
 
@@ -458,7 +514,7 @@ describe("validation", () => {
       value: doc.elements.a,
       enumerable: true,
     });
-    expect(validateSnapshot(doc).some((p) => p.includes("invalid id"))).toBe(true);
+    expect(validateSnapshot(doc).some((p) => p.includes("not a valid id"))).toBe(true);
   });
 
   it("generates keys even next to invalid ones, without throwing", () => {
@@ -483,7 +539,100 @@ describe("validation", () => {
     for (let i = 0; i < 100_000; i++) deep = [deep];
     const doc = JSON.parse(JSON.stringify(valid)) as DocumentSnapshot;
     (doc.elements.a!.data as Record<string, unknown>).deep = deep;
-    expect(nestingDepth(doc)).toBeGreaterThan(256);
-    expect(validateSnapshot(doc)[0]).toContain("nested deeper");
+    expect(nestingDepth(doc)).toBeGreaterThan(MAX_DEPTH);
+    expect(validateSnapshot(doc).some((p) => p.includes("nested too deep"))).toBe(true);
+    expect(nestingDepth(readSnapshot(doc).snapshot, 100_000)).toBeLessThanOrEqual(MAX_DEPTH);
+  });
+
+  it("reads anything as a valid document, and reading the result changes nothing", () => {
+    const junk = JSON.parse(JSON.stringify(valid)) as Record<string, unknown> &
+      DocumentSnapshot;
+    const a = junk.elements.a as unknown as Record<string, unknown>;
+    a.size = { w: -5, h: "x" };
+    a.typeVersion = 0;
+    a.rev = { ok: 3, "bad key": 1, zero: 0 };
+    a.deleted = { k: { seen: { a: { ok: 3 }, "bad id": {} } }, "bad action": {}, j: 5 };
+    a.rebase = { to: null, base: null, shifts: "many" };
+    const data = a.data as Record<string, unknown>;
+    data.future = { $y: "hologram", depth: 3 };
+    data.brokenText = { $y: "text", delta: "abc" };
+    data.runs = {
+      $y: "text",
+      delta: [
+        { insert: "a" },
+        { insert: "b" },
+        { insert: "" },
+        { insert: null },
+        { insert: "c", attributes: { bold: null } },
+        7,
+      ],
+    };
+    data.escaped = { $y: "json", value: 5 };
+    data.any = { $y: "any", value: { a: [1, 2] } };
+    data.lone = "x\uD800";
+    (junk.elements as Record<string, unknown>)["no type"] = {};
+    (junk.elements as Record<string, unknown>).typeless = { type: "Nope" };
+    (junk.stops.s as unknown as Record<string, unknown>).view = { kind: "orbit" };
+    (junk.stops.s as unknown as Record<string, unknown>).visibility = {
+      a: { action: "show", ext: { "x.fade": 200 } },
+      b: { action: "spin" },
+    };
+    (junk.routes.r as unknown as Record<string, unknown>).entries = {
+      e: { stop: "s", order: "a0", ext: { "x.note": "n" } },
+      f: { stop: 5 },
+    };
+    junk.schemaVersion = 0;
+    (junk as Record<string, unknown>).extra = true;
+    const first = readSnapshot(junk);
+    expect(first.problems.length).toBeGreaterThan(15);
+    const snapshot = first.snapshot!;
+    expect(snapshot.elements.a).toMatchObject({
+      size: { w: 0, h: 0 },
+      typeVersion: 1,
+      rev: { ok: 3 },
+      deleted: { k: { seen: { a: { ok: 3 } } } },
+      rebase: null,
+    });
+    const read = snapshot.elements.a!.data;
+    expect(read.future).toEqual({
+      $y: "unsupported",
+      note: 'unknown kind of value "hologram"',
+      raw: { $y: "hologram", depth: 3 },
+    });
+    expect(read.brokenText).toMatchObject({ $y: "unsupported", raw: { delta: "abc" } });
+    expect(read.runs).toEqual({ $y: "text", delta: [{ insert: "abc" }] });
+    expect(read.escaped).toBe(5);
+    expect(read.any).toMatchObject({ $y: "unsupported" });
+    expect(read.lone).toBe("x\uFFFD");
+    expect(Object.keys(snapshot.elements)).toEqual(["a"]);
+    expect(snapshot.stops.s!.view).toEqual({
+      kind: "rect",
+      space: null,
+      x: 0,
+      y: 0,
+      w: 1,
+      h: 1,
+    });
+    expect(snapshot.stops.s!.visibility).toEqual({
+      a: { action: "show", ext: { "x.fade": 200 } },
+    });
+    expect(snapshot.routes.r!.entries).toEqual({
+      e: { stop: "s", order: "a0", ext: { "x.note": "n" } },
+    });
+    expect(snapshot.schemaVersion).toBe(SCHEMA_VERSION);
+    const second = readSnapshot(snapshot);
+    expect(second.problems).toEqual([]);
+    expect(second.snapshot).toEqual(snapshot);
+  });
+
+  it("restores an unsupported value when this version can read the original", () => {
+    const doc = JSON.parse(JSON.stringify(valid)) as DocumentSnapshot;
+    const original = { $y: "map", entries: { k: 1 } };
+    (doc.elements.a!.data as Record<string, unknown>).kept = {
+      $y: "unsupported",
+      note: "written by a version that did not know maps",
+      raw: original,
+    };
+    expect(readSnapshot(doc).snapshot!.elements.a!.data.kept).toEqual(original);
   });
 });

@@ -5,10 +5,10 @@
 
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { validateSnapshot } from "../model/validate.ts";
+import { InvalidDocumentError, validateSnapshot } from "../model/grammar.ts";
 import type { DataValue, ElementData } from "../model/types.ts";
-import { dataValueFromY, dataValueToY } from "./encode.ts";
-import { addElement, initDocument } from "./ops.ts";
+import { valueFromY, valueToY } from "./encode.ts";
+import { addElement, initDocument, setData } from "./ops.ts";
 import { fromSnapshot, toSnapshot } from "./snapshot.ts";
 import { MergeIdentityError, forkDoc, syncDocs } from "./sync.ts";
 import { buildSampleDocument } from "./testing.ts";
@@ -75,12 +75,12 @@ const EVERYTHING: ElementData = {
 function roundTrip(data: ElementData): ElementData {
   const doc = new Y.Doc();
   const map = doc.getMap<unknown>("m");
-  for (const [k, v] of Object.entries(data)) map.set(k, dataValueToY(v));
+  for (const [k, v] of Object.entries(data)) map.set(k, valueToY(v));
   // Through an update, as another replica would receive it.
   const other = new Y.Doc();
   Y.applyUpdate(other, Y.encodeStateAsUpdate(doc));
   const out: ElementData = {};
-  for (const [k, v] of other.getMap<unknown>("m").entries()) out[k] = dataValueFromY(v);
+  for (const [k, v] of other.getMap<unknown>("m").entries()) out[k] = valueFromY(v);
   return out;
 }
 
@@ -93,7 +93,7 @@ describe("generic data encoding", () => {
     const doc = new Y.Doc();
     const map = doc.getMap<unknown>("m");
     map.set("raw", { $y: "text", note: "stored as plain JSON by some extension" });
-    const value = dataValueFromY(map.get("raw")) as DataValue;
+    const value = valueFromY(map.get("raw")) as DataValue;
     expect(value).toEqual({
       $y: "json",
       value: { $y: "text", note: "stored as plain JSON by some extension" },
@@ -101,18 +101,19 @@ describe("generic data encoding", () => {
   });
 
   it("encodes values JSON cannot express losslessly, and rejects them as plain JSON input", () => {
-    expect(() => dataValueToY(Number.NaN)).toThrow();
+    const sample = buildSampleDocument();
+    expect(() => setData(sample, "shape", "bad", Number.NaN)).toThrow(InvalidDocumentError);
     const doc = new Y.Doc();
     const m = doc.getMap<unknown>("m");
     m.set("bin", new Uint8Array([1, 2, 3]));
     m.set("u", undefined);
     m.set("nested", { list: [new Uint8Array([9]), undefined, 1] });
-    const bin = dataValueFromY(m.get("bin"));
+    const bin = valueFromY(m.get("bin"));
     expect(bin).toEqual({ $y: "any", value: { b: "AQID" } });
-    expect(dataValueToY(bin)).toEqual(new Uint8Array([1, 2, 3]));
-    expect(dataValueFromY(m.get("u"))).toEqual({ $y: "any", value: { u: 1 } });
-    const nested = dataValueFromY(m.get("nested"));
-    expect(dataValueToY(nested)).toEqual({ list: [new Uint8Array([9]), undefined, 1] });
+    expect(valueToY(bin)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(valueFromY(m.get("u"))).toEqual({ $y: "any", value: { u: 1 } });
+    const nested = valueFromY(m.get("nested"));
+    expect(valueToY(nested)).toEqual({ list: [new Uint8Array([9]), undefined, 1] });
   });
 });
 

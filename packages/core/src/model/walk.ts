@@ -4,7 +4,7 @@
 // transitions, settings): finding asset references (section 8.3) and remapping
 // element and stop ids on paste (section 3.5).
 
-import { ASSET_ID_PATTERN } from "./validate.ts";
+import { ASSET_ID_PATTERN } from "./grammar.ts";
 import {
   setOwn,
   type AnyTree,

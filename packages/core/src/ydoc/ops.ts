@@ -10,12 +10,36 @@
 //   creating a record takes two: the record is created already removed, in an
 //   untracked transaction, then restored in the local one. Undo of a creation is
 //   therefore a soft removal, never a hard delete (section 10).
-// - Every change of a record writes a fresh `rev` (section 5.5); removals do not.
+// - Arguments are checked with the grammar's own readers before anything is
+//   written, so an operation cannot write what a file could not hold; an invalid
+//   argument throws InvalidDocumentError and changes nothing.
+// - Operations never write revisions: the work tracker (track.ts) does, for any
+//   local transaction, in a follow-up transaction that undo does not touch
+//   (section 5.5).
 // - Moves write only `pos`; container changes write only `parent`, `rebase` and
 //   `order` (section 5.3).
 // - Locking is an editor rule and is not checked here (section 5.6).
+// - A document that needs a newer version of the format is not written to
+//   (section 9.4).
 
 import * as Y from "yjs";
+import {
+  ASSET_ID_PATTERN,
+  ID_PATTERN,
+  InvalidDocumentError,
+  MAX_SHIFTS,
+  checked,
+  readAsset,
+  readElement,
+  readJson,
+  readRoute,
+  readRouteEntry,
+  readStop,
+  readValue,
+  readView,
+  readVisibilityChange,
+  wellFormed,
+} from "../model/grammar.ts";
 import { newId, type RandomBytes } from "../model/ids.ts";
 import {
   compareOrdered,
@@ -25,6 +49,7 @@ import {
   type RandomSource,
 } from "../model/order.ts";
 import { Resolver, type Point } from "../model/resolve.ts";
+import { isRemoved } from "../model/route.ts";
 import {
   FRAME_TYPE,
   GROUP_TYPE,
@@ -33,12 +58,12 @@ import {
   type AssetId,
   type AssetInfo,
   type DataValue,
-  type Element,
   type ElementData,
   type ElementId,
   type ElementTypeId,
   type ExtSlots,
   type Json,
+  type JsonExt,
   type Rebase,
   type RouteEntryId,
   type RouteId,
@@ -47,15 +72,18 @@ import {
   type StopView,
   type TextRun,
 } from "../model/types.ts";
-import { cloneJson, dataValueToY } from "./encode.ts";
-import { ORIGIN, roots } from "./schema.ts";
+import { cloneJson, valueToY } from "./encode.ts";
+import { NewerVersionError, ORIGIN, roots } from "./schema.ts";
 import {
-  readEnvelope,
+  marksOf,
+  markToY,
+  revisionOf,
   writeElement,
   writeRoute,
   writeStop,
   yLookup,
 } from "./snapshot.ts";
+import { noteWork, trackWork } from "./track.ts";
 
 /** Options shared by all operations. */
 export interface OpOptions {
@@ -67,7 +95,21 @@ export interface OpOptions {
   randomBytes?: RandomBytes;
 }
 
+/** Throws if the document needs a newer version of the format than this code reads. */
+export function assertWritable(doc: Y.Doc): void {
+  const needed = roots(doc).meta.get("minReaderVersion");
+  if (typeof needed === "number" && needed > SCHEMA_VERSION) {
+    throw new NewerVersionError(needed, SCHEMA_VERSION);
+  }
+}
+
+function prepare(doc: Y.Doc, options: OpOptions | undefined): void {
+  trackWork(doc, options?.randomBytes);
+  assertWritable(doc);
+}
+
 function transact<T>(doc: Y.Doc, options: OpOptions | undefined, fn: () => T): T {
+  prepare(doc, options);
   let result!: T;
   doc.transact(() => {
     result = fn();
@@ -77,6 +119,40 @@ function transact<T>(doc: Y.Doc, options: OpOptions | undefined, fn: () => T): T
 
 function createTransact(doc: Y.Doc, fn: () => void): void {
   doc.transact(fn, ORIGIN.create);
+}
+
+function invalid(what: string, message: string): never {
+  throw new InvalidDocumentError(what, [`${what}: ${message}`]);
+}
+
+function checkId(id: unknown, what: string): asserts id is string {
+  if (typeof id !== "string" || !ID_PATTERN.test(id)) invalid(what, "not a valid id");
+}
+
+function checkNumbers(what: string, ...values: number[]): void {
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+      invalid(what, "must be a finite number");
+  }
+}
+
+function checkText(what: string, value: unknown): asserts value is string {
+  if (typeof value !== "string" || wellFormed(value) !== value)
+    invalid(what, "must be a well-formed string");
+}
+
+function marksMap(record: Y.Map<unknown>): Y.Map<unknown> {
+  let marks = record.get("deleted");
+  if (!(marks instanceof Y.Map)) {
+    marks = new Y.Map<unknown>();
+    record.set("deleted", marks);
+  }
+  return marks as Y.Map<unknown>;
+}
+
+function clearMarks(record: Y.Map<unknown>): void {
+  const marks = record.get("deleted");
+  if (marks instanceof Y.Map) for (const action of [...marks.keys()]) marks.delete(action);
 }
 
 function elementMap(doc: Y.Doc, id: ElementId): Y.Map<unknown> {
@@ -89,20 +165,15 @@ function resolver(doc: Y.Doc): Resolver {
   return new Resolver(yLookup(doc));
 }
 
-function freshRev(options?: OpOptions): string {
-  return newId(options?.randomBytes);
-}
-
-/** Records a change of a record (section 5.5). */
-function touch(map: Y.Map<unknown>, options?: OpOptions): void {
-  map.set("rev", freshRev(options));
-}
-
 /**
  * Children of a container that occupy a slot the user sees, back to front: live
  * children, and gone containers that still hold visible children.
  */
-function slots(r: Resolver, parent: ElementId | null, except?: ElementId): Ordered[] {
+export function slots(
+  r: Resolver,
+  parent: ElementId | null,
+  except?: ElementId,
+): Ordered[] {
   return r
     .children(parent)
     .filter(
@@ -120,6 +191,10 @@ export function initDocument(
   options?: OpOptions,
 ): void {
   const r = roots(doc);
+  if (r.meta.size > 0) throw new Error("The document is already initialized");
+  if (init.id !== undefined) checkId(init.id, "document id");
+  if (init.title !== undefined) checkText("title", init.title);
+  trackWork(doc, options?.randomBytes);
   doc.transact(() => {
     r.meta.set("schemaVersion", SCHEMA_VERSION);
     r.meta.set("minReaderVersion", MIN_READER_VERSION);
@@ -130,6 +205,7 @@ export function initDocument(
 }
 
 export function setTitle(doc: Y.Doc, title: string, options?: OpOptions): void {
+  checkText("title", title);
   transact(doc, options, () => roots(doc).meta.set("title", title));
 }
 
@@ -139,7 +215,9 @@ export function setSetting(
   value: Json,
   options?: OpOptions,
 ): void {
-  transact(doc, options, () => roots(doc).settings.set(key, cloneJson(value)));
+  checkText("setting key", key);
+  const json = checked("setting", (p) => readJson(value, p, 3));
+  transact(doc, options, () => roots(doc).settings.set(key, json));
 }
 
 // ---------------------------------------------------------------------------
@@ -168,12 +246,14 @@ export interface NewElement {
 
 /** Adds an element and returns its id. */
 export function addElement(doc: Y.Doc, init: NewElement, options?: OpOptions): ElementId {
+  prepare(doc, options);
   const id = init.id ?? newId(options?.randomBytes);
+  checkId(id, "element id");
+  if (roots(doc).elements.has(id)) throw new Error(`Element ${id} exists already`);
   const parent = init.parent ?? null;
-  const r = resolver(doc);
-  const siblings = slots(r, parent);
-  const rev = freshRev(options);
-  const base = {
+  const siblings = slots(resolver(doc), parent);
+  const action = newId(options?.randomBytes);
+  const raw: Record<string, unknown> = {
     type: init.type,
     typeVersion: init.typeVersion ?? 1,
     parent,
@@ -182,28 +262,23 @@ export function addElement(doc: Y.Doc, init: NewElement, options?: OpOptions): E
     rebase: null,
     name: init.name ?? "",
     locked: init.locked ?? false,
-    rev,
-    deleted: { action: newId(options?.randomBytes), root: id, rev },
+    rev: {},
+    // Created removed (the creation itself is the removal that undo restores).
+    deleted: { [action]: { seen: { [id]: {} } } },
     dissolved: false,
     refs: init.refs ?? [],
     ext: init.ext ?? {},
     data: init.data ?? {},
   };
-  let element: Element;
-  if (init.type === GROUP_TYPE) element = { ...base, type: GROUP_TYPE };
-  else {
-    if (!init.size) throw new Error(`Element type ${init.type} needs a size`);
-    element =
-      init.type === FRAME_TYPE
-        ? { ...base, type: FRAME_TYPE, size: init.size }
-        : { ...base, size: init.size, rot: init.rot ?? 0 };
-  }
+  if (init.size !== undefined) raw.size = init.size;
+  if (init.type !== GROUP_TYPE && init.type !== FRAME_TYPE) raw.rot = init.rot ?? 0;
+  const element = checked("element", (p) => readElement(raw, p));
   createTransact(doc, () => {
     const map = new Y.Map<unknown>();
     roots(doc).elements.set(id, map);
     writeElement(map, element);
   });
-  transact(doc, options, () => elementMap(doc, id).set("deleted", null));
+  transact(doc, options, () => marksMap(elementMap(doc, id)).delete(action));
   return id;
 }
 
@@ -219,10 +294,10 @@ export function moveElement(
   y: number,
   options?: OpOptions,
 ): void {
+  checkNumbers("position", x, y);
   transact(doc, options, () => {
     const map = elementMap(doc, id);
     map.set("pos", { x, y, space: resolver(doc).parentOf(id) });
-    touch(map, options);
   });
 }
 
@@ -233,13 +308,10 @@ function setKey(
   value: unknown,
   options?: OpOptions,
 ): void {
-  transact(doc, options, () => {
-    const map = elementMap(doc, id);
-    map.set(key, value);
-    touch(map, options);
-  });
+  transact(doc, options, () => elementMap(doc, id).set(key, value));
 }
 
+/** Sets the size. Groups have none; width and height are never negative. */
 export function resizeElement(
   doc: Y.Doc,
   id: ElementId,
@@ -247,15 +319,23 @@ export function resizeElement(
   h: number,
   options?: OpOptions,
 ): void {
+  checkNumbers("size", w, h);
+  if (w < 0 || h < 0) invalid("size", "width and height must not be negative");
+  if (elementMap(doc, id).get("type") === GROUP_TYPE) invalid("size", "groups have no size");
   setKey(doc, id, "size", { w, h }, options);
 }
 
+/** Sets the rotation. Frames and groups do not rotate. */
 export function rotateElement(
   doc: Y.Doc,
   id: ElementId,
   rot: number,
   options?: OpOptions,
 ): void {
+  checkNumbers("rotation", rot);
+  const type = elementMap(doc, id).get("type");
+  if (type === GROUP_TYPE || type === FRAME_TYPE)
+    invalid("rotation", "containers do not rotate");
   setKey(doc, id, "rot", rot, options);
 }
 
@@ -265,6 +345,7 @@ export function renameElement(
   name: string,
   options?: OpOptions,
 ): void {
+  checkText("name", name);
   setKey(doc, id, "name", name, options);
 }
 
@@ -274,7 +355,7 @@ export function setLocked(
   locked: boolean,
   options?: OpOptions,
 ): void {
-  setKey(doc, id, "locked", locked, options);
+  setKey(doc, id, "locked", locked === true, options);
 }
 
 /** Sets the ids of elements and stops that the element's data refers to. */
@@ -284,8 +365,12 @@ export function setRefs(
   refs: string[],
   options?: OpOptions,
 ): void {
+  for (const ref of refs) checkId(ref, "reference");
   setKey(doc, id, "refs", [...refs], options);
 }
+
+/** Nesting level of a value directly in a data or ext map of a record. */
+const VALUE_LEVEL = 5;
 
 /** Replaces one key of the element's data with a new value. */
 export function setData(
@@ -295,10 +380,9 @@ export function setData(
   value: DataValue,
   options?: OpOptions,
 ): void {
-  transact(doc, options, () => {
-    dataMap(doc, id).set(key, dataValueToY(value));
-    touch(elementMap(doc, id), options);
-  });
+  checkText("data key", key);
+  const read = checked("value", (p) => readValue(value, p, VALUE_LEVEL));
+  transact(doc, options, () => dataMap(doc, id).set(key, valueToY(read)));
 }
 
 /** Replaces one key of the element's ext slots. */
@@ -309,10 +393,13 @@ export function setExt(
   value: DataValue,
   options?: OpOptions,
 ): void {
+  checkText("ext key", key);
+  const read = checked("value", (p) => readValue(value, p, VALUE_LEVEL));
   transact(doc, options, () => {
     const map = elementMap(doc, id);
-    (map.get("ext") as Y.Map<unknown>).set(key, dataValueToY(value));
-    touch(map, options);
+    let ext = map.get("ext");
+    if (!(ext instanceof Y.Map)) map.set("ext", (ext = new Y.Map<unknown>()));
+    (ext as Y.Map<unknown>).set(key, valueToY(read));
   });
 }
 
@@ -324,30 +411,18 @@ export function dataMap(doc: Y.Doc, id: ElementId): Y.Map<unknown> {
 }
 
 /**
- * Runs `fn` in one local transaction, for in-place edits of shared types. Every
- * element or stop changed must be listed in `touch`, so that a concurrent delete
- * knows it was worked on (section 5.5).
+ * Runs `fn` in one local transaction, for in-place edits of shared types (text,
+ * arrays, maps inside data). The records changed need not be listed: the work
+ * tracker finds them. Editor bindings that run their own transactions are
+ * covered in the same way.
  */
-export function edit(
-  doc: Y.Doc,
-  fn: () => void,
-  options?: OpOptions & { touch?: readonly string[] },
-): void {
-  transact(doc, options, () => {
-    fn();
-    const r = roots(doc);
-    for (const id of options?.touch ?? []) {
-      const map = r.elements.get(id) ?? r.stops.get(id) ?? r.routes.get(id);
-      if (map instanceof Y.Map) touch(map, options);
-    }
-  });
+export function edit(doc: Y.Doc, fn: () => void, options?: OpOptions): void {
+  transact(doc, options, fn);
 }
 
 // ---------------------------------------------------------------------------
 // Containers (section 5)
 // ---------------------------------------------------------------------------
-
-const MAX_SHIFTS = 64;
 
 /**
  * Puts an element into container `target` without moving it on the canvas
@@ -361,7 +436,6 @@ function place(
   r: Resolver,
   id: ElementId,
   target: ElementId | null,
-  options?: OpOptions,
 ): void {
   const envelope = r.get(id)!;
   const parent = r.parentOf(id);
@@ -390,7 +464,6 @@ function place(
   };
   map.set("parent", target);
   map.set("rebase", rebase);
-  touch(map, options);
 }
 
 function checkTarget(r: Resolver, id: ElementId, target: ElementId | null): void {
@@ -416,7 +489,7 @@ export function reparent(
     checkTarget(r, id, target);
     const siblings = slots(r, target, id);
     const map = elementMap(doc, id);
-    place(map, r, id, target, options);
+    place(map, r, id, target);
     map.set("order", keyAt(siblings, options?.index ?? siblings.length, options?.random));
   });
 }
@@ -446,8 +519,7 @@ function restack(
     const index = target(others.length, current, inGone);
     if (!inGone && index === current) return;
     const map = elementMap(doc, id);
-    if (r.parentOf(id) !== logical) place(map, r, id, logical, options);
-    else touch(map, options);
+    if (r.parentOf(id) !== logical) place(map, r, id, logical);
     map.set("order", keyAt(others, index, options?.random));
   });
 }
@@ -493,7 +565,10 @@ export function group(
   options?: OpOptions & { id?: ElementId },
 ): ElementId {
   if (ids.length === 0) throw new Error("Nothing to group");
+  prepare(doc, options);
   const groupId = options?.id ?? newId(options?.randomBytes);
+  checkId(groupId, "group id");
+  if (roots(doc).elements.has(groupId)) throw new Error(`Element ${groupId} exists already`);
   const r = resolver(doc);
   const logical = r.logicalParentOf(ids[0]!);
   if (ids.some((id) => r.logicalParentOf(id) !== logical || r.isGone(id))) {
@@ -514,7 +589,6 @@ export function group(
   const index = front
     ? others.filter((s) => compareOrdered(s, front) <= 0).length
     : others.length;
-  const rev = freshRev(options);
   createTransact(doc, () => {
     const map = new Y.Map<unknown>();
     roots(doc).elements.set(groupId, map);
@@ -527,8 +601,8 @@ export function group(
       rebase: null,
       name: "",
       locked: false,
-      rev,
-      deleted: null,
+      rev: {},
+      deleted: {},
       dissolved: true,
       refs: [],
       ext: {},
@@ -538,7 +612,7 @@ export function group(
   transact(doc, options, () => {
     elementMap(doc, groupId).set("dissolved", false);
     const withGroup = resolver(doc);
-    for (const id of ids) place(elementMap(doc, id), withGroup, id, groupId, options);
+    for (const id of ids) place(elementMap(doc, id), withGroup, id, groupId);
   });
   return groupId;
 }
@@ -561,9 +635,10 @@ export function dissolve(doc: Y.Doc, id: ElementId, options?: OpOptions): void {
 }
 
 /**
- * Deletes elements (section 5.5). Each gets a delete mark, and so does every
- * descendant this replica sees, all with the same action id and each with its own
- * current revision. Anything changed or added concurrently survives.
+ * Deletes elements (section 5.5). Each gets a delete mark that lists what this
+ * replica sees: the element and everything inside it, with their revisions.
+ * Anything worked on or added concurrently, without knowing about the delete,
+ * survives. Elements that are already gone are skipped.
  */
 export function deleteElements(
   doc: Y.Doc,
@@ -572,26 +647,23 @@ export function deleteElements(
 ): void {
   transact(doc, options, () => {
     const r = resolver(doc);
-    for (const root of ids) {
-      if (!roots(doc).elements.has(root)) continue;
-      const action = newId(options?.randomBytes);
-      const visit = (id: ElementId): void => {
-        const map = elementMap(doc, id);
-        if (id === root || !r.isDeleted(id)) {
-          map.set("deleted", { action, root, rev: readEnvelope(map).rev ?? "" });
-        }
-        for (const child of r.children(id)) visit(child);
-      };
-      visit(root);
+    for (const root of new Set(ids)) {
+      const map = roots(doc).elements.get(root);
+      if (!(map instanceof Y.Map) || !r.get(root) || r.isGone(root)) continue;
+      marksMap(map).set(newId(options?.randomBytes), markToY(r.coverage(root)));
     }
   });
 }
 
-/** Undoes a delete or dissolve of this element (and so of what the delete covered). */
+/**
+ * Undoes every delete of this element itself, and a dissolve. Deletes of
+ * containers above it are not touched: `Resolver.deleters` tells which elements
+ * to restore to bring something back.
+ */
 export function restoreElement(doc: Y.Doc, id: ElementId, options?: OpOptions): void {
   transact(doc, options, () => {
     const map = elementMap(doc, id);
-    map.set("deleted", null);
+    clearMarks(map);
     if (map.get("dissolved") === true) map.set("dissolved", false);
   });
 }
@@ -617,23 +689,32 @@ export function addStop(
   init: { id?: StopId; view: StopView; name?: string; notes?: TextRun[] },
   options?: OpOptions,
 ): StopId {
+  prepare(doc, options);
   const id = init.id ?? newId(options?.randomBytes);
-  const rev = freshRev(options);
+  checkId(id, "stop id");
+  if (roots(doc).stops.has(id)) throw new Error(`Stop ${id} exists already`);
+  const action = newId(options?.randomBytes);
+  const stop = checked("stop", (p) =>
+    readStop(
+      {
+        name: init.name ?? "",
+        view: init.view,
+        notes: { $y: "text", delta: init.notes ?? [] },
+        visibility: {},
+        transition: null,
+        rev: {},
+        deleted: { [action]: { seen: { [id]: {} } } },
+        ext: {},
+      },
+      p,
+    ),
+  );
   createTransact(doc, () => {
     const map = new Y.Map<unknown>();
     roots(doc).stops.set(id, map);
-    writeStop(map, {
-      name: init.name ?? "",
-      view: init.view,
-      notes: { $y: "text", delta: init.notes ?? [] },
-      visibility: {},
-      transition: null,
-      rev,
-      removed: { rev },
-      ext: {},
-    });
+    writeStop(map, stop);
   });
-  transact(doc, options, () => stopMap(doc, id).set("removed", null));
+  transact(doc, options, () => marksMap(stopMap(doc, id)).delete(action));
   return id;
 }
 
@@ -644,11 +725,7 @@ function setStopKey(
   value: unknown,
   options?: OpOptions,
 ): void {
-  transact(doc, options, () => {
-    const map = stopMap(doc, id);
-    map.set(key, value);
-    touch(map, options);
-  });
+  transact(doc, options, () => stopMap(doc, id).set(key, value));
 }
 
 export function setStopView(
@@ -657,7 +734,8 @@ export function setStopView(
   view: StopView,
   options?: OpOptions,
 ): void {
-  setStopKey(doc, id, "view", cloneJson(view), options);
+  const read = checked("view", (p) => readView(view, p));
+  setStopKey(doc, id, "view", cloneJson(read), options);
 }
 
 export function renameStop(
@@ -666,6 +744,7 @@ export function renameStop(
   name: string,
   options?: OpOptions,
 ): void {
+  checkText("name", name);
   setStopKey(doc, id, "name", name, options);
 }
 
@@ -675,10 +754,11 @@ export function setStopTransition(
   transition: Json,
   options?: OpOptions,
 ): void {
-  setStopKey(doc, id, "transition", cloneJson(transition), options);
+  const read = checked("transition", (p) => readJson(transition, p, 4));
+  setStopKey(doc, id, "transition", read, options);
 }
 
-/** The stop's speaker notes, for editing in place (with `edit` and `touch: [stop]`). */
+/** The stop's speaker notes, for editing in place. */
 export function stopNotes(doc: Y.Doc, id: StopId): Y.Text {
   const notes = stopMap(doc, id).get("notes");
   if (!(notes instanceof Y.Text)) throw new Error(`Stop ${id} has no notes`);
@@ -691,27 +771,42 @@ export function setVisibility(
   stop: StopId,
   element: ElementId,
   action: "show" | "hide" | null,
-  options?: OpOptions,
+  options?: OpOptions & { ext?: JsonExt },
 ): void {
+  checkId(element, "element id");
+  const change =
+    action === null
+      ? null
+      : checked("visibility", (p) =>
+          readVisibilityChange(options?.ext ? { action, ext: options.ext } : { action }, p),
+        );
   transact(doc, options, () => {
     const map = stopMap(doc, stop);
-    const visibility = map.get("visibility") as Y.Map<unknown>;
-    if (action === null) visibility.delete(element);
-    else visibility.set(element, { action });
-    touch(map, options);
+    let visibility = map.get("visibility");
+    if (!(visibility instanceof Y.Map)) {
+      map.set("visibility", (visibility = new Y.Map<unknown>()));
+    }
+    if (change === null) (visibility as Y.Map<unknown>).delete(element);
+    else (visibility as Y.Map<unknown>).set(element, cloneJson(change));
   });
 }
 
-/** Removes a stop. Concurrent changes of the stop cancel the removal (section 5.5). */
+function removeRecord(id: string, map: Y.Map<unknown>, options?: OpOptions): void {
+  const rev = revisionOf(map);
+  if (isRemoved(id, { rev, deleted: marksOf(map) })) return;
+  marksMap(map).set(newId(options?.randomBytes), markToY({ [id]: rev }));
+}
+
+/**
+ * Removes a stop. Work on the stop that the remover did not see, such as adding
+ * a visit to it, cancels the removal (section 5.5).
+ */
 export function removeStop(doc: Y.Doc, id: StopId, options?: OpOptions): void {
-  transact(doc, options, () => {
-    const map = stopMap(doc, id);
-    map.set("removed", { rev: String(map.get("rev") ?? "") });
-  });
+  transact(doc, options, () => removeRecord(id, stopMap(doc, id), options));
 }
 
 export function restoreStop(doc: Y.Doc, id: StopId, options?: OpOptions): void {
-  transact(doc, options, () => stopMap(doc, id).set("removed", null));
+  transact(doc, options, () => clearMarks(stopMap(doc, id)));
 }
 
 export function addRoute(
@@ -719,25 +814,38 @@ export function addRoute(
   init: { id?: RouteId; name?: string } = {},
   options?: OpOptions,
 ): RouteId {
+  prepare(doc, options);
   const id = init.id ?? newId(options?.randomBytes);
+  checkId(id, "route id");
   const routes = roots(doc).routes;
-  const siblings = [...routes.entries()]
-    .filter(([, m]) => m instanceof Y.Map && m.get("removed") === null)
-    .map(([rid, m]) => ({ id: rid, order: String(m.get("order") ?? "") }));
-  const rev = freshRev(options);
+  if (routes.has(id)) throw new Error(`Route ${id} exists already`);
+  const siblings: Ordered[] = [];
+  for (const [routeId, map] of routes.entries()) {
+    if (!(map instanceof Y.Map)) continue;
+    if (isRemoved(routeId, { rev: revisionOf(map), deleted: marksOf(map) })) continue;
+    const order = map.get("order");
+    siblings.push({ id: routeId, order: typeof order === "string" ? order : "" });
+  }
+  const action = newId(options?.randomBytes);
+  const route = checked("route", (p) =>
+    readRoute(
+      {
+        name: init.name ?? "",
+        order: keyAt(sortOrdered(siblings), siblings.length, options?.random),
+        entries: {},
+        rev: {},
+        deleted: { [action]: { seen: { [id]: {} } } },
+        ext: {},
+      },
+      p,
+    ),
+  );
   createTransact(doc, () => {
     const map = new Y.Map<unknown>();
     routes.set(id, map);
-    writeRoute(map, {
-      name: init.name ?? "",
-      order: keyAt(sortOrdered(siblings), siblings.length, options?.random),
-      entries: {},
-      rev,
-      removed: { rev },
-      ext: {},
-    });
+    writeRoute(map, route);
   });
-  transact(doc, options, () => routeMap(doc, id).set("removed", null));
+  transact(doc, options, () => marksMap(routeMap(doc, id)).delete(action));
   return id;
 }
 
@@ -747,29 +855,32 @@ export function renameRoute(
   name: string,
   options?: OpOptions,
 ): void {
-  transact(doc, options, () => {
-    const map = routeMap(doc, id);
-    map.set("name", name);
-    touch(map, options);
-  });
+  checkText("name", name);
+  transact(doc, options, () => routeMap(doc, id).set("name", name));
 }
 
 export function removeRoute(doc: Y.Doc, id: RouteId, options?: OpOptions): void {
-  transact(doc, options, () => {
-    const map = routeMap(doc, id);
-    map.set("removed", { rev: String(map.get("rev") ?? "") });
-  });
+  transact(doc, options, () => removeRecord(id, routeMap(doc, id), options));
 }
 
 export function restoreRoute(doc: Y.Doc, id: RouteId, options?: OpOptions): void {
-  transact(doc, options, () => routeMap(doc, id).set("removed", null));
+  transact(doc, options, () => clearMarks(routeMap(doc, id)));
+}
+
+function entriesMap(route: Y.Map<unknown>): Y.Map<unknown> {
+  let entries = route.get("entries");
+  if (!(entries instanceof Y.Map)) route.set("entries", (entries = new Y.Map<unknown>()));
+  return entries as Y.Map<unknown>;
 }
 
 function entryList(entries: Y.Map<unknown>, except?: RouteEntryId): Ordered[] {
   return sortOrdered(
     [...entries.entries()]
       .filter(([id]) => id !== except)
-      .map(([id, e]) => ({ id, order: String((e as { order?: unknown }).order ?? "") })),
+      .map(([id, e]) => {
+        const order = (e as { order?: unknown } | null)?.order;
+        return { id, order: typeof order === "string" ? order : "" };
+      }),
   );
 }
 
@@ -782,20 +893,22 @@ export function insertRouteEntry(
   doc: Y.Doc,
   route: RouteId,
   stop: StopId,
-  options?: OpOptions & { index?: number; id?: RouteEntryId },
+  options?: OpOptions & { index?: number; id?: RouteEntryId; ext?: JsonExt },
 ): RouteEntryId {
   const id = options?.id ?? newId(options?.randomBytes);
+  checkId(id, "route entry id");
+  checkId(stop, "stop id");
   return transact(doc, options, () => {
-    const map = routeMap(doc, route);
-    const entries = map.get("entries") as Y.Map<unknown>;
+    const entries = entriesMap(routeMap(doc, route));
     const list = entryList(entries);
-    entries.set(id, {
+    const raw: Record<string, unknown> = {
       stop,
       order: keyAt(list, options?.index ?? list.length, options?.random),
-    });
-    touch(map, options);
+    };
+    if (options?.ext) raw.ext = options.ext;
+    entries.set(id, cloneJson(checked("route entry", (p) => readRouteEntry(raw, p))));
     const stopRecord = roots(doc).stops.get(stop);
-    if (stopRecord instanceof Y.Map) touch(stopRecord, options);
+    if (stopRecord instanceof Y.Map) noteWork(doc, stopRecord);
     return id;
   });
 }
@@ -809,15 +922,17 @@ export function moveRouteEntry(
   options?: OpOptions,
 ): void {
   transact(doc, options, () => {
-    const map = routeMap(doc, route);
-    const entries = map.get("entries") as Y.Map<unknown>;
-    const current = entries.get(entry) as { stop: StopId } | undefined;
-    if (!current) throw new Error(`No entry ${entry}`);
-    entries.set(entry, {
-      stop: current.stop,
-      order: keyAt(entryList(entries, entry), index, options?.random),
-    });
-    touch(map, options);
+    const entries = entriesMap(routeMap(doc, route));
+    const current = entries.get(entry);
+    if (current === undefined) throw new Error(`No entry ${entry}`);
+    const read = checked("route entry", (p) => readRouteEntry(current, p));
+    entries.set(
+      entry,
+      cloneJson({
+        ...read,
+        order: keyAt(entryList(entries, entry), index, options?.random),
+      }),
+    );
   });
 }
 
@@ -827,11 +942,7 @@ export function removeRouteEntry(
   entry: RouteEntryId,
   options?: OpOptions,
 ): void {
-  transact(doc, options, () => {
-    const map = routeMap(doc, route);
-    (map.get("entries") as Y.Map<unknown>).delete(entry);
-    touch(map, options);
-  });
+  transact(doc, options, () => entriesMap(routeMap(doc, route)).delete(entry));
 }
 
 // ---------------------------------------------------------------------------
@@ -843,8 +954,11 @@ export function removeRouteEntry(
  * Not undoable: descriptions are immutable and harmless.
  */
 export function addAsset(doc: Y.Doc, id: AssetId, info: AssetInfo): void {
+  if (!ASSET_ID_PATTERN.test(id)) invalid("asset id", "not an asset id");
+  const read = checked("asset", (p) => readAsset(info, p));
+  assertWritable(doc);
   doc.transact(() => {
     const assets = roots(doc).assets;
-    if (!assets.has(id)) assets.set(id, cloneJson(info));
+    if (!assets.has(id)) assets.set(id, cloneJson(read));
   }, ORIGIN.create);
 }

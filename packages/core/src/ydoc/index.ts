@@ -6,6 +6,7 @@
 export * from "./schema.ts";
 export * from "./encode.ts";
 export * from "./snapshot.ts";
+export * from "./track.ts";
 export * from "./ops.ts";
 export * from "./sync.ts";
 export * from "./document-ops.ts";

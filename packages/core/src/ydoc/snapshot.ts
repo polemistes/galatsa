@@ -2,46 +2,35 @@
 
 // Conversion between a Y.Doc and the JSON form (DocumentSnapshot), and read
 // access to elements straight from the Y.Doc. Section 2 of
-// docs/adr/0001-document-model-and-file-format.md. Reading never throws.
+// docs/adr/0001-document-model-and-file-format.md.
+//
+// Reading has two steps: the Yjs state is copied into plain data as it is, and
+// the grammar (`model/grammar.ts`) reads that. So what `toSnapshot` returns is
+// valid whatever a peer wrote, and it is the same reading the file reader does.
 
 import * as Y from "yjs";
+import {
+  ID_PATTERN,
+  InvalidDocumentError,
+  Problems,
+  readDeleteMarks,
+  readEnvelope,
+  readRevision,
+  readSnapshot,
+} from "../model/grammar.ts";
 import { newId, type RandomBytes } from "../model/ids.ts";
-import { DEFAULT_ORDER_KEY, isValidOrderKey } from "../model/order.ts";
 import type { ElementEnvelope, ElementLookup } from "../model/resolve.ts";
 import {
-  FRAME_TYPE,
-  GROUP_TYPE,
-  MIN_READER_VERSION,
-  SCHEMA_VERSION,
-  setOwn,
   type AssetId,
-  type AssetInfo,
-  type DeleteMark,
+  type DeleteMarks,
   type DocumentSnapshot,
   type Element,
   type ElementData,
-  type ElementId,
-  type Json,
-  type JsonObject,
-  type Position,
-  type Rebase,
-  type RemovalMark,
+  type Revision,
   type Route,
-  type RouteEntry,
-  type Shift,
-  type Size,
   type Stop,
-  type StopView,
-  type VisibilityChange,
 } from "../model/types.ts";
-import {
-  cloneJson,
-  dataValueFromY,
-  dataValueToY,
-  isJson,
-  textFromY,
-  textToY,
-} from "./encode.ts";
+import { cloneJson, jsonFromY, rawFromY, textToY, valueToY } from "./encode.ts";
 import {
   ELEMENT_KEYS,
   META_KEYS,
@@ -52,214 +41,281 @@ import {
   roots,
 } from "./schema.ts";
 
-function str(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value : fallback;
+type Raw = Record<string, unknown>;
+
+function put(target: Raw, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
 }
 
-function num(value: unknown, fallback = 0): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+// ---------------------------------------------------------------------------
+// Revisions and delete marks (section 5.5)
+// ---------------------------------------------------------------------------
+
+/** A record's `rev` as stored: each writer's counter is the length of its array. */
+function rawRevision(value: unknown): unknown {
+  if (!(value instanceof Y.Map)) return jsonFromY(value);
+  const out: Raw = {};
+  for (const [writer, pool] of (value as Y.Map<unknown>).entries()) {
+    put(out, writer, pool instanceof Y.Array ? pool.length : jsonFromY(pool));
+  }
+  return out;
 }
 
-function idOrNull(value: unknown): ElementId | null {
-  return typeof value === "string" ? value : null;
+function rawMarks(value: unknown): unknown {
+  if (!(value instanceof Y.Map)) return jsonFromY(value);
+  const out: Raw = {};
+  for (const [action, mark] of (value as Y.Map<unknown>).entries()) {
+    if (!(mark instanceof Y.Map)) {
+      put(out, action, jsonFromY(mark));
+      continue;
+    }
+    const fields: Raw = {};
+    for (const [key, item] of (mark as Y.Map<unknown>).entries()) {
+      put(fields, key, jsonFromY(item));
+    }
+    put(out, action, fields);
+  }
+  return out;
 }
 
-function obj(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
+const QUIET = new Problems(0);
+
+/** The current revision of a record map. */
+export function revisionOf(record: Y.Map<unknown>): Revision {
+  return readRevision(rawRevision(record.get("rev")), QUIET);
+}
+
+/** The delete marks of a record map. */
+export function marksOf(record: Y.Map<unknown>): DeleteMarks {
+  return readDeleteMarks(rawMarks(record.get("deleted")), QUIET);
+}
+
+function revisionToY(rev: Revision): Y.Map<unknown> {
+  const map = new Y.Map<unknown>();
+  for (const writer of Object.keys(rev)) {
+    const pool = new Y.Array<boolean>();
+    pool.push(new Array<boolean>(rev[writer]!).fill(true));
+    map.set(writer, pool);
+  }
+  return map;
+}
+
+/** A delete mark as it is stored: a map, so that undo keeps it while it is refreshed. */
+export function markToY(seen: { [id: string]: Revision }): Y.Map<unknown> {
+  const mark = new Y.Map<unknown>();
+  mark.set("seen", cloneJson(seen));
+  return mark;
+}
+
+function marksToY(marks: DeleteMarks): Y.Map<unknown> {
+  const map = new Y.Map<unknown>();
+  for (const action of Object.keys(marks)) map.set(action, markToY(marks[action]!.seen));
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Records as plain data
+// ---------------------------------------------------------------------------
+
+function rawSlots(value: unknown): unknown {
+  if (!(value instanceof Y.Map)) return jsonFromY(value);
+  const out: Raw = {};
+  for (const [key, item] of (value as Y.Map<unknown>).entries()) {
+    put(out, key, rawFromY(item));
+  }
+  return out;
+}
+
+function rawJsonMap(value: unknown): unknown {
+  if (!(value instanceof Y.Map)) return jsonFromY(value);
+  const out: Raw = {};
+  for (const [key, item] of (value as Y.Map<unknown>).entries()) {
+    put(out, key, jsonFromY(item));
+  }
+  return out;
+}
+
+const ELEMENT_SPECIAL: { [key: string]: (value: unknown) => unknown } = {
+  rev: rawRevision,
+  deleted: rawMarks,
+  ext: rawSlots,
+  data: rawSlots,
+};
+const STOP_SPECIAL: { [key: string]: (value: unknown) => unknown } = {
+  rev: rawRevision,
+  deleted: rawMarks,
+  ext: rawSlots,
+  notes: (value) => rawFromY(value),
+  visibility: rawJsonMap,
+};
+const ROUTE_SPECIAL: { [key: string]: (value: unknown) => unknown } = {
+  rev: rawRevision,
+  deleted: rawMarks,
+  ext: rawSlots,
+  entries: rawJsonMap,
+};
+
+function rawRecord(
+  record: unknown,
+  special: { [key: string]: (value: unknown) => unknown },
+  skip?: ReadonlySet<string>,
+): unknown {
+  if (!(record instanceof Y.Map)) return jsonFromY(record);
+  const out: Raw = {};
+  for (const [key, value] of (record as Y.Map<unknown>).entries()) {
+    if (skip?.has(key)) continue;
+    const convert = Object.hasOwn(special, key) ? special[key]! : jsonFromY;
+    put(out, key, convert(value));
+  }
+  return out;
+}
+
+const NOT_ENVELOPE: ReadonlySet<string> = new Set(["ext", "data"]);
+
+/** Reads the envelope of one element map (everything except data and ext). */
+export function envelopeFromY(map: Y.Map<unknown>): ElementEnvelope | undefined {
+  return readEnvelope(rawRecord(map, ELEMENT_SPECIAL, NOT_ENVELOPE), QUIET) ?? undefined;
 }
 
 /**
- * Order keys and revisions can be missing after an undo that races a remote
- * change, or invalid when written by a faulty peer. Every reader substitutes the
- * same defaults, so all replicas and the JSON form agree (section 4.1).
+ * Element lookup that reads the Y.Doc directly. It sees exactly the elements the
+ * JSON form has: records the grammar leaves out are absent here too.
  */
-function orderKey(value: unknown): string {
-  return typeof value === "string" && isValidOrderKey(value) ? value : DEFAULT_ORDER_KEY;
-}
-
-function revision(value: unknown): string {
-  return typeof value === "string" && value.length > 0 && value.length <= 64
-    ? value
-    : "0";
-}
-
-function readPos(value: unknown): Position {
-  const v = obj(value);
-  return { x: num(v.x), y: num(v.y), space: idOrNull(v.space) };
-}
-
-function readRebase(value: unknown): Rebase | null {
-  if (typeof value !== "object" || value === null) return null;
-  const v = value as Record<string, unknown>;
-  const base = obj(v.base);
-  const shifts: Shift[] = Array.isArray(v.shifts)
-    ? v.shifts.map((s) => {
-        const o = obj(s);
-        return { from: idOrNull(o.from), dx: num(o.dx), dy: num(o.dy) };
-      })
-    : [];
-  return {
-    to: idOrNull(v.to),
-    base:
-      typeof v.base === "object" && v.base !== null
-        ? { x: num(base.x), y: num(base.y), dx: num(base.dx), dy: num(base.dy) }
-        : null,
-    shifts,
-  };
-}
-
-function readSize(value: unknown): Size {
-  const v = obj(value);
-  return { w: num(v.w), h: num(v.h) };
-}
-
-function readDeleteMark(value: unknown): DeleteMark | null {
-  if (typeof value !== "object" || value === null) return null;
-  const v = value as Record<string, unknown>;
-  return { action: str(v.action), root: str(v.root), rev: str(v.rev) };
-}
-
-function readRemovalMark(value: unknown): RemovalMark | null {
-  if (typeof value !== "object" || value === null) return null;
-  return { rev: str((value as Record<string, unknown>).rev) };
-}
-
-function readIds(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((v): v is string => typeof v === "string")
-    : [];
-}
-
-/** Reads the envelope of one element map (everything except data and ext). */
-export function readEnvelope(map: Y.Map<unknown>): ElementEnvelope {
-  const type = str(map.get("type"));
-  const envelope: { -readonly [K in keyof ElementEnvelope]: ElementEnvelope[K] } = {
-    type,
-    parent: idOrNull(map.get("parent")),
-    order: orderKey(map.get("order")),
-    pos: readPos(map.get("pos")),
-    rebase: readRebase(map.get("rebase")),
-    locked: map.get("locked") === true,
-    rev: revision(map.get("rev")),
-    deleted: readDeleteMark(map.get("deleted")),
-    dissolved: map.get("dissolved") === true,
-  };
-  if (type !== GROUP_TYPE) envelope.size = readSize(map.get("size"));
-  if (type !== GROUP_TYPE && type !== FRAME_TYPE) envelope.rot = num(map.get("rot"));
-  return envelope;
-}
-
-/** Element lookup that reads the Y.Doc directly. */
 export function yLookup(doc: Y.Doc): ElementLookup {
-  const elements = roots(doc).elements;
+  const elements = roots(doc).elements as Y.Map<unknown>;
   return {
     get(id) {
+      if (!ID_PATTERN.test(id)) return undefined;
       const map = elements.get(id);
-      return map instanceof Y.Map ? readEnvelope(map) : undefined;
+      return map instanceof Y.Map ? envelopeFromY(map as Y.Map<unknown>) : undefined;
     },
-    ids: () => elements.keys(),
+    *ids() {
+      for (const id of elements.keys()) if (ID_PATTERN.test(id)) yield id;
+    },
   };
 }
 
-function readSlots(map: unknown): ElementData {
-  const data: ElementData = {};
-  if (!(map instanceof Y.Map)) return data;
-  for (const [key, value] of map.entries()) setOwn(data, key, dataValueFromY(value));
-  return data;
+function rawRecords(
+  map: Y.Map<unknown>,
+  special: { [key: string]: (value: unknown) => unknown },
+): Raw {
+  const out: Raw = {};
+  for (const [id, record] of map.entries()) put(out, id, rawRecord(record, special));
+  return out;
 }
 
-function writeSlots(map: Y.Map<unknown>, data: ElementData): void {
-  for (const key of Object.keys(data)) map.set(key, dataValueToY(data[key]!));
-}
-
-function jsonOr(value: unknown, fallback: Json): Json {
-  return isJson(value) ? cloneJson(value) : fallback;
-}
-
-export function readElement(map: Y.Map<unknown>): Element {
-  const envelope = readEnvelope(map);
-  const typeVersion = map.get("typeVersion");
-  const base = {
-    type: envelope.type,
-    typeVersion: Number.isInteger(typeVersion) ? (typeVersion as number) : 1,
-    parent: envelope.parent,
-    order: envelope.order,
-    pos: envelope.pos,
-    rebase: envelope.rebase ?? null,
-    name: str(map.get("name")),
-    locked: envelope.locked,
-    rev: envelope.rev ?? "0",
-    deleted: envelope.deleted ?? null,
-    dissolved: envelope.dissolved ?? false,
-    refs: readIds(map.get("refs")),
-    ext: readSlots(map.get("ext")),
-    data: readSlots(map.get("data")),
+/** The document as plain data, exactly as stored, for the grammar to read. */
+function rawSnapshot(doc: Y.Doc): Raw {
+  const r = roots(doc);
+  const settings: Raw = {};
+  for (const [key, value] of r.settings.entries()) put(settings, key, jsonFromY(value));
+  const assets: Raw = {};
+  for (const [id, info] of r.assets.entries()) put(assets, id, jsonFromY(info));
+  return {
+    schemaVersion: jsonFromY(r.meta.get("schemaVersion")),
+    minReaderVersion: jsonFromY(r.meta.get("minReaderVersion")),
+    id: jsonFromY(r.meta.get("id")),
+    title: jsonFromY(r.meta.get("title")),
+    settings,
+    elements: rawRecords(r.elements as Y.Map<unknown>, ELEMENT_SPECIAL),
+    stops: rawRecords(r.stops as Y.Map<unknown>, STOP_SPECIAL),
+    routes: rawRecords(r.routes as Y.Map<unknown>, ROUTE_SPECIAL),
+    assets,
   };
-  if (envelope.type === GROUP_TYPE) return base as Element;
-  if (envelope.type === FRAME_TYPE) return { ...base, size: envelope.size! } as Element;
-  return { ...base, size: envelope.size!, rot: envelope.rot ?? 0 };
 }
 
-/** Fills an (empty or new) element map from the JSON form. */
+export interface Inspection {
+  /** The JSON form of the document. Always valid. */
+  snapshot: DocumentSnapshot;
+  /**
+   * Everything in the Y.Doc that the JSON form does not carry as it is stored:
+   * values read as defaults, records and keys left out, unknown root types. Empty
+   * for a document that only the reference operations wrote.
+   */
+  problems: string[];
+}
+
+/** True if the document holds nothing at all (a replica that has not synced yet). */
+export function isBlank(doc: Y.Doc): boolean {
+  if (doc.store.clients.size > 0) return false;
+  return doc.store.pendingStructs === null && doc.store.pendingDs === null;
+}
+
+/**
+ * Reads the document and reports what the reading had to leave out or replace.
+ * A blank document (nothing synced yet) reads as an empty one without problems.
+ */
+export function inspectDocument(doc: Y.Doc): Inspection {
+  const raw = rawSnapshot(doc);
+  const r = roots(doc);
+  const blankMeta = r.meta.size === 0;
+  if (blankMeta) {
+    // Nothing has arrived yet: the defaults are not a defect of the document.
+    Object.assign(raw, { schemaVersion: 1, minReaderVersion: 1, id: "unknown", title: "" });
+  }
+  const read = readSnapshot(raw);
+  const problems = [...read.problems];
+  for (const [name, type] of doc.share) {
+    if (!ROOT_NAMES.includes(name)) problems.push(`root ${name}: unknown root type`);
+    else if (type._start !== null) problems.push(`root ${name}: not a map`);
+  }
+  for (const key of r.meta.keys()) {
+    if (!(META_KEYS as readonly string[]).includes(key))
+      problems.push(`meta.${key}: unknown field`);
+  }
+  if (doc.store.pendingStructs !== null || doc.store.pendingDs !== null) {
+    problems.push("document: holds updates that cannot be applied yet");
+  }
+  return { snapshot: read.snapshot!, problems };
+}
+
+/** The JSON form of the document's current state. Never throws; always valid. */
+export function toSnapshot(doc: Y.Doc): DocumentSnapshot {
+  return inspectDocument(doc).snapshot;
+}
+
+/** The document's merge identity (section 9.3); empty if it has none. */
+export function lineageOf(doc: Y.Doc): string {
+  const lineage = roots(doc).meta.get("lineage");
+  return typeof lineage === "string" ? lineage : "";
+}
+
+// ---------------------------------------------------------------------------
+// Writing records (the input is valid: it was read by the grammar)
+// ---------------------------------------------------------------------------
+
+function slotsToY(data: ElementData): Y.Map<unknown> {
+  const map = new Y.Map<unknown>();
+  for (const key of Object.keys(data)) map.set(key, valueToY(data[key]!));
+  return map;
+}
+
+/** Fills a new element map from the JSON form. */
 export function writeElement(map: Y.Map<unknown>, element: Element): void {
   map.set("type", element.type);
   map.set("typeVersion", element.typeVersion);
   map.set("parent", element.parent);
   map.set("order", element.order);
   map.set("pos", cloneJson(element.pos));
-  map.set("rebase", element.rebase ? cloneJson(element.rebase) : null);
+  map.set(
+    "rebase",
+    element.rebase ? cloneJson(element.rebase) : null,
+  );
   if ("size" in element) map.set("size", cloneJson(element.size));
   if ("rot" in element) map.set("rot", element.rot);
   map.set("name", element.name);
   map.set("locked", element.locked);
-  map.set("rev", element.rev);
-  map.set("deleted", element.deleted ? cloneJson(element.deleted) : null);
   map.set("dissolved", element.dissolved);
   map.set("refs", [...element.refs]);
-  const ext = new Y.Map<unknown>();
-  map.set("ext", ext);
-  writeSlots(ext, element.ext);
-  const data = new Y.Map<unknown>();
-  map.set("data", data);
-  writeSlots(data, element.data);
-}
-
-function readView(value: unknown): StopView {
-  const v = obj(value);
-  if (v.kind === "frame")
-    return { kind: "frame", frame: str(v.frame), padding: num(v.padding) };
-  return {
-    kind: "rect",
-    space: idOrNull(v.space),
-    x: num(v.x),
-    y: num(v.y),
-    w: num(v.w, 1),
-    h: num(v.h, 1),
-  };
-}
-
-export function readStop(map: Y.Map<unknown>): Stop {
-  const visibility: { [element: ElementId]: VisibilityChange } = {};
-  const vis = map.get("visibility");
-  if (vis instanceof Y.Map) {
-    for (const [element, change] of vis.entries()) {
-      const action = obj(change).action;
-      if (action === "show" || action === "hide") setOwn(visibility, element, { action });
-    }
-  }
-  const notes = map.get("notes");
-  return {
-    name: str(map.get("name")),
-    view: readView(map.get("view")),
-    notes: notes instanceof Y.Text ? textFromY(notes) : { $y: "text", delta: [] },
-    visibility,
-    transition: jsonOr(map.get("transition") ?? null, null),
-    rev: revision(map.get("rev")),
-    removed: readRemovalMark(map.get("removed")),
-    ext: readSlots(map.get("ext")),
-  };
+  map.set("rev", revisionToY(element.rev));
+  map.set("deleted", marksToY(element.deleted));
+  map.set("ext", slotsToY(element.ext));
+  map.set("data", slotsToY(element.data));
 }
 
 export function writeStop(map: Y.Map<unknown>, stop: Stop): void {
@@ -269,112 +325,41 @@ export function writeStop(map: Y.Map<unknown>, stop: Stop): void {
   const visibility = new Y.Map<unknown>();
   map.set("visibility", visibility);
   for (const element of Object.keys(stop.visibility)) {
-    visibility.set(element, { action: stop.visibility[element]!.action });
+    visibility.set(element, cloneJson(stop.visibility[element]));
   }
   map.set("transition", cloneJson(stop.transition));
-  map.set("rev", stop.rev);
-  map.set("removed", stop.removed ? cloneJson(stop.removed) : null);
-  const ext = new Y.Map<unknown>();
-  map.set("ext", ext);
-  writeSlots(ext, stop.ext);
-}
-
-export function readRoute(map: Y.Map<unknown>): Route {
-  const entries: { [entry: string]: RouteEntry } = {};
-  const raw = map.get("entries");
-  if (raw instanceof Y.Map) {
-    for (const [id, entry] of raw.entries()) {
-      const e = obj(entry);
-      if (typeof e.stop === "string") {
-        setOwn(entries, id, { stop: e.stop, order: orderKey(e.order) });
-      }
-    }
-  }
-  return {
-    name: str(map.get("name")),
-    order: orderKey(map.get("order")),
-    entries,
-    rev: revision(map.get("rev")),
-    removed: readRemovalMark(map.get("removed")),
-    ext: readSlots(map.get("ext")),
-  };
+  map.set("rev", revisionToY(stop.rev));
+  map.set("deleted", marksToY(stop.deleted));
+  map.set("ext", slotsToY(stop.ext));
 }
 
 export function writeRoute(map: Y.Map<unknown>, route: Route): void {
   map.set("name", route.name);
   map.set("order", route.order);
-  map.set("rev", route.rev);
-  map.set("removed", route.removed ? cloneJson(route.removed) : null);
+  map.set("rev", revisionToY(route.rev));
+  map.set("deleted", marksToY(route.deleted));
   const entries = new Y.Map<unknown>();
   map.set("entries", entries);
   for (const id of Object.keys(route.entries)) {
-    const entry = route.entries[id]!;
-    entries.set(id, { stop: entry.stop, order: entry.order });
+    entries.set(id, cloneJson(route.entries[id]));
   }
-  const ext = new Y.Map<unknown>();
-  map.set("ext", ext);
-  writeSlots(ext, route.ext);
-}
-
-function sortedRecord<T>(entries: Iterable<[string, T]>): { [key: string]: T } {
-  const list = [...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const out: { [key: string]: T } = {};
-  for (const [key, value] of list) setOwn(out, key, value);
-  return out;
-}
-
-function mapsOf(map: Y.Map<Y.Map<unknown>> | Y.Map<unknown>): [string, Y.Map<unknown>][] {
-  return [...(map as Y.Map<unknown>).entries()].filter(
-    (e): e is [string, Y.Map<unknown>] => e[1] instanceof Y.Map,
-  );
-}
-
-/** The JSON form of the document's current state. Keys are sorted. Never throws. */
-export function toSnapshot(doc: Y.Doc): DocumentSnapshot {
-  const r = roots(doc);
-  const schemaVersion = r.meta.get("schemaVersion");
-  const minReaderVersion = r.meta.get("minReaderVersion");
-  return {
-    schemaVersion: Number.isInteger(schemaVersion)
-      ? (schemaVersion as number)
-      : SCHEMA_VERSION,
-    minReaderVersion: Number.isInteger(minReaderVersion)
-      ? (minReaderVersion as number)
-      : MIN_READER_VERSION,
-    id: str(r.meta.get("id")),
-    title: str(r.meta.get("title")),
-    settings: sortedRecord(
-      [...r.settings.entries()]
-        .filter(([, value]) => isJson(value))
-        .map(([key, value]): [string, Json] => [key, cloneJson(value)]),
-    ) as JsonObject,
-    elements: sortedRecord(mapsOf(r.elements).map(([id, map]) => [id, readElement(map)])),
-    stops: sortedRecord(mapsOf(r.stops).map(([id, map]) => [id, readStop(map)])),
-    routes: sortedRecord(mapsOf(r.routes).map(([id, map]) => [id, readRoute(map)])),
-    assets: sortedRecord(
-      [...r.assets.entries()]
-        .filter(([, info]) => isJson(info))
-        .map(([id, info]) => [id, cloneJson(info) as unknown as AssetInfo]),
-    ) as DocumentSnapshot["assets"],
-  };
-}
-
-/** The document's merge identity (section 9.3); empty if it has none. */
-export function lineageOf(doc: Y.Doc): string {
-  return str(roots(doc).meta.get("lineage"));
+  map.set("ext", slotsToY(route.ext));
 }
 
 /**
  * Builds a new Y.Doc from the JSON form. The result has a fresh CRDT identity and
  * a new lineage: it merges with copies made from it, never with the Y.Doc the
  * snapshot was taken from or with another document built from the same snapshot
- * (section 9.3).
+ * (section 9.3). The snapshot is read by the grammar first, so anything can be
+ * passed; throws only if it is not an object at all.
  */
 export function fromSnapshot(
-  snapshot: DocumentSnapshot,
+  input: DocumentSnapshot,
   doc: Y.Doc = new Y.Doc(),
   randomBytes?: RandomBytes,
 ): Y.Doc {
+  const snapshot = readSnapshot(input).snapshot;
+  if (!snapshot) throw new InvalidDocumentError("document", ["must be an object"]);
   const r = roots(doc);
   doc.transact(() => {
     r.meta.set("schemaVersion", snapshot.schemaVersion);
@@ -383,7 +368,7 @@ export function fromSnapshot(
     r.meta.set("title", snapshot.title);
     r.meta.set("lineage", newId(randomBytes));
     for (const key of Object.keys(snapshot.settings)) {
-      r.settings.set(key, cloneJson(snapshot.settings[key]));
+      r.settings.set(key, cloneJson(snapshot.settings[key]!));
     }
     for (const id of Object.keys(snapshot.elements)) {
       const map = new Y.Map<unknown>();
@@ -407,37 +392,9 @@ export function fromSnapshot(
   return doc;
 }
 
-/**
- * Content of a Y.Doc that the JSON form does not carry: unknown root types,
- * unknown keys in meta, element, stop and route maps, or records and values of
- * the wrong kind. A document read from a file must have none (section 9.3).
- */
-export function hiddenContent(doc: Y.Doc): string[] {
-  const out: string[] = [];
-  for (const [name, type] of doc.share) {
-    if (!ROOT_NAMES.includes(name)) out.push(`root ${name}`);
-    else if (type._start !== null) out.push(`root ${name}: not a map`);
-  }
-  const r = roots(doc);
-  const known = (map: Y.Map<unknown>, keys: readonly string[], path: string) => {
-    for (const key of map.keys()) if (!keys.includes(key)) out.push(`${path}.${key}`);
-  };
-  known(r.meta, META_KEYS, "meta");
-  for (const [id, value] of r.elements.entries()) {
-    if (!(value instanceof Y.Map)) out.push(`elements.${id}: not a map`);
-    else known(value, ELEMENT_KEYS, `elements.${id}`);
-  }
-  for (const [id, value] of r.stops.entries()) {
-    if (!(value instanceof Y.Map)) out.push(`stops.${id}: not a map`);
-    else known(value, STOP_KEYS, `stops.${id}`);
-  }
-  for (const [id, value] of r.routes.entries()) {
-    if (!(value instanceof Y.Map)) out.push(`routes.${id}: not a map`);
-    else known(value, ROUTE_KEYS, `routes.${id}`);
-  }
-  for (const [key, value] of r.settings.entries())
-    if (!isJson(value)) out.push(`settings.${key}`);
-  for (const [key, value] of r.assets.entries())
-    if (!isJson(value)) out.push(`assets.${key}`);
-  return out;
-}
+/** Keys of each kind of record, for code that removes what the grammar does not know. */
+export const RECORD_KEYS = {
+  elements: ELEMENT_KEYS as readonly string[],
+  stops: STOP_KEYS as readonly string[],
+  routes: ROUTE_KEYS as readonly string[],
+} as const;
