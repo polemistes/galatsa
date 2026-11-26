@@ -32,12 +32,16 @@ The check reads every script (`.ts`, `.tsx`, `.js` and the like), stylesheet (`.
 
 Each reference must be one of these:
 
-- a file inside the package's own folder. A relative path that leaves the folder (`../../shared/x.ts`) fails, even if the file exists, and so does a path into another workspace package. Share code through a workspace package instead.
+- a file inside the package's own folder. A relative path that leaves the folder (`../../shared/x.ts`) fails, even if the file exists, and so does a path into another workspace package. Share code through a workspace package instead. The check compares real paths: a symbolic link inside the package that points out of it fails by itself, and so does any path through it, also when git ignores the link.
 - a package declared in this package's `package.json`. In a stylesheet, a bare name (`@import "x.css"`) is a file next to the stylesheet if there is one, otherwise a package; `~name` is always a package.
 - a Node built-in with the `node:` prefix (`node:fs`). Without the prefix, `events` or `buffer` is the npm package of that name and must be declared.
-- a URL (`https:`, `data:`) or a `#name` mapping from `imports`.
+- a URL (`https:`, `data:`) or a `#name` mapping that the package declares in its `imports` field. An undeclared `#name` fails, also if a Vite alias or tsconfig `paths` would resolve it.
 
-Relative imports name the file with its extension: `import { x } from "./x.ts"`.
+Relative imports name the file with its extension and use `/`: `import { x } from "./x.ts"`. Backslashes, drive letters, `file:` URLs and Vite's `/@fs/` paths fail.
+
+Computed imports are checked by their fixed start. ``import(`./locales/${lang}.ts`)`` may reach every file in `./locales/`, so that folder must be inside the package and must not contain another workspace package. An `import()` or `require()` whose fixed start names no folder (``import(`${base}/x.ts`)``) fails, because a bundler may still follow it. An `import()` of a plain variable is not followed by bundlers and is allowed.
+
+Aliases are references too. The targets in `"paths"` of a tsconfig file, and in `resolve.alias` of `vite.config.*` and `vitest.config.*`, follow the same rules. An alias target is understood if it is a string, or `path.resolve`, `path.join` or `fileURLToPath(new URL(..., import.meta.url))` of strings, `import.meta.dirname`, `__dirname` and `process.cwd()` (taken as the package folder). Any other alias fails, because the check cannot see where it points.
 
 ## TypeScript
 
@@ -106,5 +110,6 @@ User interface text never appears in code; it comes from message files. `pnpm ch
 
 - Put the package's text in `src/messages/nb.ts` and `src/messages/en.ts` (default export: key to message text, same keys in both), and create the bundle in `src/messages/index.ts` with `defineMessages("<namespace>", { nb, en })` from `@galatsa/i18n`. Extensions use their extension id as the namespace.
 - Look text up with `i18n.translator(bundle)` or `i18n.t("namespace:key", values)`.
-- Every `.tsx` and `.jsx` file is checked for hard-coded text. A package that builds its interface without JSX (with the DOM, like the player) lists those files in its `package.json`: `"galatsa": { "i18n": { "uiFiles": ["src/**/*.ts"] } }`. The other settings (`messages`, `textAttributes`, `textCalls`) are described in `scripts/lib/i18n-config.ts`.
-- Text that must not be translated (a product name, a code sample) is marked with `// i18n-ignore: <reason>` on the line or alone on the line above (`{/* i18n-ignore: <reason> */}` in JSX).
+- The message files are exactly `src/messages/<language>.ts` for each interface language; other files in the folder are not catalogs. `defineMessages()` belongs in `src/messages/index.ts`, with the catalogs imported from those files.
+- User interface code is checked for hard-coded text. In a package that has `.tsx` or `.jsx` files or declares `@galatsa/i18n`, that is every script under `src/`, plus HTML pages; in other packages, `.tsx`, `.jsx` and HTML files. A package can list its own globs in its `package.json`, with `!` to leave files out: `"galatsa": { "i18n": { "uiFiles": ["src/**", "!src/model/**"] } }`. The other settings (`messages`, `textAttributes`, `textCalls`) are described in `scripts/lib/i18n-config.ts`.
+- Text that must not be translated (a product name, a code sample) is marked with `// i18n-ignore: <reason>` on the line or alone on the line above (`{/* i18n-ignore: <reason> */}` in JSX, `<!-- i18n-ignore: <reason> -->` in HTML). Only comments count, not the same words in a string.

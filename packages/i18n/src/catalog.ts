@@ -89,12 +89,15 @@ function compatibleTypes(a: ValueType, b: ValueType): boolean {
 
 // Numbers tried to find which numbers pick a plural category: the integers up to
 // 1000 (enough for every CLDR rule that depends on the last two or three digits),
-// some large numbers and some fractions.
-const PLURAL_SAMPLES: readonly number[] = [
-  ...Array.from({ length: 1001 }, (_, n) => n),
-  ...[1e4, 1e5, 1e6, 1e6 + 1, 2e6, 1e7],
-  ...[0.1, 0.5, 1.1, 1.5, 2.1, 2.5, 3.5, 5.5, 10.5, 11.5, 21.5, 100.5, 1000.5],
-];
+// some large numbers and some fractions. Built on first use, so code that only
+// looks up messages (the player) does not pay for it.
+function pluralSamples(): number[] {
+  return [
+    ...Array.from({ length: 1001 }, (_, n) => n),
+    ...[1e4, 1e5, 1e6, 1e6 + 1, 2e6, 1e7],
+    ...[0.1, 0.5, 1.1, 1.5, 2.1, 2.5, 3.5, 5.5, 10.5, 11.5, 21.5, 100.5, 1000.5],
+  ];
+}
 
 const samplesByCategory = new Map<string, Map<string, number[]>>();
 
@@ -116,7 +119,7 @@ export function coveredCategories(
   if (picked === undefined) {
     const rules = pluralRules(locale, ordinal);
     picked = new Map<string, number[]>();
-    for (const n of PLURAL_SAMPLES) {
+    for (const n of pluralSamples()) {
       const category = rules.select(n);
       picked.set(category, [...(picked.get(category) ?? []), n]);
     }

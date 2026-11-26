@@ -59,13 +59,17 @@ export default {
 };
 ```
 
-`src/messages/index.ts` turns them into a bundle with a namespace: `defineMessages("editor", { nb, en })`. The Bokmål file defines the keys; the type checker rejects an English file with missing keys, and `pnpm check` rejects missing and extra keys in either direction. TypeScript modules need no loader or build step in Vite, Vitest or Node, and give typed keys (`translator(bundle)` returns a function that only accepts the bundle's keys). Converting them to JSON for a translation tool is a few lines of script.
+`src/messages/index.ts` turns them into a bundle with a namespace: `defineMessages("editor", { nb, en })`. The Bokmål file defines the keys; the type checker rejects an English file with missing keys, and `pnpm check` rejects missing and extra keys in either direction.
 
-Namespaces are lowercase words separated by dots or hyphens (`common`, `editor`, `ext.shapes`); extensions use their extension id. A namespace can be registered once; a second bundle for the same namespace is an error. Keys contain letters, digits, `_`, `-` and `.`. An untyped lookup names the namespace and key as `namespace:key`.
+The message files are found by name, not by guessing: they are exactly `<messages>/<language>.ts` for each language in `LOCALES` (the folder is `src/messages` unless the package sets another one). Other files in the folder, such as `index.ts` or a helper `ids.ts`, are not catalogs. `pnpm check` rejects a `defineMessages()` call outside the messages folder, and a catalog that is written inline or is not the default export of its language's file, so every bundle is one the catalog comparison sees. TypeScript modules need no loader or build step in Vite, Vitest or Node, and give typed keys (`translator(bundle)` returns a function that only accepts the bundle's keys). Converting them to JSON for a translation tool is a few lines of script.
+
+Namespaces are lowercase words separated by dots or hyphens (`common`, `editor`, `ext.shapes`); extensions use their extension id. Registering a different bundle for a namespace that is taken replaces the old one. This is what hot module reload needs (it re-runs `messages/index.ts` and creates a new bundle object), and it keeps a package that happens to be loaded twice from crashing the program. In development, a replacement that shares no key with the old bundle logs a warning, because it more likely means that two packages chose the same namespace; keeping extension ids unique is the job of the extension host. Keys contain letters, digits, `_`, `-` and `.`. An untyped lookup names the namespace and key as `namespace:key`.
 
 ### 3. Choosing and remembering the language
 
 The runtime (`createI18n`) is framework-agnostic: the current language, registered bundles, lookup, `formatNumber`, `formatDate`, and `subscribe` plus a `version` counter. A React binding wraps `subscribe` and `version` with `useSyncExternalStore`; it is not built yet. The player uses the runtime directly.
+
+Intended use with React: bundles are registered at startup, outside rendering (`createI18n({ bundles })`, or `register()` in the app's setup code), because `register()` notifies subscribers at once. `translator(bundle)` may be called during a render, for example inside a future `useTranslator` hook: if it has to register the bundle, lookups see the bundle at once, but the version bump and the notification wait for a microtask, after the render. A render therefore never changes the store it is reading, which `useSyncExternalStore` requires.
 
 The language at start is, in order:
 
@@ -83,23 +87,39 @@ Lookup tries the current language, then English, then Bokmål; with two language
 - **Development:** a translation missing in the current language, a key missing everywhere, a broken message or a missing value logs a console warning (once per problem) and shows up in the text as `⟦namespace:key⟧` or `⟦name⟧`, so it is visible in the interface and in screenshots.
 - **Production:** the other language is used quietly. If no language has the message, the key is shown; a missing value is shown as `{name}`.
 
-`pnpm check` makes these cases rare: it requires both languages to have the same keys, the same values per key, valid syntax, and exactly the plural categories that each language uses (from `Intl.PluralRules`; for example `one` and `other` for both `nb` and `en`, so a forgotten `one` or an unusable `few` is caught).
+A lookup never throws. A value that is missing, of the wrong type (a string for `{n, number}`) or that `Intl` cannot format (an invalid `Date`, `NaN` for `{d, date}`) counts as a missing value. Values are read as own properties only, so a message `{constructor}` with `{}` does not pick up `Object.prototype.constructor`. `formatNumber` and `formatDate` do not throw either: in development they show a marker and warn, in production `formatDate` of an invalid date gives an empty string and `formatNumber` with options `Intl` rejects gives the plain digits.
+
+`pnpm check` makes these cases rare. It requires both languages to have:
+
+- the same keys, and valid syntax;
+- the same values per key, used as the same kind of value: a number (`{n, number}`, plural, selectordinal), a date (`{d, date}`, `{d, time}`), a select key, or plain (`{name}`). Plain goes with number, because `{n}` formats a number like `{n, number}` does, so `nb: "{n} stk"` with `en: "{n, plural, one {# piece} other {# pieces}}"` is fine, while `{n}` in one language and `{n, date}` in the other is an error;
+- the same options in each select;
+- exactly the plural categories that each language uses (from `Intl.PluralRules`; `one` and `other` for both `nb` and `en`), so a forgotten `one` or an unusable `few` is caught. A category may be left out when exact cases cover it: the check tries the numbers 0 to 1000 and some larger numbers and fractions, and a category counts as covered if every number that `Intl.PluralRules` puts in it has its own `=N` case. In `nb` and `en`, `one` is only the number 1, so `{n, plural, =0 {...} =1 {...} other {...}}` is accepted. For English ordinals `one` is 1, 21, 31 and so on, so `=1` does not cover it there; the same holds in other languages where `one` covers more than 1 (French: 0, 1 and 1.5; Russian: 1, 21, 31).
 
 ### 5. Checking for hard-coded text
 
 `scripts/check-i18n.ts`, part of `pnpm check`, parses user interface code with the TypeScript compiler and fails on user-visible text written directly in it.
 
-**User interface code:** by default every `.tsx` and `.jsx` file in `packages/*`, `packages/extensions/*` and `apps/*`. A package changes this with `"galatsa": { "i18n": { "uiFiles": [...] } }` in its `package.json`; the player, which builds its interface with the DOM, will list its `.ts` files there. Test files and message files are never checked. Tooling (`bench`, `tests/e2e`, `scripts`) is not user interface code.
+**User interface code:** in `packages/*`, `packages/extensions/*` and `apps/*`. In a user interface package, every script under `src/`, every `.tsx` and `.jsx` file and every HTML page; a package is a user interface package if it has a `.tsx` or `.jsx` file (other than tests) or declares `@galatsa/i18n` as a dependency, since code that shows translated text is code that shows text. Menu definitions in a `.ts` file next to the components are then checked too. In other packages, `.tsx`, `.jsx` and HTML files. A package changes this with `"galatsa": { "i18n": { "uiFiles": [...] } }` in its `package.json`, where a glob starting with `!` leaves files out (`"!src/model/**"`). Test files, declaration files and message files are never checked. Tooling (`bench`, `tests/e2e`, `scripts`) is not user interface code.
 
-**User-visible text:** a string with at least one letter (or the literal parts of a template string), in JSX text and JSX children, in text attributes (`title`, `alt`, `placeholder`, `label`, `aria-label` and other ARIA text attributes, and a few common prop names such as `tooltip` and `caption`), in properties and variables whose names hold text by convention (`label`, `title`, `textContent`, names ending in `Label`, `Text`, `Message` and so on), and in arguments to browser APIs that show text (`alert`, `confirm`, `prompt`, `createTextNode`, `fillText`, `append`, `setAttribute("title", ...)`, `new Notification(...)`). Packages can add attribute and function names. Strings without letters (`×`, `100 %`) and message keys (`editor:toolbar.save`) are not text.
+**User-visible text:** a string with at least one letter (or the literal parts of a template string), in:
 
-**Opting out:** `// i18n-ignore: <reason>` (or `{/* i18n-ignore: <reason> */}` in JSX) on the line or alone on the line above; `// i18n-ignore-file: <reason>` for a whole file. The reason is required.
+- JSX text and JSX children;
+- JSX attributes that hold text: `title`, `alt`, `placeholder`, `label`, `aria-label` and the other ARIA text attributes, `tooltip`, `caption` and a few more, every prop whose name holds text by convention (`text`, `confirmLabel`, `emptyText`: see below), the `children` prop, and `value` on `<input type="submit">` (and `button`, `reset`);
+- properties, variables, class fields and default values whose names hold text by convention (`label`, `title`, `textContent`, names ending in `Label`, `Title`, `Text`, `Message`, `Hint` and so on);
+- what functions, methods and getters with such a name return (`statusText()`);
+- arguments to browser APIs that show text (`alert`, `confirm`, `prompt`, `createTextNode`, `fillText`, `append`, `after`, `setAttribute("title", ...)`, `new Notification(...)`). `append` is skipped when the receiver is a `FormData`, `URLSearchParams` or `Headers` object: built with `new` or declared with that type in the same file, reached as `.searchParams` or `.headers`, or named like one (`form`, `params`, `query`, `headers`). Other receivers are taken to be DOM nodes;
+- HTML pages: text between tags (`<title>` and `<noscript>` included), the same text attributes, and inline scripts, which are checked like script files.
 
-The check also rejects catalogs written inline in `defineMessages(...)`, where the comparison of languages could not see them.
+A value in one of these places is followed within the file where that is cheap and certain: both branches of `?:`, `&&`, `||`, `??` and `+`, array elements, string methods (`["Undo", "Redo"].join(" / ")`), `String(x)`, a local constant (`text={label}`), a property of a local object literal (`text={names.save}`) and the return values of a local function (`{summary(count)}`). Packages can add attribute and function names. Strings without letters (`×`, `100 %`) and message keys (`editor:toolbar.save`) are not text.
+
+**Opting out:** `// i18n-ignore: <reason>` (or `{/* i18n-ignore: <reason> */}` in JSX, `<!-- i18n-ignore: <reason> -->` in HTML) on the line or alone on the line above; `// i18n-ignore-file: <reason>` for a whole file. The reason is required. Only real comments count: the same words inside a string do nothing.
+
+The check also rejects bundles the comparison of languages could not see (section 2).
 
 ## Consequences
 
 - The player carries about 3.3 KB (gzipped) for translations, plus its own messages.
 - Message syntax beyond the subset (offsets, skeletons, currency styles) needs a change to the parser or a switch to a full ICU library.
-- The hard-coded text check finds text where it is written. Text stored in a variable with an ordinary name and shown later is not found; code review and the convention of calling `t(...)` where text is shown cover that.
+- The hard-coded text check finds text where it is written, and follows it only within one file. Text that reaches a text place through a parameter, an import or a variable that is reassigned (`menu.map((item) => <Button text={item.label} />)` with the menu in another file) is found only where it is written, if that place holds text by name (`label: "Save"`); text in a variable with an ordinary name in another file is not found. Code review and the convention of calling `t(...)` where text is shown cover that.
 - Each language is a separate file per namespace. Adding a language means adding it to `LOCALES`, adding one file per namespace, and checking the fallback order.
