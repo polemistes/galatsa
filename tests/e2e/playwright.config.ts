@@ -3,7 +3,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // End-to-end tests are not part of `pnpm check`. They need browsers, which are
-// installed separately with `pnpm exec playwright install chromium`.
+// installed separately with
+// `pnpm --filter @galatsa/e2e exec playwright install chromium`.
 export default defineConfig({
   testDir: ".",
   fullyParallel: true,

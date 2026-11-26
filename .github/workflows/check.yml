@@ -28,17 +28,21 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      # Actions are pinned to exact release tags that were at least two weeks old
-      # when chosen (2026-11-26). pnpm/action-setup supports pnpm 12 from v6.1.0.
+      # Actions are pinned to the full commit SHA of a release that was at least two
+      # weeks old when chosen (2026-11-26); the tag is in the comment. A tag can be
+      # moved, a commit SHA cannot. pnpm/action-setup supports pnpm 12 from v6.1.0.
       - name: Check out the repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The job only reads the code; do not leave a token in .git/config.
+          persist-credentials: false
 
       # Reads the pnpm version from the "packageManager" field in package.json.
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6.1.1
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm

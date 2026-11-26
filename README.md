@@ -16,18 +16,20 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` runs, in order: type checking, linting, format checking, the license header check, unit tests and the dependency license check. It exits with a non-zero code on the first failure. It does not need `pnpm build` first: workspace packages import each other from source (see `tsconfig.base.json`). GitHub Actions runs `pnpm check` and then `pnpm build` on Linux, Windows and macOS.
+`pnpm check` runs, in order: type checking, linting, format checking, the license header check, the workspace check, unit tests and the dependency license check. It exits with a non-zero code on the first failure. It does not need `pnpm build` first: workspace packages import each other from source (see `tsconfig.base.json`). GitHub Actions runs `pnpm check` and then `pnpm build` on Linux, Windows and macOS.
 
-The dependency license check covers every workspace package and the optional platform packages for every operating system. To make that possible, `pnpm-workspace.yaml` tells pnpm to install the platform packages for all systems, not only the current one.
+The dependency license check covers the JavaScript dependencies of every workspace package, including the optional platform packages for every operating system. To make that possible, `pnpm-workspace.yaml` tells pnpm to install the platform packages for all systems, not only the current one. Every dependency of a workspace package counts as production and must be compatible with GPL-3.0-or-later. The root's `devDependencies` (repository tooling) only need a free license. Rust crates (the Tauri desktop app, later) are not covered: they will need their own check, added when Rust code arrives.
+
+`pnpm check` also runs the workspace check, which enforces the rules for the project's own packages. See [docs/new-package.md](docs/new-package.md) before adding one.
 
 Other scripts:
 
-| Script        | What it does                                                                                                                   |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm build`  | Builds all packages that have a `build` script                                                                                 |
-| `pnpm test`   | Runs unit tests with Vitest                                                                                                    |
-| `pnpm e2e`    | Runs end-to-end tests with Playwright. Needs `pnpm exec playwright install chromium` the first time. Not part of `pnpm check`. |
-| `pnpm format` | Formats the repository with Prettier                                                                                           |
+| Script        | What it does                                                                                                                                         |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm build`  | Builds all packages that have a `build` script                                                                                                       |
+| `pnpm test`   | Runs unit tests with Vitest                                                                                                                          |
+| `pnpm e2e`    | Runs end-to-end tests with Playwright. Needs `pnpm --filter @galatsa/e2e exec playwright install chromium` the first time. Not part of `pnpm check`. |
+| `pnpm format` | Formats the repository with Prettier                                                                                                                 |
 
 ## Repository layout
 
