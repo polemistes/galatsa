@@ -1,0 +1,43 @@
+{
+  "variant": "dom-layer",
+  "project": "chromium",
+  "still-0.1": {
+    "sharpness": 0.02238797043500391,
+    "reportedSharpAfterMs": 36.54000002145767
+  },
+  "still-1": {
+    "sharpness": 1.3834934933737528,
+    "reportedSharpAfterMs": 40.3850000500679
+  },
+  "still-8": {
+    "sharpness": 2.276034570065353,
+    "reportedSharpAfterMs": 37.939999997615814
+  },
+  "still-40": {
+    "sharpness": 0.930230248408458,
+    "reportedSharpAfterMs": 47.75999999046326
+  },
+  "still-fine-40": {
+    "sharpness": 0.9836938338837535
+  },
+  "move-1-to-8": {
+    "sharpness": {
+      "during": 2.276034570065353,
+      "after1": 2.276034570065353,
+      "after2": 2.276034570065353,
+      "afterSharp": 2.276034570065353,
+      "afterHalfSecond": 2.276034570065353
+    },
+    "reportedSharpAfterMs": 47.05000001192093
+  },
+  "move-8-to-40": {
+    "sharpness": {
+      "during": 0.930230248408458,
+      "after1": 0.930230248408458,
+      "after2": 0.930230248408458,
+      "afterSharp": 0.930230248408458,
+      "afterHalfSecond": 0.930230248408458
+    },
+    "reportedSharpAfterMs": 40.5
+  }
+}

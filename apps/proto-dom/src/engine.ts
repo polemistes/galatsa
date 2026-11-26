@@ -115,6 +115,19 @@ interface Item {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+/**
+ * Largest font size text is laid out at, in CSS pixels. Chromium clamps font-size
+ * to 10,000 px and Firefox draws glyphs no larger than about 2,000 px (measured),
+ * so text larger than this on screen is laid out at this size and scaled up by its
+ * matrix; the browser then draws the glyphs as paths at the scaled size.
+ */
+export const MAX_LAYOUT_FONT_PX = 1000;
+
+/** The zoom a text is laid out at for camera zoom z. */
+function layoutZoom(e: TextElement, z: number): number {
+  return Math.min(z, MAX_LAYOUT_FONT_PX / e.fontSize);
+}
+
 function sameCamera(a: CameraPose | undefined, b: CameraPose): boolean {
   return a !== undefined && a.x === b.x && a.y === b.y && a.zoom === b.zoom;
 }
@@ -182,9 +195,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     const e = item.el as TextElement;
     const node = item.node as HTMLElement;
     const s = node.style;
-    s.fontSize = `${e.fontSize * zoom}px`;
-    s.width = `${e.width * zoom}px`;
-    item.baseZoom = zoom;
+    const base = layoutZoom(e, zoom);
+    s.fontSize = `${e.fontSize * base}px`;
+    s.width = `${e.width * base}px`;
+    item.baseZoom = base;
     const greek =
       greekBelowPx > 0 &&
       item !== editing &&
@@ -192,8 +206,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     if (greek) {
       // One stripe per line in the text colour, over the estimated box height;
       // no glyphs to lay out or paint.
-      const line = e.fontSize * e.lineHeight * zoom;
-      s.height = `${e.height * zoom}px`;
+      const line = e.fontSize * e.lineHeight * base;
+      s.height = `${e.height * base}px`;
       s.background = `repeating-linear-gradient(${e.color} 0 ${line * 0.55}px, transparent ${line * 0.55}px ${line}px)`;
       s.opacity = String(0.45 * e.opacity);
       if (!item.greeked) node.textContent = "";
@@ -502,9 +516,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
           const e = item.el;
           if (mode !== "layer") {
             if (e.kind === "text") {
+              const target = layoutZoom(e, z);
               if (mode === "screen" || item.baseZoom === 0) {
-                if (item.baseZoom !== z) layoutText(item, z);
-              } else if (item.baseZoom !== z) {
+                if (item.baseZoom !== target) layoutText(item, z);
+              } else if (item.baseZoom !== target) {
                 pendingText.push(item);
               }
             }
@@ -544,7 +559,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         const start = performance.now();
         const due = moving
           ? pendingText.filter((item) => {
-              const ratio = z / item.baseZoom;
+              const ratio = layoutZoom(item.el as TextElement, z) / item.baseZoom;
               return ratio > 2 || ratio < 0.5;
             })
           : pendingText;

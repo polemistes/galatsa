@@ -78,16 +78,30 @@ test(`edit text in place: ${VARIANT}`, async ({ page, browserName }, testInfo) =
     await page.screenshot({ clip: CLIP }),
   );
 
-  // Paste: copy rich text from outside, paste at the end; it arrives as plain text.
-  await page.evaluate(() => {
-    const range = document.createRange();
-    range.selectNodeContents(document.getElementById("rich")!);
-    const selection = window.getSelection()!;
-    selection.removeAllRanges();
-    selection.addRange(range);
-  });
-  await page.keyboard.press("Control+C");
-  await body.focus();
+  // Paste: rich text (HTML with bold and italic) on the clipboard, pasted at the
+  // end; it arrives as plain text. Chromium: written with the async clipboard API.
+  // Elsewhere: selected outside the canvas and copied with Ctrl+C.
+  if (browserName === "chromium") {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.evaluate(() =>
+      navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob(["<b>fet</b> <i>tekst</i>"], { type: "text/html" }),
+          "text/plain": new Blob(["fet tekst"], { type: "text/plain" }),
+        }),
+      ]),
+    );
+  } else {
+    await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById("rich")!);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    await page.keyboard.press("Control+C");
+    await body.focus();
+  }
   await page.keyboard.press("Control+End");
   await page.keyboard.press("Control+V");
   expect(await textOf(page)).toMatch(/fet tekst$/);

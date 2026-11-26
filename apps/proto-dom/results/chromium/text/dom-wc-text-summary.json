@@ -1,0 +1,43 @@
+{
+  "variant": "dom-wc-text",
+  "project": "chromium",
+  "still-0.1": {
+    "sharpness": 0.05042911726571234,
+    "reportedSharpAfterMs": 40.94499999284744
+  },
+  "still-1": {
+    "sharpness": 1.6043892949226946,
+    "reportedSharpAfterMs": 42.160000026226044
+  },
+  "still-8": {
+    "sharpness": 2.276034570065353,
+    "reportedSharpAfterMs": 36.894999980926514
+  },
+  "still-40": {
+    "sharpness": 0.9302313358365926,
+    "reportedSharpAfterMs": 45.77500003576279
+  },
+  "still-fine-40": {
+    "sharpness": 0.9836938338837535
+  },
+  "move-1-to-8": {
+    "sharpness": {
+      "during": 2.2658230761674343,
+      "after1": 2.276034570065353,
+      "after2": 2.276034570065353,
+      "afterSharp": 2.276034570065353,
+      "afterHalfSecond": 2.276034570065353
+    },
+    "reportedSharpAfterMs": 32.14000004529953
+  },
+  "move-8-to-40": {
+    "sharpness": {
+      "during": 0.9294112337850974,
+      "after1": 0.9302313358365926,
+      "after2": 0.9302313358365926,
+      "afterSharp": 0.9302313358365926,
+      "afterHalfSecond": 0.9302313358365926
+    },
+    "reportedSharpAfterMs": 37.605000019073486
+  }
+}

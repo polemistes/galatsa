@@ -7,7 +7,7 @@ export const PORT = 5207;
 
 // Measurements and screenshots use the built pages (the dev server serves unbundled
 // modules). Browsers are installed with `pnpm exec playwright install chromium
-// firefox webkit`. Run one project at a time for measurements, so that runs do not
+// firefox`. Run one project at a time for measurements, so that runs do not
 // share the machine: `pnpm e2e --project=chromium`.
 const memoryArgs = [
   "--enable-precise-memory-info",
@@ -58,6 +58,7 @@ export default defineConfig({
       },
     },
     { name: "firefox", use: { browserName: "firefox" } },
-    { name: "webkit", use: { browserName: "webkit" } },
+    // Playwright's WebKit build needs libraries from Ubuntu (libicu74, libxml2) and
+    // did not start on the Arch Linux development machine, so it is left out.
   ],
 });
