@@ -13,18 +13,21 @@
 //
 // Without network access the check fails. Locally, --offline (or the environment
 // variable GALATSA_CHECK_OFFLINE=1) checks only the cached times and skips the rest
-// with a warning. In CI (the CI environment variable is set) offline mode is refused.
+// with a warning. In CI offline mode is refused; scripts/lib/ci.ts says what counts
+// as CI (CI=true, or a variable such as GITHUB_ACTIONS that the CI service sets).
 //
 // The two-week rule covers the dependencies the project chooses and bundles, not
 // the system libraries a Linux distribution provides. A distribution package build
 // (PKGBUILD, deb, rpm) sets GALATSA_DISTRIBUTION_BUILD=1 to skip this check, and
 // pnpm_config_minimum_release_age=0 to turn off pnpm's own rule. Both are refused
-// in CI.
+// in CI, as is every other spelling of pnpm's release-age variables
+// (PNPM_CONFIG_MINIMUM_RELEASE_AGE, ..._EXCLUDE, ...).
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+import { ciReason, isOn, releaseAgeOverrides } from "./lib/ci.ts";
 import { describeSource, parseLockfile, type Lockfile } from "./lib/lockfile.ts";
 import {
   checkSettings,
@@ -57,10 +60,6 @@ const ATTEMPTS = 3;
 function fail(lines: readonly string[]): never {
   for (const line of lines) console.error(line);
   process.exit(1);
-}
-
-function isSet(value: string | undefined): boolean {
-  return value !== undefined && value !== "" && value !== "0" && value !== "false";
 }
 
 function readLockfile(): Lockfile {
@@ -191,12 +190,12 @@ function warnLoudly(lines: readonly string[]): void {
 async function main(): Promise<void> {
   const offline =
     process.argv.slice(2).includes("--offline") ||
-    isSet(process.env["GALATSA_CHECK_OFFLINE"]);
-  const ci = isSet(process.env["CI"]);
-  if (isSet(process.env["GALATSA_DISTRIBUTION_BUILD"])) {
-    if (ci) {
+    isOn(process.env["GALATSA_CHECK_OFFLINE"]);
+  const ci = ciReason(process.env);
+  if (isOn(process.env["GALATSA_DISTRIBUTION_BUILD"])) {
+    if (ci !== undefined) {
       fail([
-        "Release-age check: GALATSA_DISTRIBUTION_BUILD is not allowed in CI (the CI environment variable is set).",
+        `Release-age check: GALATSA_DISTRIBUTION_BUILD is not allowed in CI (${ci}).`,
       ]);
     }
     console.log(
@@ -204,14 +203,15 @@ async function main(): Promise<void> {
     );
     return;
   }
-  if (ci && process.env["pnpm_config_minimum_release_age"] !== undefined) {
+  const overrides = releaseAgeOverrides(process.env);
+  if (ci !== undefined && overrides.length > 0) {
     fail([
-      "Release-age check: pnpm_config_minimum_release_age is set, which overrides pnpm's own two-week rule. It is not allowed in CI.",
+      `Release-age check: ${overrides.join(", ")} ${overrides.length === 1 ? "is" : "are"} set, which ${overrides.length === 1 ? "overrides" : "override"} pnpm's own two-week rule. It is not allowed in CI (${ci}).`,
     ]);
   }
-  if (offline && ci) {
+  if (offline && ci !== undefined) {
     fail([
-      "Release-age check: offline mode is not allowed in CI (the CI environment variable is set).",
+      `Release-age check: offline mode is not allowed in CI (${ci}).`,
       "The check needs the npm registry there.",
     ]);
   }
