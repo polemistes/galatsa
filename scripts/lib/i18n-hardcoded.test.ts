@@ -10,7 +10,7 @@ import {
 } from "./i18n-hardcoded.ts";
 
 const fixture = (name: string): string =>
-  readFileSync(new URL(`fixtures/${name}.txt`, import.meta.url), "utf8");
+  readFileSync(new URL(`./fixtures/${name}.txt`, import.meta.url), "utf8");
 
 const texts = (fileName: string, source: string): string[] =>
   findHardcodedText(fileName, source).map((finding) => finding.text);

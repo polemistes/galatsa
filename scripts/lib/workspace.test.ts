@@ -305,8 +305,84 @@ describe("references", () => {
     ].join("\n");
     expect(referencesOf("src/x.ts", text)).toEqual([
       { specifier: "./a.png", kind: "path" },
-      { specifier: "../../x/", kind: "path" },
-      { specifier: "./skip/", kind: "path" },
+      { specifier: "../../x/", kind: "prefix" },
+      { specifier: "./skip/", kind: "prefix" },
+    ]);
+  });
+
+  it("finds import(), require() and new URL() of template strings by their fixed start", () => {
+    const text = [
+      "const a = import(`./locales/${lang}.ts`);",
+      'const b = require("./x/" + name);',
+      "const c = new URL(`assets/${file}`, import.meta.url);",
+      "const d = import(`${base}/x.ts`);",
+      "const e = import(`./plain.ts`);",
+      "const f = import(url);",
+    ].join("\n");
+    expect(referencesOf("src/x.ts", text)).toEqual([
+      // TypeScript's own scan reports the first string of a concatenation, and a
+      // template string without substitutions; both are checked as paths too.
+      { specifier: "./x/", kind: "module" },
+      { specifier: "./plain.ts", kind: "module" },
+      { specifier: "./locales/", kind: "prefix" },
+      { specifier: "./x/", kind: "prefix" },
+      { specifier: "./assets/", kind: "prefix" },
+      {
+        specifier: "`${base}/x.ts`",
+        kind: "unchecked",
+        reason: "import() whose start does not name a folder",
+      },
+      { specifier: "./plain.ts", kind: "module" },
+    ]);
+  });
+
+  it("finds resolve.alias targets in Vite config files", () => {
+    const text = [
+      'import { resolve, join } from "node:path";',
+      'import path from "node:path";',
+      'import { fileURLToPath } from "node:url";',
+      'const shared = { "@a": resolve(import.meta.dirname, "src/a") };',
+      "export default {",
+      "  resolve: {",
+      "    alias: {",
+      '      "@b": path.resolve(__dirname, "..", "packages/server/src"),',
+      '      "@c": fileURLToPath(new URL("./src/c", import.meta.url)),',
+      '      "@d": "some-package",',
+      '      "@e": join(process.cwd(), `src/${x}`),',
+      "    },",
+      "  },",
+      "  test: { alias: shared },",
+      '  other: { alias: [{ find: /^~/, replacement: resolve(import.meta.dirname, "lib") }] },',
+      "};",
+    ].join("\n");
+    const refs = referencesOf("vite.config.ts", text).filter(
+      (r) => r.kind !== "module" || r.specifier === "some-package",
+    );
+    expect(refs).toEqual([
+      { specifier: "./src/c", kind: "path" }, // new URL() is a reference in itself
+      { specifier: "../packages/server/src", kind: "path" },
+      { specifier: "./src/c", kind: "path" },
+      { specifier: "some-package", kind: "module" },
+      {
+        specifier: "join(process.cwd(), `src/${x}`)",
+        kind: "unchecked",
+        reason: "an alias whose target cannot be checked",
+      },
+      { specifier: "./src/a", kind: "path" },
+      { specifier: "./lib", kind: "path" },
+    ]);
+  });
+
+  it("finds tsconfig paths, relative to baseUrl", () => {
+    const text = JSON.stringify({
+      compilerOptions: {
+        baseUrl: "src",
+        paths: { "#x/*": ["../../server/src/*"], "@y": ["./y.ts"] },
+      },
+    });
+    expect(referencesOf("tsconfig.json", text)).toEqual([
+      { specifier: "../server/src/", kind: "prefix" },
+      { specifier: "./src/y.ts", kind: "path" },
     ]);
   });
 
@@ -466,6 +542,138 @@ describe("checkImports", () => {
       'scripts/x.ts refers to "../packages/server/src/index.ts", which is inside the workspace package packages/server. Declare that package and import it by name instead.',
     ]);
     expect(checkImports(editor, all)[0]).toContain("which is outside");
+  });
+
+  it("rejects a symbolic link out of the package, and paths through it", () => {
+    // bench/src/srv -> packages/server/src, as the file system reports it.
+    const real = (path: string): string =>
+      path.startsWith("src/srv")
+        ? `packages/server/src${path.slice(7)}`
+        : `bench/${path}`;
+    const bench = {
+      ...pkg(
+        "bench",
+        { name: "@galatsa/bench" },
+        {
+          "src/srv": "",
+          "src/main.ts":
+            'import { S } from "./srv/index.ts";\nimport { T } from "./ok.ts";\n',
+          "src/ok.ts": "",
+        },
+      ),
+      realPath: (path: string) => (path === "." ? "bench" : real(path)),
+      symlinks: ["src/srv"],
+    };
+    expect(checkImports(bench)).toEqual([
+      'bench/src/main.ts refers to "./srv/index.ts", which is really packages/server/src/index.ts (through a symbolic link), outside @galatsa/bench (bench). Relative paths must stay inside the package folder; use a declared workspace package instead.',
+      "bench/src/srv is a symbolic link to packages/server/src, outside @galatsa/bench (bench). Links may only point inside the package; share code through a declared workspace package instead.",
+    ]);
+  });
+
+  it('accepts only "#name" imports declared in the "imports" field', () => {
+    const manifest = {
+      name: "@galatsa/web",
+      imports: { "#config": "./src/config.ts", "#icons/*": "./src/icons/*.ts" },
+    };
+    const web = pkg("apps/web", manifest, {
+      "src/main.ts": [
+        'import c from "#config";',
+        'import i from "#icons/save";',
+        'import s from "#srv";',
+        'const u = new URL("#top", import.meta.url);',
+      ].join("\n"),
+      "src/app.css": ".a { fill: url(#gradient); }",
+    });
+    expect(checkImports(web)).toEqual([
+      'apps/web/src/main.ts imports "#srv", which is not declared in the "imports" field of @galatsa/web (apps/web). Declare it there ("#name": "./src/file.ts"), so the check can see where it points.',
+    ]);
+  });
+
+  it("checks computed imports by the folder of their fixed start", () => {
+    const root = pkg(".", { name: "galatsa" });
+    const server = pkg("packages/server", { name: "@galatsa/server" });
+    const bench = pkg(
+      "bench",
+      { name: "@galatsa/bench", dependencies: { lodash: "1" } },
+      {
+        "src/ok.ts": [
+          "import(`./engines/${name}.ts`);",
+          "import(`lodash/${fn}.js`);",
+          "new URL(`../assets/${file}`, import.meta.url);",
+        ].join("\n"),
+        "src/bad.ts": [
+          "import(`../../packages/server/src/${which}.ts`);",
+          'import("../../" + where);',
+          "import(`${base}/x.ts`);",
+          "import(`@galatsa/${pkg}`);",
+        ].join("\n"),
+      },
+    );
+    const all = [root, server, bench];
+    expect(checkImports(bench, all)).toEqual([
+      'bench/src/bad.ts refers to "../../", which is outside @galatsa/bench (bench). Relative paths must stay inside the package folder; use a declared workspace package instead.',
+      'bench/src/bad.ts refers to "../../packages/server/src/", which is outside @galatsa/bench (bench). Relative paths must stay inside the package folder; use a declared workspace package instead.',
+      "bench/src/bad.ts: import() whose start does not name a folder (`${base}/x.ts`); a bundler may still follow it, so it is not allowed.",
+      'bench/src/bad.ts: a computed import starting with "@galatsa/" does not name a whole package or a folder.',
+    ]);
+    // From the root, a folder that contains a workspace package can reach into it.
+    const rootWithGlob = pkg(
+      ".",
+      { name: "galatsa" },
+      {
+        "scripts/x.ts": "import(`../packages/${name}/src/index.ts`);",
+      },
+    );
+    expect(checkImports(rootWithGlob, [rootWithGlob, server, bench])).toEqual([
+      'scripts/x.ts refers to "../packages/", which can reach into the workspace package packages/server. Declare that package and import it by name instead.',
+    ]);
+  });
+
+  it("checks alias targets in Vite configs and tsconfig paths", () => {
+    const bench = pkg(
+      "bench",
+      { name: "@galatsa/bench", devDependencies: { vite: "1" } },
+      {
+        "vite.config.ts": [
+          'import { resolve } from "node:path";',
+          "export default {",
+          "  resolve: {",
+          '    alias: { "#srv": resolve(import.meta.dirname, "..", "packages/server/src/a.ts") },',
+          "  },",
+          "};",
+        ].join("\n"),
+        "vitest.config.ts": "export default { resolve: { alias: makeAliases() } };",
+        "tsconfig.json":
+          '{ "compilerOptions": { "paths": { "#x/*": ["../packages/server/src/*"] } } }',
+        "src/ok.ts": "",
+      },
+    );
+    expect(checkImports(bench)).toEqual([
+      'bench/vite.config.ts refers to "../packages/server/src/a.ts", which is outside @galatsa/bench (bench). Relative paths must stay inside the package folder; use a declared workspace package instead.',
+      "bench/vitest.config.ts: an alias whose target cannot be checked (makeAliases()); a bundler may still follow it, so it is not allowed.",
+      'bench/tsconfig.json refers to "../packages/server/src/", which is outside @galatsa/bench (bench). Relative paths must stay inside the package folder; use a declared workspace package instead.',
+    ]);
+  });
+
+  it("rejects backslashes and absolute paths in specifiers", () => {
+    const web = pkg(
+      "apps/web",
+      { name: "@galatsa/web" },
+      {
+        "src/main.ts": [
+          String.raw`import a from "..\\..\\packages\\server\\src\\a.ts";`,
+          'import b from "C:/repo/packages/server/src/b.ts";',
+          'import c from "file:///repo/packages/server/src/c.ts";',
+          'import d from "/@fs/repo/packages/server/src/d.ts";',
+        ].join("\n"),
+      },
+    );
+    expect(checkImports(web)).toEqual([
+      'apps/web/src/main.ts: "..\\..\\packages\\server\\src\\a.ts" contains a backslash; write paths with "/".',
+      'apps/web/src/main.ts: "C:/repo/packages/server/src/b.ts" is an absolute file path; use a path relative to the file.',
+      'apps/web/src/main.ts: "file:///repo/packages/server/src/c.ts" is an absolute file path; use a path relative to the file.',
+      'apps/web/src/main.ts: "/@fs/repo/packages/server/src/d.ts" is an absolute file path; use a path relative to the file.',
+    ]);
   });
 
   it("lets a config file import a shared root file whose packages it declares", () => {

@@ -20,6 +20,20 @@
 //   reach into a nested workspace package, and a package must not rely on another
 //   package's dependencies being reachable in node_modules. Node built-ins count
 //   only with the "node:" prefix: a bare "events" is the npm package of that name.
+//   - "Inside the folder" is decided on the real path: a symbolic link inside the
+//     package that points elsewhere (bench/src/srv -> packages/server/src) is
+//     rejected itself, and a path through one is rejected as leaving the package.
+//   - A "#name" import must be declared in the package's "imports" field.
+//   - An import() or require() of a template string or a concatenation is checked
+//     by its fixed start: `../x/${name}.ts` must stay inside the package, and its
+//     folder must not contain a nested workspace package. If the fixed start says
+//     nothing (`${base}/x.ts`), the import is rejected, because a bundler would
+//     still follow it.
+//   - Aliases are references too: "paths" in tsconfig files, and resolve.alias in
+//     vite.config and vitest.config files, evaluated where they are literal paths,
+//     path.resolve(import.meta.dirname, ...) and the like; any other alias value is
+//     rejected because it cannot be checked.
+//   - Backslashes, file: URLs and Vite's /@fs/ paths are rejected in specifiers.
 // - The targets in package.json "exports" and "imports" follow the same rules.
 // - Packages run by Node from source (NODE_RUN_PATHS) must not depend, directly or
 //   through other workspace packages, on a package with .tsx or .jsx files: Node's
@@ -99,6 +113,16 @@ export interface WorkspacePackage {
   readonly files: readonly string[];
   /** Reads a file of the package, path relative to the package folder. */
   readonly read: (file: string) => string;
+  /**
+   * Where a path relative to the package folder really is, after following
+   * symbolic links, relative to the repository root with "/" separators (it starts
+   * with "../" when outside the repository). For a path that does not exist, the
+   * real location of its nearest existing parent plus the rest. Undefined in tests
+   * without a file system: paths are then taken as written.
+   */
+  readonly realPath?: (path: string) => string;
+  /** Files of the package that are symbolic links. */
+  readonly symlinks?: readonly string[];
 }
 
 export type PackageKind = "root" | "library" | "app" | "tooling";
@@ -389,11 +413,17 @@ export function importsOf(text: string): string[] {
  * - "module": a JS/TS import; a bare specifier is a package.
  * - "style": a stylesheet reference; a bare specifier is a file next to the
  *   stylesheet if the package has one, otherwise a package ("~pkg" is a package).
- * - "path": always a file path (HTML attributes, new URL(), import.meta.glob).
+ * - "path": always a file path (HTML attributes, new URL(), import.meta.glob,
+ *   alias targets).
+ * - "prefix": the fixed start of a computed path or module specifier (a template
+ *   string or a concatenation). It can reach anything in the folder it names.
+ * - "unchecked": a reference whose target cannot be known; `specifier` holds the
+ *   source text and `reason` says what it is.
  */
 export interface Reference {
   readonly specifier: string;
-  readonly kind: "module" | "style" | "path";
+  readonly kind: "module" | "style" | "path" | "prefix" | "unchecked";
+  readonly reason?: string;
 }
 
 function extensionOf(file: string): string {
@@ -401,10 +431,29 @@ function extensionOf(file: string): string {
   return dot === -1 ? "" : file.slice(dot).toLowerCase();
 }
 
-/** new URL("<literal>", import.meta.url) and import.meta.glob("<literal>" | [...]). */
-function importMetaReferences(file: string, text: string): Reference[] {
-  if (!text.includes("import.meta")) return [];
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false);
+/** The fixed text a computed string starts with, or undefined if it is not one. */
+function fixedPrefix(node: ts.Expression): string | undefined {
+  if (ts.isParenthesizedExpression(node)) return fixedPrefix(node.expression);
+  if (ts.isTemplateExpression(node)) return node.head.text;
+  if (
+    ts.isBinaryExpression(node) &&
+    node.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
+    if (ts.isStringLiteralLike(node.left)) return node.left.text;
+    const left = fixedPrefix(node.left);
+    return left === undefined ? "" : left;
+  }
+  return undefined;
+}
+
+/**
+ * References that need the syntax tree: new URL("<path>", import.meta.url),
+ * import.meta.glob("<pattern>" | [...]), and import(), require() and new URL()
+ * with a template string or a concatenation (by their fixed start).
+ */
+function astReferences(file: string, text: string): Reference[] {
+  if (!/import\s*\(|require\s*\(|import\.meta/.test(text)) return [];
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const isImportMeta = (node: ts.Node, property: string): boolean =>
     ts.isPropertyAccessExpression(node) &&
     node.name.text === property &&
@@ -417,23 +466,56 @@ function importMetaReferences(file: string, text: string): Reference[] {
     return [];
   };
   const found: Reference[] = [];
+  const computed = (node: ts.Expression, what: string, kind: "module" | "path"): void => {
+    if (ts.isNoSubstitutionTemplateLiteral(node)) {
+      found.push({ specifier: node.text, kind });
+      return;
+    }
+    const prefix = fixedPrefix(node);
+    if (prefix === undefined) return; // a variable: not something a bundler follows
+    found.push(
+      prefix === "" || !prefix.includes("/")
+        ? {
+            specifier: node.getText(source),
+            kind: "unchecked",
+            reason: `${what} whose start does not name a folder`,
+          }
+        : {
+            // A URL path without "./" is still relative to the file.
+            specifier:
+              kind === "path" && !/^(?:\.|\/|[A-Za-z][A-Za-z0-9+.-]*:)/.test(prefix)
+                ? `./${prefix}`
+                : prefix,
+            kind: "prefix",
+          },
+    );
+  };
   const visit = (node: ts.Node): void => {
     if (
       ts.isNewExpression(node) &&
       ts.isIdentifier(node.expression) &&
       node.expression.text === "URL" &&
       node.arguments?.[1] !== undefined &&
-      isImportMeta(node.arguments[1], "url")
+      isImportMeta(node.arguments[1], "url") &&
+      node.arguments[0] !== undefined
     ) {
-      for (const text of literals(node.arguments[0])) {
-        found.push({ specifier: text, kind: "path" });
-      }
+      const first = node.arguments[0];
+      for (const text of literals(first)) found.push({ specifier: text, kind: "path" });
+      if (!ts.isStringLiteral(first)) computed(first, "new URL()", "path");
     }
     if (ts.isCallExpression(node) && isImportMeta(node.expression, "glob")) {
       for (const pattern of literals(node.arguments[0])) {
         // The fixed part of the pattern decides where it can reach; "!" negates.
         const fixed = pattern.replace(/^!/, "").replace(/[*?{[].*$/, "");
-        found.push({ specifier: fixed === "" ? "./" : fixed, kind: "path" });
+        found.push({ specifier: fixed === "" ? "./" : fixed, kind: "prefix" });
+      }
+    }
+    if (ts.isCallExpression(node) && node.arguments[0] !== undefined) {
+      const dynamic = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const required =
+        ts.isIdentifier(node.expression) && node.expression.text === "require";
+      if ((dynamic || required) && !ts.isStringLiteral(node.arguments[0])) {
+        computed(node.arguments[0], dynamic ? "import()" : "require()", "module");
       }
     }
     ts.forEachChild(node, visit);
@@ -480,8 +562,211 @@ function htmlReferences(text: string): Reference[] {
 function scriptReferences(file: string, text: string): Reference[] {
   return [
     ...importsOf(text).map((specifier): Reference => ({ specifier, kind: "module" })),
-    ...importMetaReferences(file, text),
+    ...astReferences(file, text),
+    ...(VITE_CONFIG_FILE.test(file) ? aliasReferences(file, text) : []),
   ];
+}
+
+/** Vite and Vitest config files, whose resolve.alias entries are checked. */
+const VITE_CONFIG_FILE =
+  /(?:^|\/)(?:vite|vitest)\.config\.[cm]?[jt]s$|(?:^|\/)vite\.shared\.ts$/;
+
+/** tsconfig files, whose "paths" targets are checked. */
+const TSCONFIG_FILE = /(?:^|\/)tsconfig[^/]*\.json$/;
+
+/**
+ * The targets of "paths" in a tsconfig file, as paths relative to the file: each
+ * target is relative to "baseUrl" if set, otherwise to the tsconfig file. A target
+ * with "*" is checked by its fixed start.
+ */
+function tsconfigReferences(text: string): Reference[] {
+  const { config } = ts.parseConfigFileTextToJson("tsconfig.json", text);
+  const options = isObject(config) ? config["compilerOptions"] : undefined;
+  if (!isObject(options) || !isObject(options["paths"])) return [];
+  const baseUrl = typeof options["baseUrl"] === "string" ? options["baseUrl"] : ".";
+  const found: Reference[] = [];
+  for (const targets of Object.values(options["paths"])) {
+    for (const target of Array.isArray(targets) ? targets : []) {
+      if (typeof target !== "string") continue;
+      const star = target.indexOf("*");
+      const fixed = star === -1 ? target : target.slice(0, star);
+      const joined = /^(?:[A-Za-z]:)?[\\/]/.test(fixed)
+        ? fixed
+        : posix.join(baseUrl, fixed);
+      const specifier =
+        joined.startsWith(".") || joined.startsWith("/") ? joined : `./${joined}`;
+      found.push({ specifier, kind: star === -1 ? "path" : "prefix" });
+    }
+  }
+  return found;
+}
+
+/**
+ * The targets of resolve.alias in a Vite or Vitest config file, as paths relative
+ * to the file (or package names). A target is evaluated if it is a string, or
+ * path.resolve() / path.join() / fileURLToPath(new URL(..., import.meta.url)) of
+ * strings, import.meta.dirname, __dirname and process.cwd() (taken as the folder of
+ * the config file, where Vite runs). Anything else is "unchecked".
+ */
+function aliasReferences(file: string, text: string): Reference[] {
+  if (!text.includes("alias")) return [];
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const found: Reference[] = [];
+  const unchecked = (node: ts.Node): void => {
+    found.push({
+      specifier: node.getText(source).replace(/\s+/g, " "),
+      kind: "unchecked",
+      reason: "an alias whose target cannot be checked",
+    });
+  };
+  const constants = new Map<string, ts.Expression>();
+  const collect = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined
+    ) {
+      constants.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  const deref = (node: ts.Expression, depth = 0): ts.Expression => {
+    let current = node;
+    while (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isSatisfiesExpression(current)
+    ) {
+      current = current.expression;
+    }
+    if (ts.isIdentifier(current) && depth < 10) {
+      const value = constants.get(current.text);
+      if (value !== undefined) return deref(value, depth + 1);
+    }
+    return current;
+  };
+  const target = (node: ts.Expression): void => {
+    const value = evaluatePath(deref(node), deref);
+    if (value === undefined) unchecked(node);
+    else
+      found.push({ specifier: value, kind: value.startsWith(".") ? "path" : "module" });
+  };
+  const entries = (node: ts.Expression): void => {
+    const value = deref(node);
+    if (ts.isObjectLiteralExpression(value)) {
+      for (const property of value.properties) {
+        if (ts.isPropertyAssignment(property)) target(property.initializer);
+        else if (ts.isShorthandPropertyAssignment(property)) target(property.name);
+        else unchecked(property);
+      }
+    } else if (ts.isArrayLiteralExpression(value)) {
+      for (const element of value.elements) {
+        const entry = deref(element);
+        const replacement = ts.isObjectLiteralExpression(entry)
+          ? entry.properties.find(
+              (p) =>
+                (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+                ts.isIdentifier(p.name) &&
+                p.name.text === "replacement",
+            )
+          : undefined;
+        if (replacement !== undefined && ts.isPropertyAssignment(replacement)) {
+          target(replacement.initializer);
+        } else if (
+          replacement !== undefined &&
+          ts.isShorthandPropertyAssignment(replacement)
+        ) {
+          target(replacement.name);
+        } else {
+          unchecked(element);
+        }
+      }
+    } else {
+      unchecked(node);
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "alias"
+    ) {
+      entries(ts.isPropertyAssignment(node) ? node.initializer : node.name);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+/**
+ * Evaluates a path expression of a config file to a path relative to the file's
+ * folder ("./x", "../y") or a bare module name; undefined if it cannot be known.
+ */
+function evaluatePath(
+  node: ts.Expression,
+  deref: (node: ts.Expression) => ts.Expression,
+): string | undefined {
+  const here = "<here>";
+  // Each part is a path; <here> stands for the config file's folder.
+  const part = (raw: ts.Expression): string | undefined => {
+    const expression = deref(raw);
+    if (ts.isStringLiteralLike(expression)) return expression.text;
+    const text = expression.getText().replace(/\s+/g, "");
+    if (
+      text === "import.meta.dirname" ||
+      text === "__dirname" ||
+      text === "process.cwd()"
+    ) {
+      return here;
+    }
+    if (ts.isCallExpression(expression)) {
+      const callee = expression.expression.getText().replace(/\s+/g, "");
+      const name = callee.split(".").pop() ?? "";
+      if (
+        ["resolve", "join"].includes(name) &&
+        /^(?:(?:node:)?path\.|posix\.|path\.posix\.)?(?:resolve|join)$/.test(callee)
+      ) {
+        const parts = expression.arguments.map(part);
+        if (parts.some((p) => p === undefined)) return undefined;
+        let result = name === "resolve" ? here : "";
+        for (const p of parts as string[]) {
+          if (p === here) result = here;
+          else if (/^(?:[A-Za-z]:)?[\\/]/.test(p))
+            return undefined; // absolute
+          else result = result === "" ? p : `${result}/${p}`;
+        }
+        return result;
+      }
+      if (name === "fileURLToPath" && expression.arguments[0] !== undefined) {
+        const url = deref(expression.arguments[0]);
+        if (
+          ts.isNewExpression(url) &&
+          ts.isIdentifier(url.expression) &&
+          url.expression.text === "URL" &&
+          url.arguments?.[0] !== undefined &&
+          url.arguments[1]?.getText().replace(/\s+/g, "") === "import.meta.url"
+        ) {
+          const relative = part(url.arguments[0]);
+          return relative === undefined || relative === here
+            ? undefined
+            : `${here}/${relative}`;
+        }
+      }
+    }
+    return undefined;
+  };
+  const value = part(node);
+  if (value === undefined) return undefined;
+  if (value === here) return ".";
+  if (value.startsWith(`${here}/`)) {
+    const rest = posix.normalize(value.slice(here.length + 1));
+    return rest.startsWith("..") ? rest : `./${rest}`;
+  }
+  if (value.startsWith(".")) return value; // a relative string: taken from the file
+  if (/^(?:[A-Za-z]:)?[\\/]/.test(value)) return undefined; // absolute
+  return value; // a package name
 }
 
 /** Every reference of a source file to another file or package; [] for other files. */
@@ -490,16 +775,20 @@ export function referencesOf(file: string, text: string): Reference[] {
   if (SOURCE_EXTENSIONS.includes(extension)) return scriptReferences(file, text);
   if (STYLE_EXTENSIONS.includes(extension)) return styleReferences(text);
   if (HTML_EXTENSIONS.includes(extension)) return htmlReferences(text);
+  if (TSCONFIG_FILE.test(file)) return tsconfigReferences(text);
   return [];
 }
 
 /** True for URLs and other specifiers that are not files or packages. */
-function isExternal(specifier: string): boolean {
+function isExternal(specifier: string, kind: Reference["kind"]): boolean {
   return (
     specifier === "" ||
-    /^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier) || // node:, https:, data:, virtual:
+    // node:, https:, data:, virtual: (but not a Windows drive or a file: URL)
+    (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier) &&
+      !/^(?:[A-Za-z]:|file:)/i.test(specifier)) ||
     specifier.startsWith("//") ||
-    specifier.startsWith("#") || // "imports" mapping, or a fragment in CSS and HTML
+    // A fragment in CSS and HTML; in a script, "#name" is an "imports" mapping.
+    (specifier.startsWith("#") && kind !== "module") ||
     specifier.includes("${") ||
     specifier.includes("{{")
   );
@@ -507,23 +796,62 @@ function isExternal(specifier: string): boolean {
 
 type Resolved =
   | { readonly kind: "none" }
-  | { readonly kind: "file"; readonly path: string }
-  | { readonly kind: "package"; readonly name: string };
+  | { readonly kind: "file"; readonly path: string; readonly folder?: boolean }
+  | { readonly kind: "package"; readonly name: string }
+  | { readonly kind: "imports"; readonly name: string }
+  | { readonly kind: "invalid"; readonly reason: string };
 
 /** Resolves a reference of `file`; file paths come back relative to the package. */
 function resolveReference(
   pkg: WorkspacePackage,
   file: string,
-  { specifier, kind }: Reference,
+  { specifier, kind, reason }: Reference,
 ): Resolved {
-  if (isExternal(specifier)) return { kind: "none" };
+  if (kind === "unchecked") {
+    return {
+      kind: "invalid",
+      reason: `${reason ?? "a reference"} (${specifier}); a bundler may still follow it, so it is not allowed`,
+    };
+  }
+  if (specifier.includes("\\")) {
+    return {
+      kind: "invalid",
+      reason: `"${specifier}" contains a backslash; write paths with "/"`,
+    };
+  }
+  if (/^(?:[A-Za-z]:\/|file:|\/@fs\/|\/@id\/)/i.test(specifier)) {
+    return {
+      kind: "invalid",
+      reason: `"${specifier}" is an absolute file path; use a path relative to the file`,
+    };
+  }
+  if (isExternal(specifier, kind)) return { kind: "none" };
+  if (kind === "module" && specifier.startsWith("#")) {
+    return { kind: "imports", name: specifier };
+  }
+  if (kind === "prefix") {
+    // Everything in the folder of the fixed start can be reached.
+    const folder = specifier.slice(0, specifier.lastIndexOf("/") + 1);
+    if (!/^\.{0,2}\//.test(folder)) {
+      const name = packageNameOf(folder);
+      const complete = name !== undefined && folder.startsWith(`${name}/`);
+      return complete
+        ? { kind: "package", name }
+        : {
+            kind: "invalid",
+            reason: `a computed import starting with "${specifier}" does not name a whole package or a folder`,
+          };
+    }
+    const resolved = resolveReference(pkg, file, { specifier: folder, kind: "path" });
+    return resolved.kind === "file" ? { ...resolved, folder: true } : resolved;
+  }
   const plain = specifier.replace(/[?#].*$/, "");
-  const fromFile = (relative: string): Resolved => ({
-    kind: "file",
-    path: relative.startsWith("/")
-      ? posix.normalize(posix.join(".", relative)) // Vite: the package folder
-      : posix.normalize(posix.join(posix.dirname(file), relative)),
-  });
+  const fromFile = (relative: string): Resolved => {
+    const joined = relative.startsWith("/")
+      ? posix.join(".", relative) // Vite: the package folder
+      : posix.join(posix.dirname(file), relative);
+    return { kind: "file", path: posix.normalize(joined).replace(/(.)\/+$/, "$1") };
+  };
   const looksRelative = plain === "." || plain === ".." || /^\.{0,2}\//.test(plain);
   if (kind === "path" || looksRelative) return fromFile(plain);
   if (kind === "style") {
@@ -537,6 +865,23 @@ function resolveReference(
 function packageOf(specifier: string): Resolved {
   const name = packageNameOf(specifier);
   return name === undefined ? { kind: "none" } : { kind: "package", name };
+}
+
+/** True if a key of package.json "imports" matches the specifier ("#x" or "#x/*"). */
+function importsHas(manifest: Manifest, specifier: string): boolean {
+  const imports = manifest.imports;
+  if (!isObject(imports)) return false;
+  return Object.keys(imports).some((key) => {
+    const star = key.indexOf("*");
+    if (star === -1) return key === specifier;
+    const before = key.slice(0, star);
+    const after = key.slice(star + 1);
+    return (
+      specifier.length >= key.length - 1 &&
+      specifier.startsWith(before) &&
+      specifier.endsWith(after)
+    );
+  });
 }
 
 /** Checks the source files of one package; `all` is every workspace package. */
@@ -561,7 +906,17 @@ export function checkImports(
     );
   };
 
-  const checkFile = (file: string, path: string, specifier: string): void => {
+  // The package folder and nested packages where they really are.
+  const realOf = (path: string): string =>
+    pkg.realPath === undefined ? repoPath(pkg, path) : pkg.realPath(path);
+  const realFolder = realOf(".");
+
+  const checkFile = (
+    file: string,
+    path: string,
+    specifier: string,
+    folder = false,
+  ): void => {
     const target = repoPath(pkg, path);
     const leaves = path === ".." || path.startsWith("../") || leavesRepository(target);
     if (leaves) {
@@ -580,11 +935,29 @@ export function checkImports(
       );
       return;
     }
-    const inner = nested.find((path) => isInside(target, path));
+    const inner = nested.find(
+      (path) => isInside(target, path) || (folder && isInside(path, target)),
+    );
     if (inner !== undefined) {
       problems.add(
-        `${where(file)} refers to "${specifier}", which is inside the workspace package ${inner}. ` +
+        `${where(file)} refers to "${specifier}", which ${folder ? "can reach into" : "is inside"} the workspace package ${inner}. ` +
           "Declare that package and import it by name instead.",
+      );
+      return;
+    }
+    // The same on the real path, after symbolic links.
+    const real = realOf(path);
+    const realInner = nested.find((path) =>
+      isInside(real, realOf(posix.relative(pkg.path, path) || ".")),
+    );
+    if (
+      !isInside(real, realFolder) ||
+      leavesRepository(real) ||
+      realInner !== undefined
+    ) {
+      problems.add(
+        `${where(file)} refers to "${specifier}", which is really ${real} (through a symbolic link), outside ${label(pkg)}. ` +
+          "Relative paths must stay inside the package folder; use a declared workspace package instead.",
       );
     }
   };
@@ -594,7 +967,36 @@ export function checkImports(
     for (const reference of references) {
       const resolved = resolveReference(pkg, file, reference);
       if (resolved.kind === "package") checkPackage(file, resolved.name, "");
-      if (resolved.kind === "file") checkFile(file, resolved.path, reference.specifier);
+      if (resolved.kind === "file") {
+        checkFile(file, resolved.path, reference.specifier, resolved.folder);
+      }
+      if (resolved.kind === "imports" && !importsHas(pkg.manifest, resolved.name)) {
+        problems.add(
+          `${where(file)} imports "${resolved.name}", which is not declared in the "imports" field of ${label(pkg)}. ` +
+            'Declare it there ("#name": "./src/file.ts"), so the check can see where it points.',
+        );
+      }
+      if (resolved.kind === "invalid") {
+        problems.add(`${where(file)}: ${resolved.reason}.`);
+      }
+    }
+  }
+
+  // A symbolic link must point inside the package, outside every nested package.
+  for (const link of pkg.symlinks ?? []) {
+    const real = realOf(link);
+    const realInner = nested.find((path) =>
+      isInside(real, realOf(posix.relative(pkg.path, path) || ".")),
+    );
+    if (
+      !isInside(real, realFolder) ||
+      leavesRepository(real) ||
+      realInner !== undefined
+    ) {
+      problems.add(
+        `${where(link)} is a symbolic link to ${real}, outside ${label(pkg)}. ` +
+          "Links may only point inside the package; share code through a declared workspace package instead.",
+      );
     }
   }
   return [...problems];

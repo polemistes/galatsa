@@ -3,14 +3,14 @@
 // Checks the project's own workspace packages: license fields, required files and
 // fields, nothing reaching the AGPL server package (by name, alias, path or a link
 // in pnpm-lock.yaml), no undeclared imports and no relative paths out of a package
-// (scripts, stylesheets and HTML), and no .tsx reachable from code that Node runs
-// from source. Rules are in scripts/lib/workspace.ts; docs/new-package.md explains
+// (scripts, stylesheets, HTML, aliases and symbolic links, compared on real paths),
+// and no .tsx reachable from code that Node runs from source. Rules are in scripts/lib/workspace.ts; docs/new-package.md explains
 // them.
 //
 // Usage: node scripts/check-workspace.ts   (or `pnpm check:workspace`)
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseLockfile, type Lockfile } from "./lib/lockfile.ts";
@@ -55,7 +55,6 @@ function listPackagePaths(): string[] {
   }>;
   // Compare real paths: the repository may be reached through a symlink, or on
   // Windows through a short (8.3) name, and pnpm may report the other spelling.
-  const realRoot = realpathSync.native(root);
   return listed.map((entry) => {
     const path = relative(realRoot, realpathSync.native(entry.path));
     if (path.startsWith("..") || isAbsolute(path)) {
@@ -63,6 +62,42 @@ function listPackagePaths(): string[] {
     }
     return path.split(sep).join("/") || ".";
   });
+}
+
+// The repository root where it really is, for comparing real paths.
+const realRoot = realpathSync.native(root);
+
+/**
+ * Where a path really is after following symbolic links, relative to the real
+ * repository root with "/" separators. For a path that does not exist, the real
+ * location of its nearest existing parent plus the rest.
+ */
+function realPathOf(absolute: string): string {
+  let existing = absolute;
+  const rest: string[] = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) break;
+    rest.unshift(existing.slice(parent.length).replace(/^[\\/]+/, ""));
+    existing = parent;
+  }
+  let real: string;
+  try {
+    real = join(realpathSync.native(existing), ...rest);
+  } catch {
+    real = absolute;
+  }
+  const path = relative(realRoot, real).split(sep).join("/");
+  // On Windows a path on another drive stays absolute; mark it as outside.
+  return isAbsolute(path) ? `../${path}` : path || ".";
+}
+
+function isSymlink(absolute: string): boolean {
+  try {
+    return lstatSync(absolute).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /** Tracked and untracked, not ignored files; git writes "/" separators everywhere. */
@@ -113,11 +148,14 @@ function main(): void {
         return ""; // tracked but deleted in the working tree
       }
     };
+    const files = filesOf.get(path) ?? [];
     return {
       path,
       manifest: JSON.parse(readLocal("package.json")) as Manifest,
-      files: filesOf.get(path) ?? [],
+      files,
       read: readLocal,
+      realPath: (file: string) => realPathOf(join(folder, ...file.split("/"))),
+      symlinks: files.filter((file) => isSymlink(join(folder, ...file.split("/")))),
     };
   });
 
