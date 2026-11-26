@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Arch Linux package for the Galatsa benchmark shell (a test tool, not the program itself).
+# Build: makepkg -si   (in a folder containing this file)
+
+pkgname=galatsa-maaling
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Galatsa rendering-engine benchmark (test tool)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/polemistes/galatsa"
+license=('GPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'glib2' 'hicolor-icon-theme')
+makedepends=('git' 'rust' 'nodejs' 'pnpm')
+options=('!lto' '!debug')
+_commit=f8e2852c42a80ce6e984e623d514e9582dd0572c
+source=("galatsa::git+https://github.com/polemistes/galatsa.git#commit=${_commit}"
+        "galatsa-maaling.desktop")
+sha256sums=('SKIP'
+            '07cb1ecdc4372c4f569ac801d7a4364530f9828c36b7238df21dc53f1188035a')
+
+build() {
+  cd galatsa
+  # The two-week release-age rule applies to the project's own development,
+  # not to distribution builds.
+  export GALATSA_DISTRIBUTION_BUILD=1
+  export pnpm_config_minimum_release_age=0
+  export CARGO_HOME="$srcdir/cargo-home"
+  # Keep build paths (which contain the builder's user name) out of the binary.
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build --remap-path-prefix=$CARGO_HOME=/cargo"
+  pnpm install --frozen-lockfile
+  pnpm --filter @galatsa/desktop exec tauri build --no-bundle
+}
+
+package() {
+  cd galatsa/apps/desktop
+  install -Dm755 src-tauri/target/release/galatsa-bench-shell "$pkgdir/usr/bin/galatsa-maaling"
+  install -Dm644 src-tauri/icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/galatsa-maaling.png"
+  install -Dm644 "$srcdir/galatsa-maaling.desktop" "$pkgdir/usr/share/applications/galatsa-maaling.desktop"
+  install -Dm644 ../../LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

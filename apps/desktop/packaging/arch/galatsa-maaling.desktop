@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Galatsa-måling
+Comment=Måling av tegnemotorer for Galatsa
+Exec=galatsa-maaling
+Icon=galatsa-maaling
+Categories=Development;
+Terminal=false
