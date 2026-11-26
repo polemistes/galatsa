@@ -52,3 +52,12 @@ supportedArchitectures:
     - current
     - glibc
     - musl
+
+# Project rule: a third-party package version is used only after it has been
+# published for at least two weeks. pnpm applies it while resolving versions and
+# when it verifies the lockfile on install. The value is in minutes (14 days).
+# Because it is set explicitly, pnpm fails instead of falling back to a younger
+# version (minimumReleaseAgeStrict). scripts/check-release-age.ts checks the
+# lockfile as well, and fails on any minimumReleaseAgeExclude entry that is not a
+# listed exception in scripts/lib/release-age-exceptions.ts.
+minimumReleaseAge: 20160
