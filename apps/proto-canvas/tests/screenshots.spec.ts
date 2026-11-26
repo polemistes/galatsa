@@ -2,7 +2,7 @@
 
 // Screenshots of the same texts at zoom 0.1, 1, 8 and 40, at device pixel ratio 1
 // and 2, saved to results/. At 0.1 and 1 the camera looks at the middle of the
-// text box; at 8 and 40 the box's top-left corner is near the view's top-left.
+// text box; at 8 and 40 the start of the first line is near the view's top-left.
 
 import { expect, type Page, test } from "@playwright/test";
 
@@ -22,15 +22,24 @@ async function shoot(page: Page, id: string, zoom: number, file: string): Promis
     ({ id, zoom, width, height }) => {
       const api = window.protoCanvas!;
       const e = api.engine.textElement(id)!;
-      const margin = 24 / zoom;
-      const pose =
-        zoom < 2
-          ? { x: e.x + e.width / 2, y: e.y + Math.min(e.height, 400) / 2, zoom }
-          : {
-              x: e.x - margin + width / 2 / zoom,
-              y: e.y - margin + height / 2 / zoom,
-              zoom,
-            };
+      if (zoom < 2) {
+        api.setCamera({
+          x: e.x + e.width / 2,
+          y: e.y + Math.min(e.height, 400) / 2,
+          zoom,
+        });
+        return;
+      }
+      // Put the start of the first line 24 px from the view's left edge and its
+      // middle half a line plus 24 px from the top.
+      api.setCamera({ x: e.x, y: e.y, zoom });
+      const p = api.engine.caretScreenPoint(id, 0)!;
+      const lineHalf = (e.fontSize * e.lineHeight * zoom) / 2;
+      const pose = {
+        x: e.x + (p.x - width / 2) / zoom + (width / 2 - 24) / zoom,
+        y: e.y + (p.y - height / 2) / zoom + (height / 2 - 24 - lineHalf) / zoom,
+        zoom,
+      };
       api.setCamera(pose);
     },
     { id, zoom, width: WIDTH, height: HEIGHT },
