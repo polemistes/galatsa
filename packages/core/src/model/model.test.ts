@@ -257,7 +257,15 @@ describe("resolution", () => {
     expect(r.isDeleted("s1")).toBe(false);
     expect(r.logicalParentOf("g1")).toBe(null);
     expect(r.logicalParentOf("d2")).toBe(null);
-    expect(r.logicalChildren(null)).toEqual(["back", "F", "top", "g1", "d2", "d3", "sub"]);
+    expect(r.logicalChildren(null)).toEqual([
+      "back",
+      "F",
+      "top",
+      "g1",
+      "d2",
+      "d3",
+      "sub",
+    ]);
     // What a delete of a visible container lists, and of one that is gone already.
     expect(Object.keys(r.coverage("F")).sort()).toEqual(["F", "a", "b"]);
     expect(Object.keys(r.coverage("D")).sort()).toEqual(["D", "d1"]);
@@ -541,7 +549,9 @@ describe("validation", () => {
     (doc.elements.a!.data as Record<string, unknown>).deep = deep;
     expect(nestingDepth(doc)).toBeGreaterThan(MAX_DEPTH);
     expect(validateSnapshot(doc).some((p) => p.includes("nested too deep"))).toBe(true);
-    expect(nestingDepth(readSnapshot(doc).snapshot, 100_000)).toBeLessThanOrEqual(MAX_DEPTH);
+    expect(nestingDepth(readSnapshot(doc).snapshot, 100_000)).toBeLessThanOrEqual(
+      MAX_DEPTH,
+    );
   });
 
   it("reads anything as a valid document, and reading the result changes nothing", () => {

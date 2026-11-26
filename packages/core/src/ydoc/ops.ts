@@ -152,7 +152,8 @@ function marksMap(record: Y.Map<unknown>): Y.Map<unknown> {
 
 function clearMarks(record: Y.Map<unknown>): void {
   const marks = record.get("deleted");
-  if (marks instanceof Y.Map) for (const action of [...marks.keys()]) marks.delete(action);
+  if (marks instanceof Y.Map)
+    for (const action of [...marks.keys()]) marks.delete(action);
 }
 
 function elementMap(doc: Y.Doc, id: ElementId): Y.Map<unknown> {
@@ -321,7 +322,8 @@ export function resizeElement(
 ): void {
   checkNumbers("size", w, h);
   if (w < 0 || h < 0) invalid("size", "width and height must not be negative");
-  if (elementMap(doc, id).get("type") === GROUP_TYPE) invalid("size", "groups have no size");
+  if (elementMap(doc, id).get("type") === GROUP_TYPE)
+    invalid("size", "groups have no size");
   setKey(doc, id, "size", { w, h }, options);
 }
 
@@ -568,7 +570,8 @@ export function group(
   prepare(doc, options);
   const groupId = options?.id ?? newId(options?.randomBytes);
   checkId(groupId, "group id");
-  if (roots(doc).elements.has(groupId)) throw new Error(`Element ${groupId} exists already`);
+  if (roots(doc).elements.has(groupId))
+    throw new Error(`Element ${groupId} exists already`);
   const r = resolver(doc);
   const logical = r.logicalParentOf(ids[0]!);
   if (ids.some((id) => r.logicalParentOf(id) !== logical || r.isGone(id))) {
@@ -778,7 +781,10 @@ export function setVisibility(
     action === null
       ? null
       : checked("visibility", (p) =>
-          readVisibilityChange(options?.ext ? { action, ext: options.ext } : { action }, p),
+          readVisibilityChange(
+            options?.ext ? { action, ext: options.ext } : { action },
+            p,
+          ),
         );
   transact(doc, options, () => {
     const map = stopMap(doc, stop);

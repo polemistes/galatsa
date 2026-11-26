@@ -178,7 +178,11 @@ export function readParts(bytes: Uint8Array, options: ReadOptions = {}): FilePar
       // and values that do not fit are a different matter (they are quarantined).
       const tables = ["settings", "elements", "stops", "routes", "assets"];
       const document = raw.document;
-      if (!read.snapshot || !isObject(document) || !tables.every((t) => isObject(document[t]))) {
+      if (
+        !read.snapshot ||
+        !isObject(document) ||
+        !tables.every((t) => isObject(document[t]))
+      ) {
         documentProblem = "document.json is not a document";
       } else {
         snapshot = read.snapshot;
@@ -262,7 +266,8 @@ export async function readAssets(
       message: `The asset ${id} is damaged and was ignored.`,
     });
   for (const name of parts.damaged) {
-    if (name.startsWith(ENTRY.assetsPrefix)) report(name.slice(ENTRY.assetsPrefix.length));
+    if (name.startsWith(ENTRY.assetsPrefix))
+      report(name.slice(ENTRY.assetsPrefix.length));
   }
   for (const [name, data] of parts.entries) {
     if (!name.startsWith(ENTRY.assetsPrefix)) continue;
@@ -296,7 +301,8 @@ export async function readGalatsaSnapshot(
   options: ReadOptions = {},
 ): Promise<SnapshotReadResult> {
   const parts = readParts(bytes, options);
-  if (!parts.snapshot) throw damaged(parts.documentProblem ?? "document.json is unusable");
+  if (!parts.snapshot)
+    throw damaged(parts.documentProblem ?? "document.json is unusable");
   const warnings = [...parts.warnings];
   const assets = await readAssets(parts, parts.snapshot, warnings);
   return {

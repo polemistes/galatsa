@@ -118,7 +118,9 @@ function inflateBounded(raw: Uint8Array, size: number): Uint8Array | null {
       return;
     }
     if (at + chunk.length > out.length) {
-      const grown = new Uint8Array(Math.min(size, Math.max(out.length * 2, at + chunk.length)));
+      const grown = new Uint8Array(
+        Math.min(size, Math.max(out.length * 2, at + chunk.length)),
+      );
       grown.set(out.subarray(0, at));
       out = grown;
     }
@@ -243,9 +245,13 @@ export function openZip(
     if (next > end) throw damaged("the archive directory is broken");
     const name = latin1(bytes, at + 46, nameLength);
     // A size or offset of 0xFFFFFFFF, or a zip64 extra field, means zip64.
-    if (compressedSize === 0xffffffff || size === 0xffffffff || localOffset === 0xffffffff)
+    if (
+      compressedSize === 0xffffffff ||
+      size === 0xffffffff ||
+      localOffset === 0xffffffff
+    )
       throw zip64();
-    for (let x = at + 46 + nameLength; x + 4 <= at + 46 + nameLength + extraLength; ) {
+    for (let x = at + 46 + nameLength; x + 4 <= at + 46 + nameLength + extraLength;) {
       if (u16(x) === EXTRA_ZIP64) throw zip64();
       x += 4 + u16(x + 2);
     }

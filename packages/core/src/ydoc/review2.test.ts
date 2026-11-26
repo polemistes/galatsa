@@ -7,7 +7,12 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { copyFragment } from "../model/fragment.ts";
-import { InvalidDocumentError, MAX_DEPTH, nestingDepth, validateSnapshot } from "../model/grammar.ts";
+import {
+  InvalidDocumentError,
+  MAX_DEPTH,
+  nestingDepth,
+  validateSnapshot,
+} from "../model/grammar.ts";
 import { Resolver } from "../model/resolve.ts";
 import { hiddenAt, routeSteps } from "../model/route.ts";
 import { FRAME_TYPE, SCHEMA_VERSION } from "../model/types.ts";
@@ -120,7 +125,14 @@ describe("review 2: a delete spares work anywhere between the element and the de
       const o = seededOptions(3);
       addElement(
         d,
-        { id: "SF", type: FRAME_TYPE, parent: "F", x: 200, y: 200, size: { w: 100, h: 100 } },
+        {
+          id: "SF",
+          type: FRAME_TYPE,
+          parent: "F",
+          x: 200,
+          y: 200,
+          size: { w: 100, h: 100 },
+        },
         o,
       );
       addElement(
@@ -167,7 +179,14 @@ describe("review 2: a delete spares work anywhere between the element and the de
 
     it(`B adds N to F and deletes F, A deletes F too: N is deleted in both orders (${ca}/${cb})`, () => {
       const [a, b] = pair(base(), ca, cb);
-      addElement(b, { id: "N", type: SHAPE, parent: "F", x: 1, y: 1, size: { w: 1, h: 1 } });
+      addElement(b, {
+        id: "N",
+        type: SHAPE,
+        parent: "F",
+        x: 1,
+        y: 1,
+        size: { w: 1, h: 1 },
+      });
       deleteElements(b, ["F"]);
       deleteElements(a, ["F"]);
       syncDocs(a, b);
@@ -208,7 +227,10 @@ describe("review 2: work is detected automatically", () => {
       const [a, b] = pair(base(), ca, cb);
       deleteElements(a, ["F"]);
       // What an editor binding does: its own transaction with its own origin.
-      b.transact(() => (dataMap(b, "T").get("text") as Y.Text).insert(2, " there"), BINDING);
+      b.transact(
+        () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " there"),
+        BINDING,
+      );
       syncDocs(a, b);
       expect(R(a).drawOrder()).toEqual(["T"]);
       expect(toSnapshot(a).elements.T!.data.text).toEqual({
@@ -255,7 +277,8 @@ describe("review 2: work is detected automatically", () => {
     const d = base();
     const text = dataMap(d, "T").get("text") as Y.Text;
     const before = Y.encodeStateAsUpdate(d).length;
-    for (let i = 0; i < 500; i++) d.transact(() => text.insert(text.length, "x"), BINDING);
+    for (let i = 0; i < 500; i++)
+      d.transact(() => text.insert(text.length, "x"), BINDING);
     // 500 characters typed one transaction at a time stay well under 4 bytes each.
     expect(Y.encodeStateAsUpdate(d).length - before).toBeLessThan(2000);
   });
@@ -332,7 +355,14 @@ describe("review 2: undo and delete", () => {
     undo.undo();
     syncDocs(a, b);
     renameElement(b, "X", "edited");
-    addElement(b, { id: "N", type: SHAPE, parent: "F", x: 1, y: 1, size: { w: 1, h: 1 } });
+    addElement(b, {
+      id: "N",
+      type: SHAPE,
+      parent: "F",
+      x: 1,
+      y: 1,
+      size: { w: 1, h: 1 },
+    });
     syncDocs(a, b);
     undo.redo();
     expect(R(a).drawOrder()).toEqual([]);
@@ -432,7 +462,14 @@ describe("review 2: tidy up leaves place markers", () => {
     addStop(d, { id: "S", view: { kind: "frame", frame: "F", padding: 0 } });
     addElement(d, { id: "Q", type: SHAPE, x: 5, y: 5, size: { w: 1, h: 1 } });
     const b = forkDoc(d, 9);
-    addElement(b, { id: "N", type: SHAPE, parent: "F", x: 3, y: 3, size: { w: 1, h: 1 } });
+    addElement(b, {
+      id: "N",
+      type: SHAPE,
+      parent: "F",
+      x: 3,
+      y: 3,
+      size: { w: 1, h: 1 },
+    });
     deleteElements(d, ["F"]);
     syncDocs(d, b);
     const before = R(d);
@@ -472,7 +509,9 @@ describe("review 2: operations cannot write what a file cannot hold", () => {
     expect(() =>
       addElement(d, { type: "Not A Type", x: 0, y: 0, size: { w: 1, h: 1 } }),
     ).toThrow(InvalidDocumentError);
-    expect(() => addElement(d, { type: SHAPE, x: 0, y: 0 })).toThrow(InvalidDocumentError);
+    expect(() => addElement(d, { type: SHAPE, x: 0, y: 0 })).toThrow(
+      InvalidDocumentError,
+    );
     expect(() =>
       addElement(d, { id: "X", type: SHAPE, x: 0, y: 0, size: { w: 1, h: 1 } }),
     ).toThrow(/exists/);
@@ -517,7 +556,9 @@ describe("review 2: operations cannot write what a file cannot hold", () => {
     expect(tidyUp(d).other).toBeGreaterThan(0);
     expect(d.getMap("elements").has("bad id!")).toBe(false);
     expect(
-      inspectDocument(d).problems.filter((p) => /unknown|not a valid id|not an object/.test(p)),
+      inspectDocument(d).problems.filter((p) =>
+        /unknown|not a valid id|not an object/.test(p),
+      ),
     ).toEqual([]);
   });
 
@@ -697,14 +738,24 @@ describe("review 2: versions and merge identity while syncing", () => {
 
   it("when merge identity is lost, the other copy's work can be imported as new content", () => {
     const d = base();
-    addStop(d, { id: "S", view: { kind: "rect", space: null, x: 900, y: 900, w: 500, h: 500 } });
+    addStop(d, {
+      id: "S",
+      view: { kind: "rect", space: null, x: 900, y: 900, w: 500, h: 500 },
+    });
     addRoute(d, { id: "R", name: "Talk" });
     insertRouteEntry(d, "R", "S");
     // The file was reopened without its Yjs state: a new lineage.
     const mine = fromSnapshot(toSnapshot(d));
     // Meanwhile someone worked offline on a copy with the old lineage.
     const theirs = forkDoc(d, 4);
-    addElement(theirs, { id: "N", type: SHAPE, parent: "F", x: 70, y: 70, size: { w: 5, h: 5 } });
+    addElement(theirs, {
+      id: "N",
+      type: SHAPE,
+      parent: "F",
+      x: 70,
+      y: 70,
+      size: { w: 5, h: 5 },
+    });
     renameElement(theirs, "X", "their name");
     deleteElements(theirs, ["Y"]);
     expect(() => syncDocs(mine, theirs)).toThrow(MergeIdentityError);
@@ -718,12 +769,28 @@ describe("review 2: versions and merge identity while syncing", () => {
     // Everything visible of theirs arrived, beside mine, with new ids.
     const r = R(mine);
     const copy = (id: string) => result.ids.get(id)!;
-    expect(r.drawOrder()).toEqual(["F", "X", "Y", "T", copy("F"), copy("X"), copy("T"), copy("N")]);
+    expect(r.drawOrder()).toEqual([
+      "F",
+      "X",
+      "Y",
+      "T",
+      copy("F"),
+      copy("X"),
+      copy("T"),
+      copy("N"),
+    ]);
     expect(after.elements[copy("X")]!.name).toBe("their name");
     expect(r.worldOrigin(copy("N"))).toEqual({ x: 3070, y: 1070 });
     expect(result.ids.has("Y")).toBe(false);
     const stop = after.stops[copy("S")]!;
-    expect(stop.view).toEqual({ kind: "rect", space: null, x: 2900, y: 900, w: 500, h: 500 });
+    expect(stop.view).toEqual({
+      kind: "rect",
+      space: null,
+      x: 2900,
+      y: 900,
+      w: 500,
+      h: 500,
+    });
     expect(after.routes[copy("R")]!.name).toBe("Talk");
     expect(routeSteps(after, copy("R")).map((step) => step.stop)).toEqual([copy("S")]);
     // One undo removes the import again (softly).

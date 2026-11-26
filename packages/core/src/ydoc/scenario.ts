@@ -292,7 +292,14 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
         id: `S${i}`,
         view: chance(0.6)
           ? { kind: "frame", frame: pick(frames), padding: 0.1 }
-          : { kind: "rect", space: chance(0.5) ? pick(frames) : null, x: 0, y: 0, w: 100, h: 80 },
+          : {
+              kind: "rect",
+              space: chance(0.5) ? pick(frames) : null,
+              x: 0,
+              y: 0,
+              w: 100,
+              h: 80,
+            },
         notes: [{ insert: `notes ${i}` }],
       },
       o,
@@ -346,7 +353,13 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
         run("add element", () =>
           ops.addElement(
             doc,
-            { id: `N${r}_${created++}`, type: SHAPE_TYPE, x: 1, y: 1, size: { w: 4, h: 4 } },
+            {
+              id: `N${r}_${created++}`,
+              type: SHAPE_TYPE,
+              x: 1,
+              y: 1,
+              size: { w: 4, h: 4 },
+            },
             o,
           ),
         );
@@ -355,7 +368,12 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
       } else if (roll === 2) {
         const targets = containers.filter((c) => !view.isWithin(c, id));
         run("reparent", () =>
-          ops.reparent(doc, id, chance(0.2) || targets.length === 0 ? null : pick(targets), o),
+          ops.reparent(
+            doc,
+            id,
+            chance(0.2) || targets.length === 0 ? null : pick(targets),
+            o,
+          ),
         );
       } else if (roll === 3) {
         if (!view.isGone(id)) {
@@ -377,7 +395,8 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
       } else if (roll === 10) {
         run("rename", () => ops.renameElement(doc, id, `n${step}`, o));
       } else if (roll === 11) {
-        if (view.get(id)?.size) run("resize", () => ops.resizeElement(doc, id, int(90), int(90), o));
+        if (view.get(id)?.size)
+          run("resize", () => ops.resizeElement(doc, id, int(90), int(90), o));
       } else if (roll === 12) {
         run("set data", () => ops.setData(doc, id, "k", { step }, o));
       } else if (roll === 13) {
@@ -507,9 +526,11 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
   }
   const snapshot = toSnapshot(replicas[0]!);
   for (const [i, doc] of replicas.entries()) {
-    if (stable(toSnapshot(doc)) !== stable(snapshot)) fail(`replica ${i} did not converge`);
+    if (stable(toSnapshot(doc)) !== stable(snapshot))
+      fail(`replica ${i} did not converge`);
     const { problems } = inspectDocument(doc);
-    if (problems.length > 0) fail(`replica ${i} holds what the grammar does not: ${problems[0]}`);
+    if (problems.length > 0)
+      fail(`replica ${i} holds what the grammar does not: ${problems[0]}`);
   }
   const problems = validateSnapshot(snapshot);
   if (problems.length > 0) fail(`the snapshot is not valid: ${problems[0]}`);
@@ -527,13 +548,16 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
   }
   const places = new Map(order.map((id) => [id, view.worldOrigin(id)]));
   for (const [id, p] of places) {
-    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) fail(`${id} has no finite position`);
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y))
+      fail(`${id} has no finite position`);
     const parent = view.logicalParentOf(id);
-    if (parent !== null && view.isGone(parent)) fail(`${id} is shown inside a gone container`);
+    if (parent !== null && view.isGone(parent))
+      fail(`${id} is shown inside a gone container`);
   }
   const sameView = (label: string, elements: DocumentSnapshot["elements"]) => {
     const other = new Resolver(lookupFromRecord(elements));
-    if (stable(other.drawOrder()) !== stable(order)) fail(`${label} changed the drawing order`);
+    if (stable(other.drawOrder()) !== stable(order))
+      fail(`${label} changed the drawing order`);
     for (const [id, p] of places) {
       const q = other.worldOrigin(id);
       if (!close(p.x, q.x) || !close(p.y, q.y)) fail(`${label} moved ${id}`);
@@ -550,7 +574,8 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
   syncDocs(replicas[1]!, replicas[2]!);
   const tidy = toSnapshot(replicas[0]!);
   for (const doc of replicas) {
-    if (stable(toSnapshot(doc)) !== stable(tidy)) fail("the replicas differ after tidy up");
+    if (stable(toSnapshot(doc)) !== stable(tidy))
+      fail("the replicas differ after tidy up");
   }
   if (validateSnapshot(tidy).length > 0) fail("the snapshot after tidy up is not valid");
   sameView("tidy up", tidy.elements);
@@ -615,11 +640,19 @@ function anything(rnd: () => number, depth: number): unknown {
   if (roll === 9) {
     return JSON.parse(
       `{"__proto__": 1, "$y": ${JSON.stringify(
-        ["text", "map", "any", "json", "unsupported", "hologram", 5][Math.floor(rnd() * 7)],
+        ["text", "map", "any", "json", "unsupported", "hologram", 5][
+          Math.floor(rnd() * 7)
+        ],
       )}, "delta": [], "note": "n", "value": {"u": 2}}`,
     );
   }
-  if (roll === 10) return { x: junk(rnd, depth + 1), y: 1, w: junk(rnd, depth + 1), space: junk(rnd, depth + 1) };
+  if (roll === 10)
+    return {
+      x: junk(rnd, depth + 1),
+      y: 1,
+      w: junk(rnd, depth + 1),
+      space: junk(rnd, depth + 1),
+    };
   if (roll === 11) {
     const map = new Y.Map<unknown>();
     map.set(String(junk(rnd, 9)), junk(rnd, depth + 1));
@@ -678,7 +711,6 @@ const KEYS = [
   "__proto__",
 ];
 
-
 /**
  * Writes random junk into a document, as a faulty or hostile peer could: odd
  * values under known and unknown keys of records, records under odd ids, odd
@@ -701,7 +733,10 @@ export function scribbleJunk(doc: Y.Doc, seed: number, steps = 25): void {
       if (!(record instanceof Y.Map)) return;
       const inner = (record as Y.Map<unknown>).get(key);
       if (inner instanceof Y.Map && rnd() < 0.6) {
-        (inner as Y.Map<unknown>).set(rnd() < 0.5 ? "k" : String(junk(rnd, 9)), junk(rnd));
+        (inner as Y.Map<unknown>).set(
+          rnd() < 0.5 ? "k" : String(junk(rnd, 9)),
+          junk(rnd),
+        );
       } else if (rnd() < 0.1) (record as Y.Map<unknown>).delete(key);
       else (record as Y.Map<unknown>).set(key, junk(rnd));
     }, "remote-peer");

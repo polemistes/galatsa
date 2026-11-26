@@ -12,7 +12,12 @@
 
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { MAX_DEPTH, nestingDepth, readSnapshot, validateSnapshot } from "../model/grammar.ts";
+import {
+  MAX_DEPTH,
+  nestingDepth,
+  readSnapshot,
+  validateSnapshot,
+} from "../model/grammar.ts";
 import { Resolver, lookupFromRecord } from "../model/resolve.ts";
 import { tidyUp } from "./document-ops.ts";
 import { runScenario, scribbleJunk } from "./scenario.ts";

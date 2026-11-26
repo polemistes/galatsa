@@ -459,9 +459,8 @@ describe("damaged and foreign files", () => {
 describe("review findings (format)", () => {
   it("a deleted element's content is not in an export for sharing", async () => {
     const doc = buildSampleDocument(new Y.Doc(), 3);
-    edit(
-      doc,
-      () => (dataMap(doc, SAMPLE.text).get("text") as Y.Text).insert(0, "CONFIDENTIAL "),
+    edit(doc, () =>
+      (dataMap(doc, SAMPLE.text).get("text") as Y.Text).insert(0, "CONFIDENTIAL "),
     );
     deleteElements(doc, [SAMPLE.text]);
     const bytes = writeGalatsaFile(doc, () => undefined, { forSharing: true });
@@ -482,12 +481,10 @@ describe("review findings (format)", () => {
       view: { kind: "rect", space: null, x: 0, y: 0, w: 1, h: 1 },
     });
     setStopTransition(doc, stop, { kind: "fade", sound });
-    edit(
-      doc,
-      () =>
-        (dataMap(doc, SAMPLE.text).get("text") as Y.Text).insertEmbed(0, {
-          image: inline,
-        }),
+    edit(doc, () =>
+      (dataMap(doc, SAMPLE.text).get("text") as Y.Text).insertEmbed(0, {
+        image: inline,
+      }),
     );
     const bytesOf = new Map([
       [bg, new Uint8Array([1])],
@@ -519,9 +516,9 @@ describe("review findings (format)", () => {
     // An export for sharing carries only the JSON form.
     const shared = writeGalatsaFile(doc, () => undefined, { forSharing: true });
     expect([...readZip(shared).keys()]).not.toContain("ydoc.bin");
-    expect(
-      (await readGalatsaFile(shared)).warnings.map((w) => w.code),
-    ).not.toContain("content-quarantined");
+    expect((await readGalatsaFile(shared)).warnings.map((w) => w.code)).not.toContain(
+      "content-quarantined",
+    );
     // Tidy up removes what can be removed (root types cannot).
     tidyUp(read.doc);
     const tidy = await readGalatsaFile(writeGalatsaFile(read.doc, () => undefined));

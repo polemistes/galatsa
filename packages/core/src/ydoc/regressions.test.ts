@@ -308,9 +308,8 @@ describe("undo never hard-deletes records (section 10)", () => {
       data: { text: { $y: "text", delta: [{ insert: "hi" }] } },
     });
     const b = forkDoc(a, 2);
-    edit(
-      b,
-      () => (dataMap(b, "T").get("text") as Y.Text).insert(2, " -- written offline"),
+    edit(b, () =>
+      (dataMap(b, "T").get("text") as Y.Text).insert(2, " -- written offline"),
     );
     undo.undo();
     syncDocs(a, b);

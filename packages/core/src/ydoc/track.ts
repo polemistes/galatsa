@@ -189,7 +189,10 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
  * this; the reference operations, `fromSnapshot`, `forkDoc`, the undo manager
  * and the file reader all call it. Calling it again does nothing.
  */
-export function trackWork(doc: Y.Doc, randomBytes: RandomBytes = defaultRandomBytes): void {
+export function trackWork(
+  doc: Y.Doc,
+  randomBytes: RandomBytes = defaultRandomBytes,
+): void {
   if (trackers.has(doc)) return;
   // 66 random bits: unique among the writers of one record.
   const tracker: Tracker = {
@@ -207,7 +210,11 @@ export function trackWork(doc: Y.Doc, randomBytes: RandomBytes = defaultRandomBy
  * With `evenIfDeleted`, the work counts although the record is deleted as the
  * user sees it, which brings it back.
  */
-export function noteWork(doc: Y.Doc, record: Y.Map<unknown>, evenIfDeleted = false): void {
+export function noteWork(
+  doc: Y.Doc,
+  record: Y.Map<unknown>,
+  evenIfDeleted = false,
+): void {
   trackWork(doc);
   const tracker = trackers.get(doc)!;
   tracker.noted.set(record, evenIfDeleted || tracker.noted.get(record) === true);
@@ -224,16 +231,21 @@ export function noteWork(doc: Y.Doc, record: Y.Map<unknown>, evenIfDeleted = fal
  */
 function fillHoles(doc: Y.Doc, deletions: unknown): void {
   doc.transact((tr) => {
-    Y.iterateDeletedStructs(tr, deletions as Parameters<typeof Y.iterateDeletedStructs>[1], (struct) => {
-      if (!(struct instanceof Y.Item) || struct.parentSub === null) return;
-      const parent = struct.parent;
-      if (!(parent instanceof Y.Map) || parent.has(struct.parentSub)) return;
-      if (parent._item !== null && parent._item.deleted) return;
-      // A shared type cannot be brought back this way; plain values can.
-      if (struct.content instanceof Y.ContentType) return;
-      const values = struct.content.getContent() as unknown[];
-      if (values.length === 1) (parent as Y.Map<unknown>).set(struct.parentSub, values[0]);
-    });
+    Y.iterateDeletedStructs(
+      tr,
+      deletions as Parameters<typeof Y.iterateDeletedStructs>[1],
+      (struct) => {
+        if (!(struct instanceof Y.Item) || struct.parentSub === null) return;
+        const parent = struct.parent;
+        if (!(parent instanceof Y.Map) || parent.has(struct.parentSub)) return;
+        if (parent._item !== null && parent._item.deleted) return;
+        // A shared type cannot be brought back this way; plain values can.
+        if (struct.content instanceof Y.ContentType) return;
+        const values = struct.content.getContent() as unknown[];
+        if (values.length === 1)
+          (parent as Y.Map<unknown>).set(struct.parentSub, values[0]);
+      },
+    );
   }, ORIGIN.track);
 }
 

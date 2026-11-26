@@ -256,7 +256,12 @@ export function inspectDocument(doc: Y.Doc): Inspection {
   const blankMeta = r.meta.size === 0;
   if (blankMeta) {
     // Nothing has arrived yet: the defaults are not a defect of the document.
-    Object.assign(raw, { schemaVersion: 1, minReaderVersion: 1, id: "unknown", title: "" });
+    Object.assign(raw, {
+      schemaVersion: 1,
+      minReaderVersion: 1,
+      id: "unknown",
+      title: "",
+    });
   }
   const read = readSnapshot(raw);
   const problems = [...read.problems];
@@ -302,10 +307,7 @@ export function writeElement(map: Y.Map<unknown>, element: Element): void {
   map.set("parent", element.parent);
   map.set("order", element.order);
   map.set("pos", cloneJson(element.pos));
-  map.set(
-    "rebase",
-    element.rebase ? cloneJson(element.rebase) : null,
-  );
+  map.set("rebase", element.rebase ? cloneJson(element.rebase) : null);
   if ("size" in element) map.set("size", cloneJson(element.size));
   if ("rot" in element) map.set("rot", element.rot);
   map.set("name", element.name);

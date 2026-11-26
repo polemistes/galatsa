@@ -103,9 +103,9 @@ describe("zip container", () => {
     expect(code(() => readZip(bytes, { maxInflatedSize: 100_000, maxEntries: 10 }))).toBe(
       "too-large",
     );
-    expect(code(() => readZip(bytes, { maxInflatedSize: 2_000_000, maxEntries: 0 }))).toBe(
-      "too-large",
-    );
+    expect(
+      code(() => readZip(bytes, { maxInflatedSize: 2_000_000, maxEntries: 0 })),
+    ).toBe("too-large");
   });
 
   it("refuses zip64 archives with a clear code", () => {

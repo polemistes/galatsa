@@ -97,7 +97,10 @@ export function copyFragment(
     if (!stop || isRemoved(id, stop)) continue;
     const copy: Stop = { ...structuredJson(stop), rev: {}, deleted: {} };
     const view = copy.view;
-    if (view.kind === "rect" && !(view.space !== null && Object.hasOwn(elements, view.space))) {
+    if (
+      view.kind === "rect" &&
+      !(view.space !== null && Object.hasOwn(elements, view.space))
+    ) {
       // A rectangle outside the copied elements is expressed in the roots' space.
       const from = view.space !== null && r.isContainer(view.space) ? view.space : null;
       const d = r.offset(from, space);

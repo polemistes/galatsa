@@ -102,7 +102,9 @@ describe("generic data encoding", () => {
 
   it("encodes values JSON cannot express losslessly, and rejects them as plain JSON input", () => {
     const sample = buildSampleDocument();
-    expect(() => setData(sample, "shape", "bad", Number.NaN)).toThrow(InvalidDocumentError);
+    expect(() => setData(sample, "shape", "bad", Number.NaN)).toThrow(
+      InvalidDocumentError,
+    );
     const doc = new Y.Doc();
     const m = doc.getMap<unknown>("m");
     m.set("bin", new Uint8Array([1, 2, 3]));

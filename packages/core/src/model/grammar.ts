@@ -304,7 +304,8 @@ const INT64 = /^(?:0|-?[1-9][0-9]{0,18})$/;
 function readAnyTree(raw: unknown, level: number): AnyTree | undefined {
   if (raw === null || typeof raw === "boolean") return raw;
   if (typeof raw === "string") return wellFormed(raw) === raw ? raw : undefined;
-  if (typeof raw === "number") return Number.isFinite(raw) && !Object.is(raw, -0) ? raw : undefined;
+  if (typeof raw === "number")
+    return Number.isFinite(raw) && !Object.is(raw, -0) ? raw : undefined;
   if (!isPlainObject(raw) || level + 1 > MAX_DEPTH) return undefined;
   const keys = Object.keys(raw);
   if (keys.length !== 1) return undefined;
@@ -443,7 +444,11 @@ function readDelta(raw: unknown[], p: Problems, level: number): TextRun[] {
         insert = p.at("insert", () => readValue(item.insert, p, level + 2));
         // Yjs stores an embed as JSON text or as a shared type: never null, and
         // never something JSON cannot express.
-        if (insert === null || insert === "" || (isPlainObject(insert) && insert.$y === "any")) {
+        if (
+          insert === null ||
+          insert === "" ||
+          (isPlainObject(insert) && insert.$y === "any")
+        ) {
           p.add("not a possible embed, left out");
           return;
         }
@@ -565,14 +570,15 @@ function readTagged(raw: Raw, tag: unknown, p: Problems, level: number): DataVal
       if (attributes !== undefined && !isPlainObject(attributes)) break;
       const runs = p.at("delta", () => readDelta(delta, p, level + 1));
       const node = readNodeAttributes(attributes, p, level + 1);
-      return node
-        ? { $y: tag, delta: runs, attributes: node }
-        : { $y: tag, delta: runs };
+      return node ? { $y: tag, delta: runs, attributes: node } : { $y: tag, delta: runs };
     }
     case "map": {
       const entries = own(raw, "entries");
       if (!hasOnly(raw, ["$y", "entries"]) || !isPlainObject(entries)) break;
-      return { $y: "map", entries: p.at("entries", () => readEntries(entries, p, level + 1)) };
+      return {
+        $y: "map",
+        entries: p.at("entries", () => readEntries(entries, p, level + 1)),
+      };
     }
     case "array": {
       const items = own(raw, "items");
@@ -584,7 +590,11 @@ function readTagged(raw: Raw, tag: unknown, p: Problems, level: number): DataVal
             p.at(String(i), () => {
               const value = readValue(item, p, level + 2);
               // A shared array cannot hold undefined directly.
-              if (isPlainObject(value) && value.$y === "any" && isUndefinedTree(value.value)) {
+              if (
+                isPlainObject(value) &&
+                value.$y === "any" &&
+                isUndefinedTree(value.value)
+              ) {
                 p.add("undefined in a shared array, read as null");
                 return null;
               }
@@ -858,7 +868,8 @@ export function readEnvelope(raw: unknown, p: Problems): ElementFields | null {
   if (!isGroup) fields.size = p.at("size", () => readSize(own(raw, "size"), p));
   else if (Object.hasOwn(raw, "size")) p.at("size", () => p.add("groups have no size"));
   if (!container) fields.rot = readNumber(raw, "rot", 0, p);
-  else if (Object.hasOwn(raw, "rot")) p.at("rot", () => p.add("containers do not rotate"));
+  else if (Object.hasOwn(raw, "rot"))
+    p.at("rot", () => p.add("containers do not rotate"));
   return fields;
 }
 
@@ -958,7 +969,8 @@ export function readStop(raw: unknown, p: Problems): Stop | null {
       isPlainObject(rawNotes) && rawNotes.$y === "text"
         ? readTagged(rawNotes, "text", p, RECORD_LEVEL + 1)
         : undefined;
-    if (isPlainObject(value) && value.$y === "text") return value as unknown as Stop["notes"];
+    if (isPlainObject(value) && value.$y === "text")
+      return value as unknown as Stop["notes"];
     p.add("must be a shared text, read as empty");
     return { $y: "text", delta: [] } as Stop["notes"];
   });

@@ -41,8 +41,20 @@ import { crc32, openZip, readZip, writeZip } from "./zip.ts";
 function doc1(): Y.Doc {
   const d = new Y.Doc();
   initDocument(d, { id: "doc" });
-  addElement(d, { id: "X", type: "galatsa.shapes/shape", x: 0, y: 0, size: { w: 10, h: 10 } });
-  addElement(d, { id: "Z", type: "galatsa.shapes/shape", x: 5, y: 5, size: { w: 10, h: 10 } });
+  addElement(d, {
+    id: "X",
+    type: "galatsa.shapes/shape",
+    x: 0,
+    y: 0,
+    size: { w: 10, h: 10 },
+  });
+  addElement(d, {
+    id: "Z",
+    type: "galatsa.shapes/shape",
+    x: 5,
+    y: 5,
+    size: { w: 10, h: 10 },
+  });
   return d;
 }
 const X = (d: Y.Doc) => d.getMap("elements").get("X") as Y.Map<unknown>;
@@ -90,7 +102,10 @@ describe("review 2: a saved file can always be opened", () => {
     ["dissolved on a shape", (d) => X(d).set("dissolved", true)],
     ["deleted as a plain value", (d) => X(d).set("deleted", {})],
     ["a reference that is not an id", (d) => X(d).set("refs", ["has space"])],
-    ["a position space that is not an id", (d) => X(d).set("pos", { x: 0, y: 0, space: "a b" })],
+    [
+      "a position space that is not an id",
+      (d) => X(d).set("pos", { x: 0, y: 0, space: "a b" }),
+    ],
     [
       "an array embedded in text",
       (d) => {
@@ -147,9 +162,15 @@ describe("review 2: a saved file can always be opened", () => {
       },
     ],
     ["a data key named __proto__", (d) => dataMap(d, "X").set("__proto__", { a: 1 })],
-    ["binary data and undefined", (d) => dataMap(d, "X").set("b", [new Uint8Array([1]), undefined])],
+    [
+      "binary data and undefined",
+      (d) => dataMap(d, "X").set("b", [new Uint8Array([1]), undefined]),
+    ],
     ["a stop that is not a map", (d) => d.getMap("stops").set("S", 5)],
-    ["an asset description of the wrong shape", (d) => d.getMap("assets").set(`sha256-${"a".repeat(64)}`, { mediaType: 1 })],
+    [
+      "an asset description of the wrong shape",
+      (d) => d.getMap("assets").set(`sha256-${"a".repeat(64)}`, { mediaType: 1 }),
+    ],
   ];
   for (const [name, mutate] of cases) {
     it(`after a peer wrote ${name}`, async () => {
@@ -265,7 +286,9 @@ describe("review 2: one bad record or value does not make a file unreadable", ()
     renameElement(peer, "X", "renamed by an older version");
     syncDocs(read.doc, peer);
     const saved = writeGalatsaFile(read.doc, none).bytes;
-    const document = JSON.parse(fromUtf8(readZip(saved).get("document.json")!)) as DocumentSnapshot;
+    const document = JSON.parse(
+      fromUtf8(readZip(saved).get("document.json")!),
+    ) as DocumentSnapshot;
     expect(document.elements.X!.ext["future.hologram"]).toEqual(kept);
     expect((await readGalatsaFile(saved)).warnings).toEqual([]);
   });
@@ -292,14 +315,18 @@ describe("review 2: one bad record or value does not make a file unreadable", ()
     setVisibility(d, SAMPLE.stop1, SAMPLE.shape, "show", { ext: { "future.fade": 200 } });
     const expected = toSnapshot(d);
     expect(expected.assets[asset]!.ext).toEqual({ "future.license": "CC0" });
-    expect(expected.routes[SAMPLE.route1]!.entries.visit!.ext).toEqual({ "future.pause": 3 });
+    expect(expected.routes[SAMPLE.route1]!.entries.visit!.ext).toEqual({
+      "future.pause": 3,
+    });
     expect(expected.stops[SAMPLE.stop1]!.view.ext).toEqual({ "future.aspect": "16:9" });
     expect(expected.stops[SAMPLE.stop1]!.visibility[SAMPLE.shape]).toEqual({
       action: "show",
       ext: { "future.fade": 200 },
     });
     for (const includeYdoc of [true, false]) {
-      const back = await readGalatsaFile(writeGalatsaFile(d, none, { includeYdoc }).bytes);
+      const back = await readGalatsaFile(
+        writeGalatsaFile(d, none, { includeYdoc }).bytes,
+      );
       expect(back.snapshot).toEqual(expected);
     }
   });
@@ -372,7 +399,10 @@ describe("review 2: versions", () => {
 
   it("a document that needs a newer version is not saved by this one", () => {
     const d = doc1();
-    d.transact(() => d.getMap("meta").set("minReaderVersion", SCHEMA_VERSION + 1), "peer");
+    d.transact(
+      () => d.getMap("meta").set("minReaderVersion", SCHEMA_VERSION + 1),
+      "peer",
+    );
     d.transact(() => d.getMap("meta").set("schemaVersion", SCHEMA_VERSION + 1), "peer");
     let code = "";
     try {
@@ -385,12 +415,17 @@ describe("review 2: versions", () => {
 
   it("the document's own minimum reader version counts, even if the manifest says less", async () => {
     const d = doc1();
-    const bytes = rewrite(writeGalatsaFile(d, none, { includeYdoc: false }).bytes, (e) => {
-      const document = JSON.parse(fromUtf8(e.get("document.json")!)) as DocumentSnapshot;
-      document.schemaVersion = 9;
-      document.minReaderVersion = 9;
-      e.set("document.json", utf8(JSON.stringify(document)));
-    });
+    const bytes = rewrite(
+      writeGalatsaFile(d, none, { includeYdoc: false }).bytes,
+      (e) => {
+        const document = JSON.parse(
+          fromUtf8(e.get("document.json")!),
+        ) as DocumentSnapshot;
+        document.schemaVersion = 9;
+        document.minReaderVersion = 9;
+        e.set("document.json", utf8(JSON.stringify(document)));
+      },
+    );
     expect(await failure(readGalatsaFile(bytes))).toBe("newer-version");
   });
 });
@@ -436,7 +471,11 @@ describe("review 2: the archive", () => {
     const end = moved.length - 22;
     const directory = view.getUint32(end + 16, true);
     view.setUint32(end + 16, directory + real.length, true);
-    view.setUint32(directory + 42, view.getUint32(directory + 42, true) + real.length, true);
+    view.setUint32(
+      directory + 42,
+      view.getUint32(directory + 42, true) + real.length,
+      true,
+    );
     out.set(moved, real.length);
     let message = "";
     try {
@@ -470,7 +509,9 @@ describe("review 2: the archive", () => {
       readGalatsaFile(file, { limits: { maxInflatedSize: 50_000, maxEntries: 10 } }),
     ).resolves.toBeDefined();
     expect(
-      await failure(readGalatsaFile(file, { limits: { maxInflatedSize: 100, maxEntries: 10 } })),
+      await failure(
+        readGalatsaFile(file, { limits: { maxInflatedSize: 100, maxEntries: 10 } }),
+      ),
     ).toBe("too-large");
 
     // An entry that declares 400 MiB but holds 5 bytes costs 5 bytes, and only
@@ -511,11 +552,13 @@ describe("review 2: the archive", () => {
     archive.set(body, head.length);
     archive.set(dir, head.length + body.length);
     archive.set(tail, head.length + body.length + dir.length);
-    const before = (globalThis as { process?: { memoryUsage(): { arrayBuffers: number } } })
-      .process?.memoryUsage().arrayBuffers;
+    const before = (
+      globalThis as { process?: { memoryUsage(): { arrayBuffers: number } } }
+    ).process?.memoryUsage().arrayBuffers;
     const contents = openZip(archive);
-    const after = (globalThis as { process?: { memoryUsage(): { arrayBuffers: number } } })
-      .process?.memoryUsage().arrayBuffers;
+    const after = (
+      globalThis as { process?: { memoryUsage(): { arrayBuffers: number } } }
+    ).process?.memoryUsage().arrayBuffers;
     expect([...contents.damaged]).toEqual([name]);
     if (before !== undefined && after !== undefined) {
       expect(after - before).toBeLessThan(8 * 1024 ** 2);
