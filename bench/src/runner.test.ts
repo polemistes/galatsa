@@ -267,13 +267,26 @@ describe("runBenchmark", () => {
 });
 
 describe("syntheticBusyMs", () => {
-  it("is the same for the same frame, between 5 and 25 ms", () => {
-    for (let i = 0; i < 1000; i++) {
+  it("is the same for the same frame, in four classes away from the thresholds", () => {
+    const counts = { short: 0, missed: 0, long: 0, stall: 0 };
+    for (let i = 0; i < 2775; i++) {
       const ms = syntheticBusyMs(i);
       expect(ms).toBe(syntheticBusyMs(i));
-      expect(ms).toBeGreaterThanOrEqual(5);
-      expect(ms).toBeLessThan(25);
+      const inClass =
+        (ms >= 2 && ms < 12) ||
+        (ms >= 28 && ms < 36) ||
+        (ms >= 48 && ms < 60) ||
+        (ms >= 105 && ms < 130);
+      expect(inClass, String(ms)).toBe(true);
+      if (ms < 12) counts.short++;
+      else if (ms < 36) counts.missed++;
+      else if (ms < 60) counts.long++;
+      else counts.stall++;
     }
+    expect(counts.short / 2775).toBeCloseTo(0.7, 1);
+    expect(counts.missed / 2775).toBeCloseTo(0.2, 1);
+    expect(counts.long).toBeGreaterThan(200);
+    expect(counts.stall).toBeGreaterThan(3);
     expect(syntheticBusyMs(1)).not.toBe(syntheticBusyMs(2));
   });
 });
