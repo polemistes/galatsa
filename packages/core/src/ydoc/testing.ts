@@ -144,12 +144,13 @@ export function buildSampleDocument(doc: Y.Doc = new Y.Doc(), seed = 1): Y.Doc {
     },
     o,
   );
-  addAsset(
-    doc,
-    SAMPLE_IMAGE_ASSET,
-    { mediaType: "image/png", byteLength: 4, width: 1, height: 1, name: "dot.png" },
-    o,
-  );
+  addAsset(doc, SAMPLE_IMAGE_ASSET, {
+    mediaType: "image/png",
+    byteLength: 4,
+    width: 1,
+    height: 1,
+    name: "dot.png",
+  });
   addElement(
     doc,
     {
@@ -158,7 +159,6 @@ export function buildSampleDocument(doc: Y.Doc = new Y.Doc(), seed = 1): Y.Doc {
       x: 0,
       y: 1000,
       size: { w: 400, h: 300 },
-      assets: [SAMPLE_IMAGE_ASSET],
       data: { asset: SAMPLE_IMAGE_ASSET, crop: { x: 0, y: 0, w: 1, h: 1 }, opacity: 1 },
     },
     o,
@@ -263,7 +263,7 @@ export function buildSampleDocument(doc: Y.Doc = new Y.Doc(), seed = 1): Y.Doc {
     },
     o,
   );
-  addAsset(doc, SAMPLE_MEDIA_ASSET, { mediaType: "video/mp4", byteLength: 8 }, o);
+  addAsset(doc, SAMPLE_MEDIA_ASSET, { mediaType: "video/mp4", byteLength: 8 });
   addElement(
     doc,
     {
@@ -272,7 +272,6 @@ export function buildSampleDocument(doc: Y.Doc = new Y.Doc(), seed = 1): Y.Doc {
       x: 3000,
       y: 1000,
       size: { w: 640, h: 360 },
-      assets: [SAMPLE_MEDIA_ASSET],
       data: {
         asset: SAMPLE_MEDIA_ASSET,
         trim: { start: 0, end: 10 },

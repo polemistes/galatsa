@@ -3,22 +3,23 @@
 // Resolution: the pure function from the raw, merged document state to what is
 // shown. Concurrent edits can leave states that no single editor wrote: parent
 // cycles, parents that no longer exist, positions written in another space,
-// children of dissolved groups. Every replica resolves them the same way, without
-// writing anything, so all replicas show the same picture. Section 5 of
-// docs/adr/0001-document-model-and-file-format.md.
+// children of deleted or dissolved containers. Every replica resolves them the
+// same way, without writing anything, so all replicas show the same picture.
+// Section 5 of docs/adr/0001-document-model-and-file-format.md.
 
 import { rotatedBounds, unionRect } from "./geometry.ts";
 import { compareOrdered } from "./order.ts";
 import {
   FRAME_TYPE,
   GROUP_TYPE,
+  type DeleteMark,
   type Element,
   type ElementId,
   type OrderKey,
   type Position,
   type Rebase,
   type Rect,
-  type Removal,
+  type Revision,
   type Size,
 } from "./types.ts";
 
@@ -30,7 +31,9 @@ export interface ElementEnvelope {
   readonly pos: Position;
   readonly rebase?: Rebase | null;
   readonly locked: boolean;
-  readonly removed: Removal | null;
+  readonly rev?: Revision;
+  readonly deleted?: DeleteMark | null;
+  readonly dissolved?: boolean;
   readonly size?: Size;
   readonly rot?: number;
 }
@@ -56,7 +59,7 @@ export interface Point {
   y: number;
 }
 
-function isContainerType(type: string): boolean {
+export function isContainerType(type: string): boolean {
   return type === FRAME_TYPE || type === GROUP_TYPE;
 }
 
@@ -68,8 +71,9 @@ export class Resolver {
   readonly #lookup: ElementLookup;
   readonly #parent = new Map<ElementId, ElementId | null>();
   readonly #children = new Map<ElementId | null, ElementId[]>();
-  readonly #world = new Map<ElementId, Point>();
-  readonly #simpleWorld = new Map<ElementId, Point>();
+  readonly #local = new Map<ElementId, Point>();
+  readonly #simpleLocal = new Map<ElementId, Point>();
+  readonly #deleted = new Map<ElementId, boolean>();
 
   constructor(lookup: ElementLookup) {
     this.#lookup = lookup;
@@ -94,6 +98,20 @@ export class Resolver {
     return this.#lookup.get(id);
   }
 
+  ids(): Iterable<ElementId> {
+    return this.#lookup.ids();
+  }
+
+  isContainer(id: ElementId | null): boolean {
+    if (id === null) return true;
+    const element = this.#lookup.get(id);
+    return element !== undefined && isContainerType(element.type);
+  }
+
+  // -------------------------------------------------------------------------
+  // The effective tree (section 5.1)
+  // -------------------------------------------------------------------------
+
   /** The stored parent if it exists and is a container; otherwise null. */
   #validParent(id: ElementId): ElementId | null {
     const parent = this.#lookup.get(id)?.parent ?? null;
@@ -103,9 +121,9 @@ export class Resolver {
   }
 
   /**
-   * Effective parents (section 5.1): a missing or non-container parent means the
-   * root, and each parent cycle is broken at the member with the smallest id,
-   * which is moved to the root. The result does not depend on iteration order.
+   * Effective parents: a missing or non-container parent means the root, and each
+   * parent cycle is broken at the member with the smallest id, which is moved to
+   * the root. The result does not depend on iteration order.
    */
   #resolveParents(): void {
     for (const start of this.#lookup.ids()) {
@@ -138,17 +156,8 @@ export class Resolver {
     return this.#parent.get(id) ?? null;
   }
 
-  /** Nearest effective ancestor that is not dissolved: the parent the user sees. */
-  logicalParentOf(id: ElementId): ElementId | null {
-    let parent = this.parentOf(id);
-    while (parent !== null && this.#lookup.get(parent)?.removed === "dissolve") {
-      parent = this.parentOf(parent);
-    }
-    return parent;
-  }
-
-  /** True if `id` is `ancestor` or lies inside it. */
-  isWithin(id: ElementId, ancestor: ElementId): boolean {
+  /** True if `id` is `ancestor` or lies inside it (effective tree). */
+  isWithin(id: ElementId | null, ancestor: ElementId): boolean {
     for (let at: ElementId | null = id; at !== null; at = this.parentOf(at)) {
       if (at === ancestor) return true;
     }
@@ -160,93 +169,91 @@ export class Resolver {
     return this.#children.get(parent) ?? [];
   }
 
-  /**
-   * Local position from the element's own record alone: the stored position if it
-   * was written in the current parent's space, shifted by the rebase if the
-   * element was moved into its parent after that, otherwise unconverted.
-   */
-  #ownLocal(id: ElementId): Point | null {
-    const element = this.#lookup.get(id);
-    if (!element) return null;
-    const { x, y, space } = element.pos;
-    const parent = this.parentOf(id);
-    if (space === parent) return { x, y };
-    const rebase = element.rebase;
-    if (rebase && rebase.from === space && rebase.to === parent) {
-      return { x: x + rebase.dx, y: y + rebase.dy };
-    }
-    return null;
-  }
-
-  /** World origin of a container from own records only (no tag conversion). */
-  #simpleOrigin(id: ElementId | null): Point {
-    if (id === null) return { x: 0, y: 0 };
-    const cached = this.#simpleWorld.get(id);
-    if (cached) return cached;
-    const base = this.#simpleOrigin(this.parentOf(id));
-    const pos = this.#lookup.get(id)?.pos;
-    const local = this.#ownLocal(id) ?? { x: pos?.x ?? 0, y: pos?.y ?? 0 };
-    const point = { x: base.x + local.x, y: base.y + local.y };
-    this.#simpleWorld.set(id, point);
-    return point;
-  }
+  // -------------------------------------------------------------------------
+  // Removal (section 5.5)
+  // -------------------------------------------------------------------------
 
   /**
-   * Position in the effective parent's space (section 5.3):
-   * 1. written in the parent's space: as stored;
-   * 2. written in the space a recorded rebase starts from, and the rebase leads to
-   *    the parent: shifted by the rebase;
-   * 3. otherwise (only after conflicting concurrent edits) converted through world
-   *    coordinates, with container origins computed from rules 1 and 2 alone; if
-   *    the space is gone, is not a container, or lies inside the element itself,
-   *    x and y are used as they are.
+   * Deleted: the element carries a delete mark, its revision is unchanged since
+   * the mark was written, and the delete is still in effect (its root carries the
+   * same action with an unchanged revision and is not dissolved). Anything changed
+   * concurrently with the delete, and anything added to a deleted container,
+   * therefore survives.
    */
-  localPosition(id: ElementId): Point {
-    const element = this.#lookup.get(id);
-    if (!element) return { x: 0, y: 0 };
-    const own = this.#ownLocal(id);
-    if (own) return own;
-    const { x, y, space } = element.pos;
-    if (space !== null) {
-      const spaceElement = this.#lookup.get(space);
-      if (
-        !spaceElement ||
-        !isContainerType(spaceElement.type) ||
-        this.isWithin(space, id)
-      ) {
-        return { x, y };
-      }
-    }
-    const from = this.#simpleOrigin(space);
-    const to = this.#simpleOrigin(this.parentOf(id));
-    return { x: from.x + x - to.x, y: from.y + y - to.y };
-  }
-
-  /** World position of the element's origin (top-left corner before rotation). */
-  worldOrigin(id: ElementId): Point {
-    const cached = this.#world.get(id);
-    if (cached) return cached;
-    const base = this.spaceOrigin(this.parentOf(id));
-    const local = this.localPosition(id);
-    const point = { x: base.x + local.x, y: base.y + local.y };
-    this.#world.set(id, point);
-    return point;
-  }
-
-  /** World position of a container's local origin; (0, 0) for the root. */
-  spaceOrigin(space: ElementId | null): Point {
-    return space === null ? { x: 0, y: 0 } : this.worldOrigin(space);
-  }
-
-  /** Removed with "delete", or inside something that is. */
   isDeleted(id: ElementId): boolean {
-    for (let at: ElementId | null = id; at !== null; at = this.parentOf(at)) {
-      if (this.#lookup.get(at)?.removed === "delete") return true;
-    }
-    return false;
+    const cached = this.#deleted.get(id);
+    if (cached !== undefined) return cached;
+    const result = this.#computeDeleted(id);
+    this.#deleted.set(id, result);
+    return result;
   }
 
-  /** Locked, or inside a locked container the user still sees (not dissolved). */
+  #computeDeleted(id: ElementId): boolean {
+    const element = this.#lookup.get(id);
+    const mark = element?.deleted;
+    if (!element || !mark || element.rev !== mark.rev) return false;
+    const root = this.#lookup.get(mark.root);
+    const rootMark = root?.deleted;
+    if (!root || !rootMark || rootMark.action !== mark.action) return false;
+    if (root.rev !== rootMark.rev) return false;
+    return !(root.dissolved === true && isContainerType(root.type));
+  }
+
+  /** A container that was ungrouped or removed with "keep contents". */
+  isDissolved(id: ElementId): boolean {
+    const element = this.#lookup.get(id);
+    return (
+      element !== undefined && element.dissolved === true && isContainerType(element.type)
+    );
+  }
+
+  /**
+   * Gone: deleted or dissolved. A gone element is not drawn and cannot be
+   * selected. A gone container is transparent: it keeps its position and its slot
+   * in the z-order for any children that are not gone themselves.
+   */
+  isGone(id: ElementId): boolean {
+    return this.isDeleted(id) || this.isDissolved(id);
+  }
+
+  /** Nearest effective ancestor that is not gone: the parent the user sees. */
+  logicalParentOf(id: ElementId): ElementId | null {
+    let parent = this.parentOf(id);
+    while (parent !== null && this.isGone(parent)) parent = this.parentOf(parent);
+    return parent;
+  }
+
+  /**
+   * Children the user sees in a container (or the root), back to front: gone
+   * containers are replaced by their own visible children, in their slot.
+   */
+  logicalChildren(parent: ElementId | null): ElementId[] {
+    const out: ElementId[] = [];
+    const visit = (at: ElementId | null): void => {
+      for (const id of this.children(at)) {
+        if (!this.isGone(id)) out.push(id);
+        else if (this.isContainer(id)) visit(id);
+      }
+    };
+    visit(parent);
+    return out;
+  }
+
+  /**
+   * The direct child of `ancestor` (effective tree) that contains `id`, or `id`
+   * itself if it is a direct child. Undefined if `id` is not inside `ancestor`.
+   */
+  slotIn(id: ElementId, ancestor: ElementId | null): ElementId | undefined {
+    let at: ElementId | null = id;
+    while (at !== null) {
+      const parent = this.parentOf(at);
+      if (parent === ancestor) return at;
+      at = parent;
+    }
+    return undefined;
+  }
+
+  /** Locked, or inside a locked container the user still sees (not gone). */
   isLocked(id: ElementId): boolean {
     if (this.#lookup.get(id)?.locked) return true;
     for (let at = this.logicalParentOf(id); at !== null; at = this.logicalParentOf(at)) {
@@ -257,43 +264,177 @@ export class Resolver {
 
   /**
    * Elements to draw, back to front (section 4.2). A container's subtree is drawn
-   * in the container's slot among its siblings. Deleted subtrees are skipped;
-   * dissolved containers are not drawn, but their children are, in their slot.
+   * in the container's slot among its siblings. Gone elements are not drawn; the
+   * children of gone containers are, in the container's slot.
    */
   drawOrder(): ElementId[] {
     const out: ElementId[] = [];
     const visit = (parent: ElementId | null): void => {
       for (const id of this.children(parent)) {
-        const element = this.#lookup.get(id);
-        if (!element || element.removed === "delete") continue;
-        if (element.removed !== "dissolve") out.push(id);
-        if (isContainerType(element.type)) visit(id);
+        if (!this.isGone(id)) out.push(id);
+        if (this.isContainer(id)) visit(id);
       }
     };
     visit(null);
     return out;
   }
 
+  // -------------------------------------------------------------------------
+  // Positions (section 5.3) and precision (section 7)
+  // -------------------------------------------------------------------------
+
   /**
-   * World bounds: the rotated box for sized elements, the union of the children
-   * for groups (null when empty). Deleted elements have no bounds.
+   * Local position from the element's own record (rules 1 and 2 of section 5.3),
+   * or null if neither applies.
    */
-  bounds(id: ElementId): Rect | null {
+  #ownLocal(id: ElementId): Point | null {
     const element = this.#lookup.get(id);
-    if (!element || this.isDeleted(id)) return null;
-    if (element.type === GROUP_TYPE || element.removed === "dissolve") {
+    if (!element) return null;
+    const { x, y, space } = element.pos;
+    const parent = this.parentOf(id);
+    const rebase = element.rebase;
+    if (rebase && rebase.to === parent) {
+      if (space === parent) {
+        const base = rebase.base;
+        if (base && base.x === x && base.y === y)
+          return { x: x + base.dx, y: y + base.dy };
+        return { x, y };
+      }
+      const shift = rebase.shifts.find((s) => s.from === space);
+      return shift ? { x: x + shift.dx, y: y + shift.dy } : null;
+    }
+    return space === parent ? { x, y } : null;
+  }
+
+  /** Own local position, or the raw stored numbers (used only by rule 3). */
+  #simple(id: ElementId): Point {
+    const cached = this.#simpleLocal.get(id);
+    if (cached) return cached;
+    const pos = this.#lookup.get(id)?.pos;
+    const point = this.#ownLocal(id) ?? { x: pos?.x ?? 0, y: pos?.y ?? 0 };
+    this.#simpleLocal.set(id, point);
+    return point;
+  }
+
+  /**
+   * Position in the effective parent's space (section 5.3):
+   * 1. written in the parent's space: as stored (shifted by the rebase base if the
+   *    stored position is exactly the one the rebase was made for);
+   * 2. written in a space the rebase has a shift for: shifted;
+   * 3. otherwise (only after conflicting concurrent writes, or a broken cycle):
+   *    converted from `space` to the parent with container offsets computed by
+   *    rules 1 and 2 alone; x and y as they are if `space` is gone from the
+   *    document, not a container, or inside the element.
+   */
+  localPosition(id: ElementId): Point {
+    const cached = this.#local.get(id);
+    if (cached) return cached;
+    const element = this.#lookup.get(id);
+    let point: Point;
+    if (!element) point = { x: 0, y: 0 };
+    else {
+      point = this.#ownLocal(id) ?? this.#rule3(id, element.pos);
+    }
+    this.#local.set(id, point);
+    return point;
+  }
+
+  #rule3(id: ElementId, pos: Position): Point {
+    const { x, y, space } = pos;
+    if (space !== null && (!this.isContainer(space) || this.isWithin(space, id)))
+      return { x, y };
+    const d = this.#offsetWith(space, this.parentOf(id), (n) => this.#simple(n));
+    return { x: x + d.x, y: y + d.y };
+  }
+
+  /** Effective ancestors from `id` (inclusive) to the root, root as null last. */
+  #chain(id: ElementId | null): (ElementId | null)[] {
+    const out: (ElementId | null)[] = [];
+    for (let at: ElementId | null = id; at !== null; at = this.parentOf(at)) out.push(at);
+    out.push(null);
+    return out;
+  }
+
+  #offsetWith(
+    from: ElementId | null,
+    to: ElementId | null,
+    local: (id: ElementId) => Point,
+  ): Point {
+    if (from === to) return { x: 0, y: 0 };
+    const a = this.#chain(from);
+    const b = this.#chain(to);
+    const inB = new Set(b);
+    const lca = a.find((n) => inB.has(n)) ?? null;
+    // Sum from the deepest container upwards: small numbers first.
+    const sum = (path: (ElementId | null)[]): Point => {
+      let x = 0;
+      let y = 0;
+      for (const n of path) {
+        if (n === lca) break;
+        const p = local(n as ElementId);
+        x += p.x;
+        y += p.y;
+      }
+      return { x, y };
+    };
+    const sa = sum(a);
+    const sb = sum(b);
+    return { x: sa.x - sb.x, y: sa.y - sb.y };
+  }
+
+  /**
+   * Offset from the origin of space `to` to the origin of space `from`: a point at
+   * p in `from` is at p + offset in `to`. Computed through the lowest common
+   * ancestor, so it stays precise far from the world origin (section 7.3).
+   */
+  offset(from: ElementId | null, to: ElementId | null): Point {
+    return this.#offsetWith(from, to, (n) => this.localPosition(n));
+  }
+
+  /** The element's origin (top-left corner before rotation) in the space `space`. */
+  positionIn(id: ElementId, space: ElementId | null): Point {
+    const local = this.localPosition(id);
+    const d = this.offset(this.parentOf(id), space);
+    return { x: local.x + d.x, y: local.y + d.y };
+  }
+
+  /** World position of the element's origin. Loses precision far from the origin. */
+  worldOrigin(id: ElementId): Point {
+    return this.positionIn(id, null);
+  }
+
+  /** World position of a container's local origin; (0, 0) for the root. */
+  spaceOrigin(space: ElementId | null): Point {
+    return space === null ? { x: 0, y: 0 } : this.worldOrigin(space);
+  }
+
+  /**
+   * Bounds in the space `space`: the rotated box for sized elements, the union of
+   * the visible descendants for groups and gone containers (null when empty).
+   * Gone elements other than containers have no bounds.
+   */
+  boundsIn(id: ElementId, space: ElementId | null): Rect | null {
+    const element = this.#lookup.get(id);
+    if (!element) return null;
+    if (element.type === GROUP_TYPE || (this.isGone(id) && this.isContainer(id))) {
       let result: Rect | null = null;
       for (const child of this.children(id)) {
-        const b = this.bounds(child);
+        const b = this.boundsIn(child, space);
         if (b) result = result ? unionRect(result, b) : b;
       }
       return result;
     }
-    const origin = this.worldOrigin(id);
+    if (this.isGone(id)) return null;
+    const origin = this.positionIn(id, space);
     const size = element.size ?? { w: 0, h: 0 };
     return rotatedBounds(
       { x: origin.x, y: origin.y, w: size.w, h: size.h },
       element.rot ?? 0,
     );
+  }
+
+  /** World bounds; see boundsIn. */
+  bounds(id: ElementId): Rect | null {
+    return this.boundsIn(id, null);
   }
 }

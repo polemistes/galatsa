@@ -26,9 +26,17 @@ export interface RouteStep {
 
 type StopsAndRoutes = Pick<DocumentSnapshot, "stops" | "routes">;
 
+/**
+ * A stop or route is removed while its removal mark carries its current
+ * revision; a concurrent change of the record cancels the removal (section 5.5).
+ */
+export function isRemoved(record: Pick<Stop, "rev" | "removed">): boolean {
+  return record.removed !== null && record.removed.rev === record.rev;
+}
+
 function liveStop(doc: StopsAndRoutes, id: StopId): Stop | undefined {
   const stop = Object.hasOwn(doc.stops, id) ? doc.stops[id] : undefined;
-  return stop && !stop.removed ? stop : undefined;
+  return stop && !isRemoved(stop) ? stop : undefined;
 }
 
 /**
@@ -37,7 +45,7 @@ function liveStop(doc: StopsAndRoutes, id: StopId): Stop | undefined {
  */
 export function routeSteps(doc: StopsAndRoutes, routeId: RouteId): RouteStep[] {
   const route = Object.hasOwn(doc.routes, routeId) ? doc.routes[routeId] : undefined;
-  if (!route || route.removed) return [];
+  if (!route || isRemoved(route)) return [];
   return Object.entries(route.entries)
     .map(([id, entry]) => ({ id, order: entry.order, stop: entry.stop }))
     .sort(compareOrdered)
@@ -48,7 +56,7 @@ export function routeSteps(doc: StopsAndRoutes, routeId: RouteId): RouteStep[] {
 /** Routes that are not removed, in list order. */
 export function liveRoutes(doc: StopsAndRoutes): RouteId[] {
   return Object.entries(doc.routes)
-    .filter(([, route]) => !route.removed)
+    .filter(([, route]) => !isRemoved(route))
     .map(([id, route]) => ({ id, order: route.order }))
     .sort(compareOrdered)
     .map((route) => route.id);
@@ -144,13 +152,22 @@ export function hiddenAt(
   return hidden;
 }
 
-/** True if the element or one of its ancestors is in `hidden`. */
+/**
+ * True if the element or one of the ancestors the user sees is in `hidden`. Gone
+ * (deleted or dissolved) containers are skipped: their former children are no
+ * longer inside them for the user.
+ */
 export function isHiddenBy(
   resolver: Resolver,
   hidden: ReadonlySet<ElementId>,
   id: ElementId,
 ): boolean {
-  for (let at: ElementId | null = id; at !== null; at = resolver.parentOf(at)) {
+  if (hidden.has(id)) return true;
+  for (
+    let at = resolver.logicalParentOf(id);
+    at !== null;
+    at = resolver.logicalParentOf(at)
+  ) {
     if (hidden.has(at)) return true;
   }
   return false;

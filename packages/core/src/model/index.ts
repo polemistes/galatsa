@@ -10,3 +10,6 @@ export * from "./geometry.ts";
 export * from "./resolve.ts";
 export * from "./route.ts";
 export * from "./validate.ts";
+export * from "./walk.ts";
+export * from "./purge.ts";
+export * from "./fragment.ts";

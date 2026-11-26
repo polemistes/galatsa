@@ -17,6 +17,11 @@
       "@galatsa/source": "./src/ydoc/index.ts",
       "types": "./dist/ydoc/index.d.ts",
       "default": "./dist/ydoc/index.js"
+    },
+    "./testing": {
+      "@galatsa/source": "./src/ydoc/testing.ts",
+      "types": "./dist/ydoc/testing.d.ts",
+      "default": "./dist/ydoc/testing.js"
     }
   },
   "sideEffects": false,
