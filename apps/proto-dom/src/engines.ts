@@ -15,6 +15,11 @@ export const VARIANTS: readonly DomEngineOptions[] = [
   { name: "dom-layer", mode: "layer", cull: "detach", willChange: "none" },
   // One world container, will-change: transform while the camera moves.
   { name: "dom-layer-wc", mode: "layer", cull: "detach", willChange: "motion" },
+  // Text under 4 device pixels drawn as stripes.
+  { name: "dom-greek", mode: "element", cull: "detach", greekBelowPx: 4 },
+  // Text elements (or all elements) on their own compositor layers while moving.
+  { name: "dom-wc-text", mode: "element", cull: "detach", layersWhileMoving: "text" },
+  { name: "dom-wc-all", mode: "element", cull: "detach", layersWhileMoving: "all" },
   // Culling alternatives for the candidate.
   { name: "dom-cull-display", mode: "element", cull: "display" },
   { name: "dom-cull-none", mode: "element", cull: "none" },

@@ -56,6 +56,16 @@ export interface DomEngineOptions {
   readonly willChange?: "none" | "motion";
   /** Milliseconds per frame for laying out text again ("element" mode). */
   readonly relayoutBudgetMs?: number;
+  /**
+   * Text smaller than this on screen (device pixels of font size) is drawn as
+   * stripes instead of glyphs ("greeking"); 0 draws all text. Default 0.
+   */
+  readonly greekBelowPx?: number;
+  /**
+   * "element" mode: give text ("text") or every element ("all") its own
+   * compositor layer (will-change: transform) while the camera moves. Default "none".
+   */
+  readonly layersWhileMoving?: "none" | "text" | "all";
   /** Wait for the images of the first pose in load(). Default true. */
   readonly awaitFirstImages?: boolean;
 }
@@ -85,6 +95,10 @@ interface Item {
   visible: boolean;
   /** Text: the zoom the text is laid out at (0 = not yet). */
   baseZoom: number;
+  /** has will-change: transform. */
+  layer: boolean;
+  /** Text: drawn as stripes instead of glyphs. */
+  greeked: boolean;
   /** Image: level shown, or -1. */
   shownLevel: number;
   /** Image: level the img is loading. */
@@ -128,6 +142,8 @@ function setShapeStyle(node: HTMLElement, e: ShapeElement): void {
 export function createDomEngine(options: DomEngineOptions): DomEngine {
   const { mode, cull } = options;
   const budgetMs = options.relayoutBudgetMs ?? 6;
+  const greekBelowPx = options.greekBelowPx ?? 0;
+  const layersWhileMoving = options.layersWhileMoving ?? "none";
   let container: HTMLElement | undefined;
   let world: HTMLElement | undefined;
   let viewport: BenchViewport = { width: 0, height: 0, devicePixelRatio: 1 };
@@ -162,6 +178,25 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     s.fontSize = `${e.fontSize * zoom}px`;
     s.width = `${e.width * zoom}px`;
     item.baseZoom = zoom;
+    const greek =
+      greekBelowPx > 0 &&
+      item !== editing &&
+      e.fontSize * zoom * viewport.devicePixelRatio < greekBelowPx;
+    if (greek) {
+      // One stripe per line in the text colour, over the estimated box height;
+      // no glyphs to lay out or paint.
+      const line = e.fontSize * e.lineHeight * zoom;
+      s.height = `${e.height * zoom}px`;
+      s.background = `repeating-linear-gradient(${e.color} 0 ${line * 0.55}px, transparent ${line * 0.55}px ${line}px)`;
+      s.opacity = String(0.45 * e.opacity);
+      if (!item.greeked) node.textContent = "";
+    } else if (item.greeked) {
+      s.height = "";
+      s.background = "";
+      s.opacity = e.opacity < 1 ? String(e.opacity) : "";
+      node.textContent = texts.get(e.id) ?? e.text;
+    }
+    item.greeked = greek;
     counters.relayouts++;
   };
 
@@ -353,6 +388,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
           attached: false,
           visible: false,
           baseZoom: 0,
+          greeked: false,
+          layer: false,
           shownLevel: -1,
           loadingLevel: -1,
           matrix: "",
@@ -444,6 +481,18 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
               }
             }
             place(item, camera);
+            if (
+              layersWhileMoving !== "none" &&
+              (e.kind === "text" || layersWhileMoving === "all")
+            ) {
+              // Own compositor layer while the camera moves: rasterised once and
+              // scaled by the compositor (cheap, blurry); dropped when it stops.
+              const want = moving && item !== editing;
+              if (item.layer !== want) {
+                item.node!.style.willChange = want ? "transform" : "";
+                item.layer = want;
+              }
+            }
           }
           if (e.kind === "image") {
             wantedAssets.add(e.assetId);
@@ -527,11 +576,13 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       node.spellcheck = false;
       node.addEventListener("input", onInput);
       editing = item;
-      node.focus();
+      // Lay the text out at the exact zoom first (this also brings back glyphs for
+      // greeked text), then focus, so the caret lands in the final layout.
       if (lastCamera !== undefined && mode !== "layer") {
         layoutText(item, lastCamera.zoom);
         place(item, lastCamera);
       }
+      node.focus();
       return node;
     },
 
