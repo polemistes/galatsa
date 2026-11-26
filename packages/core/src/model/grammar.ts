@@ -1090,7 +1090,8 @@ function readRecords<T>(
   p.at(key, () => {
     const records = own(raw, key);
     if (!isPlainObject(records)) return p.add("must be an object, read as empty");
-    for (const id of Object.keys(records)) {
+    // Sorted by id, so that every replica lists the records in the same order.
+    for (const id of Object.keys(records).sort()) {
       p.at(id, () => {
         if (!idPattern.test(id)) return p.add("not a valid id, left out");
         const record = read(records[id], p);

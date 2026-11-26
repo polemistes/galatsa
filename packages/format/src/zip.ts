@@ -214,6 +214,7 @@ export function openZip(
 
   interface Pending {
     name: string;
+    flags: number;
     method: number;
     crc: number;
     size: number;
@@ -290,6 +291,7 @@ export function openZip(
     }
     pending.push({
       name,
+      flags,
       method,
       crc,
       size,
@@ -300,13 +302,25 @@ export function openZip(
   }
   if (at !== end) throw damaged("the archive directory is broken");
 
-  // Entries must not share bytes: each byte of the archive belongs to one entry.
+  // Every byte of the file belongs to exactly one entry, the directory or the
+  // end record: entries do not overlap, and there is nothing before, between or
+  // after them (apart from the data descriptor some zip writers add). So a file
+  // cannot hold a second archive that another reader would find instead.
   const ranges = [...pending].sort((a, b) => a.start - b.start);
-  for (let k = 1; k < ranges.length; k++) {
-    const prev = ranges[k - 1]!;
-    if (ranges[k]!.start < prev.dataStart + prev.compressedSize) {
-      throw damaged(`the entries ${prev.name} and ${ranges[k]!.name} overlap`);
+  let expected = 0;
+  let descriptor = false;
+  for (const entry of ranges) {
+    const gap = entry.start - expected;
+    if (gap < 0) throw damaged(`the entry ${entry.name} overlaps another entry`);
+    if (gap > 0 && !(descriptor && (gap === 12 || gap === 16))) {
+      throw damaged("the archive holds bytes that belong to no entry");
     }
+    expected = entry.dataStart + entry.compressedSize;
+    descriptor = (entry.flags & 0x8) !== 0;
+  }
+  const gap = cdOffset - expected;
+  if (gap > 0 && !(descriptor && (gap === 12 || gap === 16))) {
+    throw damaged("the archive holds bytes that belong to no entry");
   }
 
   const contents: ZipContents = { entries: new Map(), damaged: new Set() };

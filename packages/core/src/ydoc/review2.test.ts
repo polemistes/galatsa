@@ -10,8 +10,8 @@ import { copyFragment } from "../model/fragment.ts";
 import { InvalidDocumentError, MAX_DEPTH, nestingDepth, validateSnapshot } from "../model/grammar.ts";
 import { Resolver } from "../model/resolve.ts";
 import { hiddenAt, routeSteps } from "../model/route.ts";
-import { FRAME_TYPE } from "../model/types.ts";
-import { pasteFragment, tidyUp } from "./document-ops.ts";
+import { FRAME_TYPE, SCHEMA_VERSION } from "../model/types.ts";
+import { importCopy, pasteFragment, tidyUp } from "./document-ops.ts";
 import {
   addElement,
   addRoute,
@@ -31,8 +31,17 @@ import {
   setLocked,
   stopNotes,
 } from "./ops.ts";
+import { NewerVersionError } from "./schema.ts";
 import { fromSnapshot, inspectDocument, toSnapshot, yLookup } from "./snapshot.ts";
-import { forkDoc, syncDocs } from "./sync.ts";
+import {
+  MergeIdentityError,
+  canMerge,
+  checkSync,
+  forkDoc,
+  syncDocs,
+  syncHello,
+  watchVersion,
+} from "./sync.ts";
 import { seededOptions } from "./testing.ts";
 import { createUndoManager } from "./track.ts";
 
@@ -609,5 +618,96 @@ describe("review 2: paste and reparent", () => {
     }
     expect(results.size).toBe(1);
     expect([...results][0]).toMatch(/ 1077,1088$/);
+  });
+});
+
+describe("review 2: versions and merge identity while syncing", () => {
+  it("a replica that needs a newer version is not synced with, written to or left unnoticed", () => {
+    const d = base();
+    const newer = forkDoc(d, 2);
+    // A newer client starts using something this version cannot read.
+    newer.transact(() => {
+      newer.getMap("meta").set("minReaderVersion", SCHEMA_VERSION + 1);
+      newer.getMap("meta").set("schemaVersion", SCHEMA_VERSION + 1);
+      (newer.getMap("elements").get("X") as Y.Map<unknown>).set("orbit", { speed: 2 });
+    }, "newer-client");
+    expect(checkSync(d, syncHello(newer))).toBe("needs-newer-version");
+    expect(() => syncDocs(d, newer)).toThrow(NewerVersionError);
+    expect(toSnapshot(d).elements.X).toEqual(toSnapshot(base()).elements.X);
+
+    // If the change arrives anyway (the session was already open), this replica
+    // is told at once and refuses to write.
+    let told = 0;
+    const stop = watchVersion(d, (needed) => (told = needed));
+    expect(told).toBe(0);
+    Y.applyUpdate(d, Y.encodeStateAsUpdate(newer), "provider");
+    expect(told).toBe(SCHEMA_VERSION + 1);
+    expect(() => moveElement(d, "X", 1, 1)).toThrow(NewerVersionError);
+    expect(() => deleteElements(d, ["X"])).toThrow(NewerVersionError);
+    expect(() => tidyUp(d)).toThrow(NewerVersionError);
+    // Nothing of the newer client's content was dropped from the shared state.
+    expect((d.getMap("elements").get("X") as Y.Map<unknown>).get("orbit")).toEqual({
+      speed: 2,
+    });
+    stop();
+  });
+
+  it("a blank replica can join; unrelated documents cannot", () => {
+    const d = base();
+    const blank = new Y.Doc();
+    expect(syncHello(blank)).toEqual({ lineage: "", minReaderVersion: 1, blank: true });
+    expect(canMerge(blank, d)).toBe(true);
+    syncDocs(blank, d);
+    expect(toSnapshot(blank)).toEqual(toSnapshot(d));
+    moveElement(blank, "X", 3, 4);
+    syncDocs(d, blank);
+    expect(R(d).localPosition("X")).toEqual({ x: 3, y: 4 });
+
+    const other = fromSnapshot(toSnapshot(d));
+    expect(canMerge(d, other)).toBe(false);
+    expect(() => syncDocs(d, other)).toThrow(MergeIdentityError);
+    // A document without a lineage that is not blank is never merged.
+    const odd = new Y.Doc();
+    odd.getMap("elements").set("Q", new Y.Map());
+    expect(canMerge(odd, d)).toBe(false);
+    expect(inspectDocument(new Y.Doc()).problems).toEqual([]);
+  });
+
+  it("when merge identity is lost, the other copy's work can be imported as new content", () => {
+    const d = base();
+    addStop(d, { id: "S", view: { kind: "rect", space: null, x: 900, y: 900, w: 500, h: 500 } });
+    addRoute(d, { id: "R", name: "Talk" });
+    insertRouteEntry(d, "R", "S");
+    // The file was reopened without its Yjs state: a new lineage.
+    const mine = fromSnapshot(toSnapshot(d));
+    // Meanwhile someone worked offline on a copy with the old lineage.
+    const theirs = forkDoc(d, 4);
+    addElement(theirs, { id: "N", type: SHAPE, parent: "F", x: 70, y: 70, size: { w: 5, h: 5 } });
+    renameElement(theirs, "X", "their name");
+    deleteElements(theirs, ["Y"]);
+    expect(() => syncDocs(mine, theirs)).toThrow(MergeIdentityError);
+
+    const before = toSnapshot(mine);
+    const result = importCopy(mine, toSnapshot(theirs), { dx: 2000 });
+    const after = toSnapshot(mine);
+    // Nothing of mine changed.
+    for (const id of Object.keys(before.elements))
+      expect(after.elements[id]).toEqual(before.elements[id]);
+    // Everything visible of theirs arrived, beside mine, with new ids.
+    const r = R(mine);
+    const copy = (id: string) => result.ids.get(id)!;
+    expect(r.drawOrder()).toEqual(["F", "X", "Y", "T", copy("F"), copy("X"), copy("T"), copy("N")]);
+    expect(after.elements[copy("X")]!.name).toBe("their name");
+    expect(r.worldOrigin(copy("N"))).toEqual({ x: 3070, y: 1070 });
+    expect(result.ids.has("Y")).toBe(false);
+    const stop = after.stops[copy("S")]!;
+    expect(stop.view).toEqual({ kind: "rect", space: null, x: 2900, y: 900, w: 500, h: 500 });
+    expect(after.routes[copy("R")]!.name).toBe("Talk");
+    expect(routeSteps(after, copy("R")).map((step) => step.stop)).toEqual([copy("S")]);
+    // One undo removes the import again (softly).
+    const undo = createUndoManager(mine, { captureTimeout: 0 });
+    importCopy(mine, toSnapshot(theirs), { dx: 4000 });
+    undo.undo();
+    expect(R(mine).drawOrder().length).toBe(8);
   });
 });
