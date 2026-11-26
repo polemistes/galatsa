@@ -3,12 +3,25 @@
 // Writing Galatsa files, and reading them into a Y.Doc. Section 9 of
 // docs/adr/0001-document-model-and-file-format.md.
 
-import type { AssetId, DocumentSnapshot } from "@galatsa/core";
-import { fromSnapshot, toSnapshot } from "@galatsa/core/ydoc";
+import { purgeSnapshot, type AssetId, type DocumentSnapshot } from "@galatsa/core";
+import {
+  ORIGIN,
+  fromSnapshot,
+  hiddenContent,
+  lineageOf,
+  roots,
+  toSnapshot,
+} from "@galatsa/core/ydoc";
 import * as Y from "yjs";
 import type { FileWarning } from "./errors.ts";
 import { canonicalJson, jsonEqual, utf8 } from "./json.ts";
-import { ENTRY, MIMETYPE, assetsToWrite, type Manifest } from "./layout.ts";
+import {
+  ENTRY,
+  MIMETYPE,
+  YDOC_ENCODING,
+  assetsToWrite,
+  type Manifest,
+} from "./layout.ts";
 import { readGalatsaSnapshot, type ReadOptions } from "./read.ts";
 import { writeZip, type ZipEntryInput } from "./zip.ts";
 
@@ -27,6 +40,11 @@ export interface WriteOptions {
   thumbnail?: Uint8Array;
   /** Store ydoc.bin to keep merge identity (default true when given a Y.Doc). */
   includeYdoc?: boolean;
+  /**
+   * An export for sharing (section 5.8): removed content is purged first, and no
+   * ydoc.bin is written, so nothing deleted travels with the file.
+   */
+  forSharing?: boolean;
 }
 
 /** Where the writer gets asset bytes from. Missing bytes are simply left out. */
@@ -39,15 +57,22 @@ export function writeGalatsaFile(
   options: WriteOptions = {},
 ): Uint8Array {
   const doc = source instanceof Y.Doc ? source : null;
-  const snapshot = doc ? toSnapshot(doc) : (source as DocumentSnapshot);
-  const includeYdoc = doc !== null && options.includeYdoc !== false;
+  let snapshot = doc ? toSnapshot(doc) : (source as DocumentSnapshot);
+  if (options.forSharing) snapshot = purgeSnapshot(snapshot);
+  const lineage = doc ? lineageOf(doc) : "";
+  const includeYdoc =
+    doc !== null &&
+    !options.forSharing &&
+    options.includeYdoc !== false &&
+    lineage !== "";
 
   const manifest: Manifest = {
     format: "galatsa",
     formatVersion: snapshot.schemaVersion,
+    minReaderVersion: snapshot.minReaderVersion,
     generator: options.generator ?? "Galatsa",
   };
-  if (includeYdoc) manifest.ydoc = { encoding: "yjs-update-v1" };
+  if (includeYdoc) manifest.ydoc = { encoding: YDOC_ENCODING, lineage };
   if (options.thumbnail) manifest.thumbnail = { mediaType: "image/png" };
 
   const entries: ZipEntryInput[] = [
@@ -88,10 +113,49 @@ export interface ReadResult {
   warnings: FileWarning[];
 }
 
+function withoutVersions(snapshot: DocumentSnapshot): object {
+  const { schemaVersion: _s, minReaderVersion: _m, ...rest } = snapshot;
+  return rest;
+}
+
 /**
- * Reads file bytes into a Y.Doc. Uses ydoc.bin when it is present, nothing was
- * migrated, and it holds exactly what document.json holds (section 9.3).
- * Throws FileFormatError if the file cannot be opened.
+ * Decodes ydoc.bin and accepts it only if it holds exactly what document.json
+ * holds (apart from version numbers that a compatible upgrade raised), nothing
+ * the JSON form cannot carry, and the lineage the manifest names (section 9.3).
+ */
+function decodeYdoc(
+  bytes: Uint8Array,
+  lineage: string,
+  snapshot: DocumentSnapshot,
+): Y.Doc | null {
+  try {
+    const candidate = new Y.Doc();
+    Y.applyUpdate(candidate, bytes);
+    if (lineageOf(candidate) !== lineage) return null;
+    if (hiddenContent(candidate).length > 0) return null;
+    if (!jsonEqual(withoutVersions(toSnapshot(candidate)), withoutVersions(snapshot)))
+      return null;
+    const meta = roots(candidate).meta;
+    if (
+      meta.get("schemaVersion") !== snapshot.schemaVersion ||
+      meta.get("minReaderVersion") !== snapshot.minReaderVersion
+    ) {
+      candidate.transact(() => {
+        meta.set("schemaVersion", snapshot.schemaVersion);
+        meta.set("minReaderVersion", snapshot.minReaderVersion);
+      }, ORIGIN.load);
+    }
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads file bytes into a Y.Doc. Uses ydoc.bin when it is present, described by
+ * the manifest, nothing was migrated, and it matches document.json exactly
+ * (section 9.3); otherwise builds a document with a new lineage. Throws
+ * FileFormatError if the file cannot be opened.
  */
 export async function readGalatsaFile(
   bytes: Uint8Array,
@@ -101,18 +165,12 @@ export async function readGalatsaFile(
   const warnings = [...read.warnings];
   let doc: Y.Doc | null = null;
   if (read.ydoc) {
-    try {
-      const candidate = new Y.Doc();
-      Y.applyUpdate(candidate, read.ydoc);
-      if (jsonEqual(toSnapshot(candidate), read.snapshot)) doc = candidate;
-    } catch {
-      doc = null;
-    }
+    doc = decodeYdoc(read.ydoc.bytes, read.ydoc.lineage, read.snapshot);
     if (!doc) {
       warnings.push({
         code: "ydoc-discarded",
         message:
-          "ydoc.bin did not match document.json; the document will not merge with older copies.",
+          "ydoc.bin did not match document.json; the document will not merge with other copies.",
       });
     }
   }

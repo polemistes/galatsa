@@ -9,15 +9,19 @@ import {
   type DocumentSnapshot,
   type ElementData,
 } from "@galatsa/core";
+import { SAMPLE, buildSampleDocument } from "@galatsa/core/testing";
 import {
-  SAMPLE,
   addAsset,
   addElement,
-  buildSampleDocument,
+  addStop,
+  dataMap,
   deleteElements,
   edit,
   forkDoc,
+  lineageOf,
   renameElement,
+  setSetting,
+  setStopTransition,
   stopNotes,
   syncDocs,
   toSnapshot,
@@ -74,7 +78,6 @@ async function sampleWithAssets(): Promise<{
     x: 0,
     y: 0,
     size: { w: 1, h: 1 },
-    assets: [png],
     data: { asset: png },
   });
   addElement(doc, {
@@ -83,7 +86,6 @@ async function sampleWithAssets(): Promise<{
     x: 0,
     y: 0,
     size: { w: 1, h: 1 },
-    assets: [video],
     data: { asset: video },
   });
   addElement(doc, {
@@ -170,8 +172,9 @@ describe("file round trip", () => {
     expect(JSON.parse(fromUtf8(entries.get("manifest.json")!))).toEqual({
       format: "galatsa",
       formatVersion: 1,
+      minReaderVersion: 1,
       generator: "Galatsa",
-      ydoc: { encoding: "yjs-update-v1" },
+      ydoc: { encoding: "yjs-update-v1", lineage: lineageOf(doc) },
     });
   });
 
@@ -203,7 +206,9 @@ describe("file round trip", () => {
     const peer = forkDoc(doc, 77);
     const read = await readGalatsaFile(writeGalatsaFile(doc, (id) => assets.get(id)));
     renameElement(read.doc, SAMPLE.frame, "Renamed offline");
-    edit(peer, () => stopNotes(peer, SAMPLE.stop1).insert(0, "Peer note. "));
+    edit(peer, () => stopNotes(peer, SAMPLE.stop1).insert(0, "Peer note. "), {
+      touch: [SAMPLE.stop1],
+    });
     syncDocs(read.doc, peer);
     const merged = toSnapshot(read.doc);
     expect(toSnapshot(peer)).toEqual(merged);
@@ -213,14 +218,18 @@ describe("file round trip", () => {
     );
   });
 
-  it("writes only the assets of elements that are not deleted", async () => {
+  it("keeps the assets of deleted elements until they are purged", async () => {
     const { doc, assets } = await sampleWithAssets();
     deleteElements(doc, ["clip"]);
     const read = await readGalatsaFile(writeGalatsaFile(doc, (id) => assets.get(id)));
     expect(read.assets.has(await assetIdOf(PNG))).toBe(true);
-    expect(read.assets.has(await assetIdOf(VIDEO))).toBe(false);
-    // The description stays, so a restored element can find the bytes elsewhere.
-    expect(read.snapshot.assets[await assetIdOf(VIDEO)]).toBeDefined();
+    expect(read.assets.has(await assetIdOf(VIDEO))).toBe(true);
+    const shared = await readGalatsaFile(
+      writeGalatsaFile(doc, (id) => assets.get(id), { forSharing: true }),
+    );
+    expect(shared.assets.has(await assetIdOf(VIDEO))).toBe(false);
+    expect(shared.snapshot.assets[await assetIdOf(VIDEO)]).toBeUndefined();
+    expect(shared.snapshot.elements.clip).toBeUndefined();
   });
 
   it("writes a snapshot without a Y.Doc (no ydoc.bin)", async () => {
@@ -254,8 +263,7 @@ describe("format versions", () => {
               delete element.data.fill;
             }
           }
-          doc.schemaVersion = 2;
-          return { manifest: { ...manifest, formatVersion: 2 }, document: doc };
+          return { manifest, document: doc };
         },
       },
     ],
@@ -295,7 +303,12 @@ describe("format versions", () => {
         entries.set(
           "manifest.json",
           utf8(
-            JSON.stringify({ format: "galatsa", formatVersion: 99, generator: "future" }),
+            JSON.stringify({
+              format: "galatsa",
+              formatVersion: 99,
+              minReaderVersion: 99,
+              generator: "future",
+            }),
           ),
         );
       },
@@ -303,20 +316,52 @@ describe("format versions", () => {
     expect(await failure(readGalatsaFile(bytes))).toBe("newer-version");
   });
 
-  it("runs element data migrations from the extension and drops the Yjs state", async () => {
+  it("a compatible newer file (higher format, low minimum reader) opens and keeps its additions", async () => {
     const { doc, assets } = await sampleWithAssets();
-    const read = await readGalatsaFile(
+    const bytes = rewrite(
       writeGalatsaFile(doc, (id) => assets.get(id)),
-      {
-        migrateElement: (element) =>
-          element.type === "galatsa.shapes/shape" && element.typeVersion === 1
-            ? { ...element, typeVersion: 2, data: { ...element.data, migrated: true } }
-            : undefined,
+      (entries) => {
+        const m = JSON.parse(fromUtf8(entries.get("manifest.json")!)) as Record<
+          string,
+          unknown
+        >;
+        entries.set("manifest.json", utf8(JSON.stringify({ ...m, formatVersion: 3 })));
+        const d = JSON.parse(fromUtf8(entries.get("document.json")!)) as DocumentSnapshot;
+        d.schemaVersion = 3;
+        d.elements[SAMPLE.shape]!.ext["future.alt"] = "Alt text from version 3";
+        entries.set("document.json", utf8(JSON.stringify(d)));
       },
     );
-    expect(read.snapshot.elements[SAMPLE.shape]!.typeVersion).toBe(2);
-    expect(read.snapshot.elements[SAMPLE.shape]!.data.migrated).toBe(true);
-    expect(read.mergeIdentityKept).toBe(false);
+    const read = await readGalatsaFile(bytes);
+    expect(read.snapshot.schemaVersion).toBe(3);
+    expect(read.snapshot.elements[SAMPLE.shape]!.ext["future.alt"]).toBe(
+      "Alt text from version 3",
+    );
+    const again = await readGalatsaFile(
+      writeGalatsaFile(read.doc, (id) => read.assets.get(id)),
+    );
+    expect(again.snapshot.elements[SAMPLE.shape]!.ext["future.alt"]).toBe(
+      "Alt text from version 3",
+    );
+    expect(again.formatVersion).toBe(3);
+  });
+
+  it("refuses a newer file whose minimum reader version is too high", async () => {
+    const { doc, assets } = await sampleWithAssets();
+    const bytes = rewrite(
+      writeGalatsaFile(doc, (id) => assets.get(id)),
+      (entries) => {
+        const m = JSON.parse(fromUtf8(entries.get("manifest.json")!)) as Record<
+          string,
+          unknown
+        >;
+        entries.set(
+          "manifest.json",
+          utf8(JSON.stringify({ ...m, formatVersion: 3, minReaderVersion: 2 })),
+        );
+      },
+    );
+    expect(await failure(readGalatsaFile(bytes))).toBe("newer-version");
   });
 });
 
@@ -389,5 +434,124 @@ describe("damaged and foreign files", () => {
     );
     expect(garbage.snapshot).toEqual(toSnapshot(doc));
     expect(garbage.warnings.map((w) => w.code)).toContain("ydoc-discarded");
+  });
+});
+
+describe("review findings (format)", () => {
+  it("a deleted element's content is not in an export for sharing", async () => {
+    const doc = buildSampleDocument(new Y.Doc(), 3);
+    edit(
+      doc,
+      () => (dataMap(doc, SAMPLE.text).get("text") as Y.Text).insert(0, "CONFIDENTIAL "),
+      {
+        touch: [SAMPLE.text],
+      },
+    );
+    deleteElements(doc, [SAMPLE.text]);
+    const bytes = writeGalatsaFile(doc, () => undefined, { forSharing: true });
+    const entries = readZip(bytes);
+    expect(entries.has("ydoc.bin")).toBe(false);
+    expect(fromUtf8(entries.get("document.json")!)).not.toContain("CONFIDENTIAL");
+    const read = await readGalatsaSnapshot(bytes);
+    expect(read.snapshot.elements[SAMPLE.text]).toBeUndefined();
+  });
+
+  it("writes assets referred to from settings, stop transitions and text embeds", async () => {
+    const doc = buildSampleDocument(new Y.Doc(), 3);
+    const bg = await assetIdOf(new Uint8Array([1]));
+    const sound = await assetIdOf(new Uint8Array([2]));
+    const inline = await assetIdOf(new Uint8Array([3]));
+    setSetting(doc, "core.background", { image: bg });
+    const stop = addStop(doc, {
+      view: { kind: "rect", space: null, x: 0, y: 0, w: 1, h: 1 },
+    });
+    setStopTransition(doc, stop, { kind: "fade", sound });
+    edit(
+      doc,
+      () =>
+        (dataMap(doc, SAMPLE.text).get("text") as Y.Text).insertEmbed(0, {
+          image: inline,
+        }),
+      {
+        touch: [SAMPLE.text],
+      },
+    );
+    const bytesOf = new Map([
+      [bg, new Uint8Array([1])],
+      [sound, new Uint8Array([2])],
+      [inline, new Uint8Array([3])],
+    ]);
+    const names = [...readZip(writeGalatsaFile(doc, (id) => bytesOf.get(id))).keys()];
+    for (const id of [bg, sound, inline]) expect(names).toContain(`assets/${id}`);
+  });
+
+  it("does not use ydoc.bin that carries content document.json lacks", async () => {
+    const doc = buildSampleDocument(new Y.Doc(), 3);
+    doc.getMap("secretRoot").set("payload", "not in document.json");
+    const read = await readGalatsaFile(writeGalatsaFile(doc, () => undefined));
+    expect(read.mergeIdentityKept).toBe(false);
+    expect(read.doc.share.has("secretRoot")).toBe(false);
+
+    const doc2 = buildSampleDocument(new Y.Doc(), 3);
+    edit(doc2, () =>
+      doc2.getMap<Y.Map<unknown>>("elements").get(SAMPLE.text)!.set("smuggled", 1),
+    );
+    expect(
+      (await readGalatsaFile(writeGalatsaFile(doc2, () => undefined))).mergeIdentityKept,
+    ).toBe(false);
+
+    const doc3 = buildSampleDocument(new Y.Doc(), 3);
+    edit(doc3, () => doc3.getMap("meta").set("extraMeta", 42));
+    expect(
+      (await readGalatsaFile(writeGalatsaFile(doc3, () => undefined))).mergeIdentityKept,
+    ).toBe(false);
+  });
+
+  it("uses ydoc.bin only as the manifest describes it", async () => {
+    const doc = buildSampleDocument(new Y.Doc(), 3);
+    const good = writeGalatsaFile(doc, () => undefined);
+    const withManifest = (change: (m: Record<string, unknown>) => void) =>
+      rewrite(good, (entries) => {
+        const m = JSON.parse(fromUtf8(entries.get("manifest.json")!)) as Record<
+          string,
+          unknown
+        >;
+        change(m);
+        entries.set("manifest.json", utf8(JSON.stringify(m)));
+      });
+    expect((await readGalatsaFile(good)).mergeIdentityKept).toBe(true);
+    for (const change of [
+      (m: Record<string, unknown>) => delete m.ydoc,
+      (m: Record<string, unknown>) =>
+        (m.ydoc = { encoding: "yjs-update-v2", lineage: lineageOf(doc) }),
+      (m: Record<string, unknown>) =>
+        (m.ydoc = { encoding: "yjs-update-v1", lineage: "someoneElse" }),
+    ]) {
+      const read = await readGalatsaFile(withManifest(change));
+      expect(read.mergeIdentityKept).toBe(false);
+      expect(read.warnings.map((w) => w.code)).toContain("ydoc-discarded");
+    }
+    const big = await readGalatsaFile(good, { maxYdocSize: 10 });
+    expect(big.mergeIdentityKept).toBe(false);
+  });
+
+  it("reports deep nesting as an invalid document, not a crash", async () => {
+    const doc = buildSampleDocument(new Y.Doc(), 3);
+    const good = writeGalatsaFile(doc, () => undefined, { includeYdoc: false });
+    const depth = 200_000;
+    const deep =
+      '{"$y":"xmlFragment","children":[' +
+      '{"$y":"xmlElement","name":"p","attributes":{},"children":['.repeat(depth) +
+      "]}".repeat(depth) +
+      "]}";
+    const bytes = rewrite(good, (entries) => {
+      const text = fromUtf8(entries.get("document.json")!).replace(
+        '"fontFamily"',
+        `"deep":${deep},"fontFamily"`,
+      );
+      entries.set("document.json", utf8(text));
+    });
+    const code = await failure(readGalatsaSnapshot(bytes));
+    expect(["invalid-document", "damaged"]).toContain(code);
   });
 });

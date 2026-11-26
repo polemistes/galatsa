@@ -7,7 +7,7 @@ import { validateSnapshot, type AssetId, type DocumentSnapshot } from "@galatsa/
 import { FileFormatError, type FileWarning } from "./errors.ts";
 import { assetIdOf, isAssetId } from "./hash.ts";
 import { fromUtf8 } from "./json.ts";
-import { ENTRY, MIMETYPE, assetsToWrite } from "./layout.ts";
+import { ENTRY, MIMETYPE, YDOC_ENCODING, assetsInUse, isKnownEntry } from "./layout.ts";
 import {
   MIGRATIONS,
   migrate,
@@ -16,17 +16,12 @@ import {
 } from "./migrations.ts";
 import { DEFAULT_ZIP_LIMITS, readZip, type ZipLimits } from "./zip.ts";
 
-/** Upgrades an element's data on load (provided by the extension registry). */
-export type ElementMigrator = (
-  element: DocumentSnapshot["elements"][string],
-) => DocumentSnapshot["elements"][string] | undefined;
-
 export interface ReadOptions {
   /** Format migrations (tests inject their own). */
   migrations?: MigrationRegistry;
-  /** Element data migrations; return undefined to leave an element unchanged. */
-  migrateElement?: ElementMigrator;
   limits?: ZipLimits;
+  /** Largest ydoc.bin accepted; a larger one is ignored (default 256 MiB). */
+  maxYdocSize?: number;
 }
 
 export interface SnapshotReadResult {
@@ -37,9 +32,12 @@ export interface SnapshotReadResult {
   thumbnail: Uint8Array | null;
   /** The format version the file was written with. */
   formatVersion: number;
-  /** ydoc.bin, unless it is missing or a migration made it obsolete. */
-  ydoc: Uint8Array | null;
-  /** True if a format or element migration changed the document. */
+  /**
+   * ydoc.bin and the lineage the manifest gives for it, unless it is missing, of
+   * an unknown encoding, too large, or made obsolete by a migration.
+   */
+  ydoc: { bytes: Uint8Array; lineage: string } | null;
+  /** True if a format migration changed the document. */
   migrated: boolean;
   warnings: FileWarning[];
 }
@@ -63,14 +61,26 @@ const NOT_GALATSA = "The file is a zip archive, but not a Galatsa file.";
 
 /**
  * Reads file bytes into the JSON form. Throws FileFormatError if the file cannot
- * be opened.
+ * be opened; never any other error for bad input.
  */
 export async function readGalatsaSnapshot(
   bytes: Uint8Array,
   options: ReadOptions = {},
 ): Promise<SnapshotReadResult> {
+  try {
+    return await readUnchecked(bytes, options);
+  } catch (error) {
+    if (error instanceof FileFormatError) throw error;
+    throw new FileFormatError("damaged", `The file could not be read: ${String(error)}`);
+  }
+}
+
+async function readUnchecked(
+  bytes: Uint8Array,
+  options: ReadOptions,
+): Promise<SnapshotReadResult> {
   const registry = options.migrations ?? MIGRATIONS;
-  const entries = readZip(bytes, options.limits ?? DEFAULT_ZIP_LIMITS);
+  const entries = readZip(bytes, options.limits ?? DEFAULT_ZIP_LIMITS, isKnownEntry);
   const warnings: FileWarning[] = [];
 
   const mimetype = entries.get(ENTRY.mimetype);
@@ -92,17 +102,24 @@ export async function readGalatsaSnapshot(
     throw new FileFormatError("not-galatsa", NOT_GALATSA);
   }
   const version = manifest.formatVersion;
-  if (!Number.isInteger(version) || (version as number) < 1) {
+  const minReader = manifest.minReaderVersion;
+  if (
+    !Number.isInteger(version) ||
+    (version as number) < 1 ||
+    !Number.isInteger(minReader) ||
+    (minReader as number) < 1 ||
+    (minReader as number) > (version as number)
+  ) {
     throw new FileFormatError(
       "damaged",
       "The file is damaged: the format version is invalid.",
     );
   }
   const formatVersion = version as number;
-  if (formatVersion > registry.current) {
+  if ((minReader as number) > registry.current) {
     throw new FileFormatError(
       "newer-version",
-      `The file was made with a newer version of Galatsa (format ${formatVersion}; this version reads up to ${registry.current}).`,
+      `The file was made with a newer version of Galatsa (format ${formatVersion}, readable from version ${String(minReader)}; this version is ${registry.current}).`,
     );
   }
   const documentBytes = entries.get(ENTRY.document);
@@ -114,21 +131,28 @@ export async function readGalatsaSnapshot(
   }
 
   let raw: RawFile = { manifest, document: parseJson(documentBytes, ENTRY.document) };
-  const formatMigrated = formatVersion < registry.current;
-  if (formatMigrated) {
-    raw = migrate(raw, formatVersion, registry);
-    warnings.push({
-      code: "migrated",
-      message: `The file was upgraded from format version ${formatVersion} to ${registry.current}.`,
-    });
+  let migrated = false;
+  if (formatVersion < registry.current) {
+    const result = migrate(raw, formatVersion, registry);
+    raw = result.file;
+    migrated = result.changed;
+    if (migrated) {
+      warnings.push({
+        code: "migrated",
+        message: `The file was upgraded from format version ${formatVersion} to ${registry.current}.`,
+      });
+    }
   }
 
   const problems = validateSnapshot(raw.document);
-  if (
-    problems.length === 0 &&
-    (raw.document as DocumentSnapshot).schemaVersion !== registry.current
-  ) {
-    problems.push(`schemaVersion: expected ${registry.current}`);
+  if (problems.length === 0) {
+    const doc = raw.document as DocumentSnapshot;
+    if (doc.schemaVersion !== raw.manifest.formatVersion) {
+      problems.push("schemaVersion: does not match the manifest");
+    }
+    if (doc.minReaderVersion !== raw.manifest.minReaderVersion && !migrated) {
+      problems.push("minReaderVersion: does not match the manifest");
+    }
   }
   if (problems.length > 0) {
     throw new FileFormatError(
@@ -136,27 +160,7 @@ export async function readGalatsaSnapshot(
       `The document in the file is invalid:\n${problems.slice(0, 20).join("\n")}`,
     );
   }
-  let snapshot = raw.document as DocumentSnapshot;
-
-  let elementsMigrated = false;
-  if (options.migrateElement) {
-    const elements: DocumentSnapshot["elements"] = {};
-    for (const [id, element] of Object.entries(snapshot.elements)) {
-      const upgraded = options.migrateElement(element);
-      if (upgraded !== undefined) elementsMigrated = true;
-      elements[id] = upgraded ?? element;
-    }
-    if (elementsMigrated) {
-      snapshot = { ...snapshot, elements };
-      const again = validateSnapshot(snapshot);
-      if (again.length > 0) {
-        throw new FileFormatError(
-          "invalid-document",
-          `An element migration produced invalid data:\n${again.slice(0, 20).join("\n")}`,
-        );
-      }
-    }
-  }
+  const snapshot = raw.document as DocumentSnapshot;
 
   const assets = new Map<AssetId, Uint8Array>();
   for (const [name, data] of entries) {
@@ -172,7 +176,7 @@ export async function readGalatsaSnapshot(
     }
     assets.set(id, data);
   }
-  for (const id of assetsToWrite(snapshot)) {
+  for (const id of assetsInUse(snapshot)) {
     if (!assets.has(id)) {
       warnings.push({
         code: "asset-missing",
@@ -186,14 +190,27 @@ export async function readGalatsaSnapshot(
     warnings.push({ code: "thumbnail-missing", message: "The thumbnail is missing." });
   }
 
-  const migrated = formatMigrated || elementsMigrated;
-  return {
-    snapshot,
-    assets,
-    thumbnail,
-    formatVersion,
-    ydoc: migrated ? null : (entries.get(ENTRY.ydoc) ?? null),
-    migrated,
-    warnings,
-  };
+  // ydoc.bin is used only as the manifest describes it (section 9.3).
+  let ydoc: SnapshotReadResult["ydoc"] = null;
+  const ydocBytes = entries.get(ENTRY.ydoc);
+  const described = isObject(manifest.ydoc) ? manifest.ydoc : null;
+  if (ydocBytes && !migrated) {
+    const maxYdoc = options.maxYdocSize ?? 256 * 1024 ** 2;
+    if (
+      described?.encoding === YDOC_ENCODING &&
+      typeof described.lineage === "string" &&
+      described.lineage.length > 0 &&
+      ydocBytes.length <= maxYdoc
+    ) {
+      ydoc = { bytes: ydocBytes, lineage: described.lineage };
+    } else {
+      warnings.push({
+        code: "ydoc-discarded",
+        message:
+          "ydoc.bin is not described by the manifest, uses an unknown encoding, or is too large; the document will not merge with other copies.",
+      });
+    }
+  }
+
+  return { snapshot, assets, thumbnail, formatVersion, ydoc, migrated, warnings };
 }

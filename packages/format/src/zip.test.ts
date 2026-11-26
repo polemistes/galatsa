@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { FileFormatError } from "./errors.ts";
+import { deflateSync } from "fflate";
 import { fromUtf8, utf8 } from "./json.ts";
 import { crc32, isSafeEntryName, readZip, writeZip } from "./zip.ts";
 
@@ -117,5 +118,120 @@ describe("zip container", () => {
     patched.set(locator, end);
     patched.set(bytes.subarray(end), end + 20);
     expect(code(() => readZip(patched))).toBe("unsupported");
+  });
+});
+
+/** Builds an archive by hand: one local entry and central records pointing at it. */
+function handMade(
+  localName: string,
+  compressed: Uint8Array,
+  size: number,
+  crc: number,
+  centralNames: string[],
+): Uint8Array {
+  const u16 = (v: number) => [v & 255, (v >> 8) & 255];
+  const u32 = (v: number) => [
+    v & 255,
+    (v >>> 8) & 255,
+    (v >>> 16) & 255,
+    (v >>> 24) & 255,
+  ];
+  const name = (n: string) => [...utf8(n)];
+  const local = [
+    ...u32(0x04034b50),
+    ...u16(20),
+    ...u16(0),
+    ...u16(8),
+    ...u16(0),
+    ...u16(0),
+    ...u32(crc),
+    ...u32(compressed.length),
+    ...u32(size),
+    ...u16(localName.length),
+    ...u16(0),
+    ...name(localName),
+  ];
+  const central: number[] = [];
+  for (const n of centralNames) {
+    central.push(
+      ...u32(0x02014b50),
+      ...u16(20),
+      ...u16(20),
+      ...u16(0),
+      ...u16(8),
+      ...u16(0),
+      ...u16(0),
+      ...u32(crc),
+      ...u32(compressed.length),
+      ...u32(size),
+      ...u16(n.length),
+      ...u16(0),
+      ...u16(0),
+      ...u16(0),
+      ...u16(0),
+      ...u32(0),
+      ...u32(0),
+      ...name(n),
+    );
+  }
+  const cdOffset = local.length + compressed.length;
+  const end = [
+    ...u32(0x06054b50),
+    ...u16(0),
+    ...u16(0),
+    ...u16(centralNames.length),
+    ...u16(centralNames.length),
+    ...u32(central.length),
+    ...u32(cdOffset),
+    ...u16(0),
+  ];
+  const out = new Uint8Array(cdOffset + central.length + end.length);
+  out.set(local, 0);
+  out.set(compressed, local.length);
+  out.set(central, cdOffset);
+  out.set(end, cdOffset + central.length);
+  return out;
+}
+
+describe("zip reader limits (review findings)", () => {
+  it("rejects entries that share bytes (a tiny file cannot fill memory)", () => {
+    const raw = new Uint8Array(4 * 1024 * 1024);
+    const file = handMade("a", deflateSync(raw), raw.length, crc32(raw), ["a", "b", "c"]);
+    expect(file.length).toBeLessThan(20_000);
+    expect(code(() => readZip(file))).toBe("damaged");
+  });
+
+  it("stops inflating as soon as an entry exceeds its declared size", () => {
+    const raw = new Uint8Array(64 * 1024 * 1024);
+    const file = handMade(
+      "a",
+      deflateSync(raw, { level: 9 }),
+      1,
+      crc32(new Uint8Array(1)),
+      ["a"],
+    );
+    const start = Date.now();
+    expect(code(() => readZip(file))).toBe("damaged");
+    expect(Date.now() - start).toBeLessThan(150);
+  });
+
+  it("rejects a local header whose name differs from the directory", () => {
+    const raw = utf8("hello");
+    const file = handMade("x", deflateSync(raw), raw.length, crc32(raw), ["a"]);
+    expect(code(() => readZip(file))).toBe("damaged");
+  });
+
+  it("skips entries the caller does not accept, without decompressing them", () => {
+    const raw = new Uint8Array(1024);
+    const bytes = writeZip([
+      { name: "keep", data: utf8("k"), compress: true },
+      { name: "other", data: raw, compress: true },
+    ]);
+    const entries = readZip(
+      bytes,
+      { maxTotalSize: 10, maxEntries: 10 },
+      (n) => n === "keep",
+    );
+    expect([...entries.keys()]).toEqual(["keep"]);
   });
 });

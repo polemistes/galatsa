@@ -6,7 +6,7 @@
 // inflated. Sections 9.1, 9.7 and 9.8 of
 // docs/adr/0001-document-model-and-file-format.md.
 
-import { inflateSync, zipSync, type Zippable } from "fflate";
+import { Inflate, zipSync, type Zippable } from "fflate";
 import { FileFormatError } from "./errors.ts";
 
 // ---------------------------------------------------------------------------
@@ -92,13 +92,52 @@ function damaged(detail: string): FileFormatError {
   return new FileFormatError("damaged", `The file is damaged: ${detail}.`);
 }
 
+/** Size of the compressed chunks fed to the inflater (bounds work per step). */
+const INFLATE_CHUNK = 16 * 1024;
+
 /**
- * Reads all entries of an archive. Throws FileFormatError for anything that is not
- * a complete, intact zip archive in the subset this format uses.
+ * Inflates `raw` into exactly `size` bytes, feeding small chunks and stopping as
+ * soon as the output would exceed `size`, so an entry that lies about its size
+ * costs no more than its declared size.
+ */
+function inflateBounded(raw: Uint8Array, size: number, name: string): Uint8Array {
+  const out = new Uint8Array(size);
+  let at = 0;
+  let overflow = false;
+  const inflater = new Inflate((chunk) => {
+    if (overflow) return;
+    if (at + chunk.length > size) {
+      overflow = true;
+      return;
+    }
+    out.set(chunk, at);
+    at += chunk.length;
+  });
+  try {
+    for (let offset = 0; offset < raw.length && !overflow; offset += INFLATE_CHUNK) {
+      const end = Math.min(raw.length, offset + INFLATE_CHUNK);
+      inflater.push(raw.subarray(offset, end), end === raw.length);
+    }
+    if (raw.length === 0) inflater.push(raw, true);
+  } catch {
+    throw damaged(`the entry ${name} cannot be decompressed`);
+  }
+  if (overflow || at !== size) throw damaged(`the entry ${name} fails its checksum`);
+  return out;
+}
+
+/**
+ * Reads the entries of an archive. Entries for which `accept` returns false are
+ * checked structurally but not decompressed or kept. Throws FileFormatError for
+ * anything that is not a complete, intact zip archive in the subset this format
+ * uses: overlapping entries, names that differ between the local header and the
+ * directory, unsafe or duplicate names, bad checksums, entries larger than
+ * declared, zip64, encryption, and archives over the limits.
  */
 export function readZip(
   bytes: Uint8Array,
   limits: ZipLimits = DEFAULT_ZIP_LIMITS,
+  accept: (name: string) => boolean = () => true,
 ): Map<string, Uint8Array> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const u16 = (at: number) => view.getUint16(at, true);
@@ -119,19 +158,20 @@ export function readZip(
     }
   }
   if (end < 0) {
-    if (u32(0) === SIG_LOCAL)
+    if (u32(0) === SIG_LOCAL) {
       throw damaged("the end of the archive is missing (was saving interrupted?)");
+    }
     throw new FileFormatError(
       "not-zip",
       "The file is not a Galatsa file (not a zip archive).",
     );
   }
-  if (end >= 20 && u32(end - 20) === SIG_END64_LOCATOR) {
-    throw new FileFormatError(
+  const zip64 = () =>
+    new FileFormatError(
       "unsupported",
       "The file uses zip64, which this version of Galatsa cannot read.",
     );
-  }
+  if (end >= 20 && u32(end - 20) === SIG_END64_LOCATOR) throw zip64();
   const disk = u16(end + 4);
   const cdDisk = u16(end + 6);
   const count = u16(end + 10);
@@ -143,23 +183,29 @@ export function readZip(
       "Archives split over several files are not supported.",
     );
   }
-  if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
-    throw new FileFormatError(
-      "unsupported",
-      "The file uses zip64, which this version of Galatsa cannot read.",
-    );
-  }
+  if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) throw zip64();
   if (count > limits.maxEntries) {
     throw new FileFormatError("too-large", `The file has too many entries (${count}).`);
   }
   if (cdOffset + cdSize > end) throw damaged("the archive directory is out of bounds");
 
-  const entries = new Map<string, Uint8Array>();
+  interface Pending {
+    name: string;
+    method: number;
+    crc: number;
+    size: number;
+    start: number;
+    dataStart: number;
+    compressedSize: number;
+  }
+  const pending: Pending[] = [];
+  const names = new Set<string>();
   let total = 0;
   let at = cdOffset;
   for (let i = 0; i < count; i++) {
-    if (at + 46 > end || u32(at) !== SIG_CENTRAL)
+    if (at + 46 > cdOffset + cdSize || u32(at) !== SIG_CENTRAL) {
       throw damaged("the archive directory is broken");
+    }
     const flags = u16(at + 8);
     const method = u16(at + 10);
     const crc = u32(at + 16);
@@ -169,52 +215,85 @@ export function readZip(
     const extraLength = u16(at + 30);
     const commentLength = u16(at + 32);
     const localOffset = u32(at + 42);
-    if (at + 46 + nameLength > end) throw damaged("the archive directory is broken");
-    let name = "";
-    for (let k = 0; k < nameLength; k++) name += String.fromCharCode(bytes[at + 46 + k]!);
+    if (at + 46 + nameLength > cdOffset + cdSize)
+      throw damaged("the archive directory is broken");
+    const name = latin1(bytes, at + 46, nameLength);
     at += 46 + nameLength + extraLength + commentLength;
 
     if (flags & 0x1)
       throw new FileFormatError("unsupported", "Encrypted files are not supported.");
-    if (!isSafeEntryName(name))
+    if (!isSafeEntryName(name)) {
       throw damaged(`an entry has an unsafe name (${JSON.stringify(name)})`);
-    if (entries.has(name)) throw damaged(`the entry ${name} appears twice`);
+    }
+    if (names.has(name)) throw damaged(`the entry ${name} appears twice`);
+    names.add(name);
     if (method !== 0 && method !== 8) {
       throw new FileFormatError(
         "unsupported",
         `The entry ${name} uses an unsupported compression method.`,
       );
     }
-    if (method === 0 && compressedSize !== size)
+    if (method === 0 && compressedSize !== size) {
       throw damaged(`the size of ${name} is inconsistent`);
-    total += size;
-    if (total > limits.maxTotalSize) {
-      throw new FileFormatError(
-        "too-large",
-        "The file's contents are larger than the allowed limit.",
-      );
     }
-
     if (localOffset + 30 > cdOffset || u32(localOffset) !== SIG_LOCAL) {
       throw damaged(`the entry ${name} is missing`);
     }
-    const dataStart = localOffset + 30 + u16(localOffset + 26) + u16(localOffset + 28);
+    const localNameLength = u16(localOffset + 26);
+    if (
+      localNameLength !== nameLength ||
+      latin1(bytes, localOffset + 30, nameLength) !== name
+    ) {
+      throw damaged(`the entry ${name} has a different name in its local header`);
+    }
+    const dataStart = localOffset + 30 + localNameLength + u16(localOffset + 28);
     if (dataStart + compressedSize > cdOffset)
       throw damaged(`the entry ${name} is cut short`);
-    const raw = bytes.subarray(dataStart, dataStart + compressedSize);
-    let data: Uint8Array;
-    if (method === 0) data = raw.slice();
-    else {
-      try {
-        // A buffer of exactly the declared size: a lying entry cannot grow past it.
-        data = inflateSync(raw, { out: new Uint8Array(size) });
-      } catch {
-        throw damaged(`the entry ${name} cannot be decompressed`);
+    if (accept(name)) {
+      total += size;
+      if (total > limits.maxTotalSize) {
+        throw new FileFormatError(
+          "too-large",
+          "The file's contents are larger than the allowed limit.",
+        );
       }
     }
-    if (data.length !== size || crc32(data) !== crc)
-      throw damaged(`the entry ${name} fails its checksum`);
-    entries.set(name, data);
+    pending.push({
+      name,
+      method,
+      crc,
+      size,
+      start: localOffset,
+      dataStart,
+      compressedSize,
+    });
+  }
+
+  // Entries must not share bytes: each byte of the archive belongs to one entry.
+  const ranges = [...pending].sort((a, b) => a.start - b.start);
+  for (let k = 1; k < ranges.length; k++) {
+    const prev = ranges[k - 1]!;
+    if (ranges[k]!.start < prev.dataStart + prev.compressedSize) {
+      throw damaged(`the entries ${prev.name} and ${ranges[k]!.name} overlap`);
+    }
+  }
+
+  const entries = new Map<string, Uint8Array>();
+  for (const entry of pending) {
+    if (!accept(entry.name)) continue;
+    const raw = bytes.subarray(entry.dataStart, entry.dataStart + entry.compressedSize);
+    const data =
+      entry.method === 0 ? raw.slice() : inflateBounded(raw, entry.size, entry.name);
+    if (data.length !== entry.size || crc32(data) !== entry.crc) {
+      throw damaged(`the entry ${entry.name} fails its checksum`);
+    }
+    entries.set(entry.name, data);
   }
   return entries;
+}
+
+function latin1(bytes: Uint8Array, start: number, length: number): string {
+  let out = "";
+  for (let k = 0; k < length; k++) out += String.fromCharCode(bytes[start + k]!);
+  return out;
 }
