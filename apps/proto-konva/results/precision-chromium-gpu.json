@@ -1,0 +1,62 @@
+{
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36",
+  "target": {
+    "id": "t0273",
+    "color": "#e23917",
+    "fontSize": 39,
+    "lines": 41,
+    "lastLine": "husamåve?",
+    "x": 49881.900219726565,
+    "y": 5390.275
+  },
+  "rows": [
+    {
+      "zoom": 100,
+      "edgeOffsetPx": -221,
+      "onePixelShiftMovesEdgeBy": -1,
+      "drawMs": 35
+    },
+    {
+      "zoom": 1000,
+      "edgeOffsetPx": 1,
+      "onePixelShiftMovesEdgeBy": -1,
+      "drawMs": 24
+    },
+    {
+      "zoom": 10000,
+      "edgeOffsetPx": -6,
+      "onePixelShiftMovesEdgeBy": -1,
+      "drawMs": 24
+    },
+    {
+      "zoom": 100000,
+      "edgeOffsetPx": 9,
+      "onePixelShiftMovesEdgeBy": 0,
+      "drawMs": 25
+    },
+    {
+      "zoom": 1000000,
+      "edgeOffsetPx": -85,
+      "onePixelShiftMovesEdgeBy": 0,
+      "drawMs": 24
+    },
+    {
+      "zoom": 10000000,
+      "edgeOffsetPx": 571,
+      "onePixelShiftMovesEdgeBy": 0,
+      "drawMs": 26
+    },
+    {
+      "zoom": 100000000,
+      "edgeOffsetPx": null,
+      "onePixelShiftMovesEdgeBy": null,
+      "drawMs": 26
+    },
+    {
+      "zoom": 1000000000,
+      "edgeOffsetPx": null,
+      "onePixelShiftMovesEdgeBy": null,
+      "drawMs": 30
+    }
+  ]
+}
