@@ -404,7 +404,7 @@ export class DocumentUndoManager extends Y.UndoManager {
     this.doc.transact((tr) => {
       Y.iterateDeletedStructs(tr, step.insertions, (struct) => {
         if (!(struct instanceof Y.Item) || !struct.deleted || struct.redone !== null) return;
-        if (struct.parentSub === null || !(struct.content instanceof Y.ContentType)) return;
+        if (struct.parentSub === null) return;
         const parent = struct.parent;
         if (!(parent instanceof Y.Map) || parent._item?.parentSub !== "deleted") return;
         const current = parent._map.get(struct.parentSub);
