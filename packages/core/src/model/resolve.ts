@@ -69,7 +69,7 @@ export class Resolver {
   readonly #parent = new Map<ElementId, ElementId | null>();
   readonly #children = new Map<ElementId | null, ElementId[]>();
   readonly #world = new Map<ElementId, Point>();
-  readonly #rawWorld = new Map<ElementId, Point>();
+  readonly #simpleWorld = new Map<ElementId, Point>();
 
   constructor(lookup: ElementLookup) {
     this.#lookup = lookup;
@@ -181,13 +181,13 @@ export class Resolver {
   /** World origin of a container from own records only (no tag conversion). */
   #simpleOrigin(id: ElementId | null): Point {
     if (id === null) return { x: 0, y: 0 };
-    const cached = this.#rawWorld.get(id);
+    const cached = this.#simpleWorld.get(id);
     if (cached) return cached;
     const base = this.#simpleOrigin(this.parentOf(id));
     const pos = this.#lookup.get(id)?.pos;
     const local = this.#ownLocal(id) ?? { x: pos?.x ?? 0, y: pos?.y ?? 0 };
     const point = { x: base.x + local.x, y: base.y + local.y };
-    this.#rawWorld.set(id, point);
+    this.#simpleWorld.set(id, point);
     return point;
   }
 

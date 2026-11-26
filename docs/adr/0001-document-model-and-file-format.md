@@ -352,7 +352,7 @@ Three measures, which together make precision depend on where the camera is rela
 
 **Precision budget.** The error on screen is about |c| * z * 2^-52 pixels, where c is the camera centre in its anchor space. Keeping |c| * z <= 2^46 (`PRECISION_BUDGET`) keeps it at or below 1/64 pixel. The camera clamps zoom to `min(MAX_ZOOM, 2^46 / max(|cx|, |cy|, 1))` (`maxPreciseZoom`), so where precision runs out the user meets a zoom limit, never jitter. Examples: at the root with the camera within 16 384 units of the origin, the full 2^32 is available; a million units out, about 7 * 10^7; inside a frame, the same budget applies to the camera's position relative to that frame.
 
-Practical meaning: deep zoom works without limit inside frames (each frame starts a fresh budget); at the root, it is limited only far from the origin. Users who build "a world inside a dot" do it with frames, which is also how stops find it.
+Practical meaning: the full zoom range is available near the origin of every frame, however far that frame is from the world origin (each frame starts a fresh budget, and frames can be nested); at the root, it is limited only far from the origin. Users who build "a world inside a dot" do it with frames, which is also how stops find it. Zoom is absolute (frames have no scale), so `MAX_ZOOM` is the deepest zoom anywhere.
 
 **Phase 1 latitude.** A first renderer MAY anchor the camera at the root only, relying on the clamp. Anchoring in frames can be added later without any change to the document, because stops already carry their space.
 
