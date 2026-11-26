@@ -12,16 +12,17 @@ pnpm --filter @galatsa/bench preview # serve the built harness page
 pnpm e2e                             # includes the meter checks in Chromium and Firefox (about 15 minutes)
 ```
 
-On the harness page, pick an engine and press **Run** or **Run twice and compare**, then **Download JSON**. **Run with captures** keeps an image of the drawing area at the end of each hold, for looking at what the engine drew; it pauses the run for each image, so use it for review, not for timing. Use the built page (`build` and `preview`) for real measurements; the dev server serves unbundled modules.
+On the harness page, pick an engine and press **Run** or **Run twice and compare**, then **Download JSON**. **Run with captures** keeps an image of the drawing area at the end of each hold, for looking at what the engine drew; it pauses the run for each image, so its result is marked as a capture run and is not valid for decisions. Use the built page (`build` and `preview`) for real measurements; the dev server serves unbundled modules.
 
 During a run:
 
 - Keep the window visible and leave it alone. Browsers slow down animation frames in hidden pages; a result whose page was hidden or whose window was resized is marked as not valid (`verdictInputs.valid` and `problems`).
-- The drawing area (the stage) is fixed at the top-left corner of the window, 1280 x 720 CSS pixels by default, with the controls below it. A run refuses to start unless the whole stage is inside the window, because browsers skip painting what is off-screen. Tauri's default window (800 x 600) is too small: make the window larger, or choose a smaller stage with `?width=` and `?height=` (results with different sizes are not comparable).
+- The drawing area (the stage) is fixed at the top-left corner of the window and drawn above everything else, with the controls below it; the page is scrolled to the top and cannot scroll while a run lasts. A run refuses to start unless the whole stage is inside the window and nothing covers it (checked with `elementFromPoint` at its centre and corners), because browsers skip painting what is off-screen or covered.
+- The stage is 960 x 540 CSS pixels by default, the size the camera run is framed for. It fits in a desktop window on common laptop screens, including 1920 x 1080 at 150 % and 175 % scaling (1280 x 720 and 1097 x 617 CSS pixels for the whole screen), so all machines can use the same size. `?width=` and `?height=` choose another size, but results with different sizes are not comparable. A desktop window must offer at least 960 x 540 CSS pixels of content (Tauri's default 800 x 600 window does not).
 
 Query parameters, for automated runs: `engine=<id>`, `runs=<n>` (start at once), `capture=1` (with `runs`), `width` and `height` (stage size in CSS pixels) and `memory=0` (skip `measureUserAgentSpecificMemory`).
 
-The page has three engines, none of them a candidate: `noop` draws nothing and measures the meter itself; `synthetic` keeps the main thread busy for a seeded time per frame (the same in every run: mostly short frames, some missed, some long and a few stalls, all well away from the thresholds), to check the meter with an engine that misses frames; `outline` draws element outlines on a canvas, as a reference for the coordinate convention.
+The page has three engines, none of them a candidate: `noop` draws nothing and measures the meter itself; `synthetic` keeps the main thread busy for a seeded time per frame (the same in every run: 70 % of frames 2 to 12 ms, 20 % 27 to 31 ms, 9.5 % 48 to 60 ms and 0.5 % 105 to 130 ms, all away from the targets' thresholds), to check the meter with an engine that misses targets; `outline` draws element outlines on a canvas, as a reference for the coordinate convention.
 
 ### For a host (desktop shell, test runner)
 
@@ -29,10 +30,12 @@ The page has three engines, none of them a candidate: `noop` draws nothing and m
 
 - `run(runs, engineId, { capture })`: resolves to `{ results, comparison }`.
 - `events`: every `BenchEvent` so far. Each event is also dispatched on `window` as a `galatsa-bench` CustomEvent with the event as `detail`. Types: `settle-start`, `settle-end`, `calibrate-start`, `calibrate-end`, `load-start`, `load-end`, `run-start`, `hold-start`, `hold-end` (with `frame` and `label`), `run-end`.
-- `setMemorySampler({ source, sample })`: an external memory sampler, called (without waiting) at `load-start`, `load-end`, `run-start`, each `hold-start` and `run-end`. Its samples go to `memory.external` in the result and, when present, are the preferred memory figure (`verdictInputs.peakMemory`). This is how a desktop shell can report the memory of the whole browser, which the page itself cannot see. A host can also listen to the events and sample on its own.
+- `setMemorySampler({ source, sample, intervalMs })`: the host's memory sampler. The runner calls `sample()` every `intervalMs` (default 250 ms) from the start of `load()` to the end of the run, and at `load-start`, `load-end`, `run-start`, each `hold-start` and `run-end`, without waiting for the answers; after the run it waits at most 5 seconds for outstanding answers (`memory.external.unanswered` counts the rest). `sample()` must answer quickly and must not block the page. Its peak is the only memory figure the verdict uses.
 - A host that can take screenshots may set `window.galatsaBenchHostCapture = (rect) => Promise<dataUrl | Blob | null>`; capture runs use it for engines without `snapshot()`.
 
-For `measureUserAgentSpecificMemory()` the page must be cross-origin isolated. The harness's Vite server sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. A desktop shell that serves the page itself (for example Tauri on Windows, where WebView2 is Chromium) must send the same two headers, or the measurement is reported as unavailable.
+For `measureUserAgentSpecificMemory()` the page must be cross-origin isolated. The harness's Vite server sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. A desktop shell that serves the page itself (for example Tauri on Windows, where WebView2 is Chromium) must send the same two headers, or the measurement is reported as unavailable. These figures are informational only (see "Memory").
+
+Risks for the desktop shell, from memory and not checked here: WKWebView on macOS may cap animation frames near 60 Hz by default and at 30 Hz in Low Power Mode (the meter then flags the run); the Tauri configuration that sends COOP and COEP may interfere with its IPC; and a macOS host may not be allowed to read the memory of WebKit's WebContent process, without which the memory target cannot be judged there.
 
 ## Adding an engine
 
@@ -65,65 +68,57 @@ The scene uses only integer arithmetic and exactly rounded floating-point operat
 
 `createCameraRun(scene)` gives 2,775 poses, one per frame, which take 46.25 seconds at 60 frames per second:
 
-1. Zoom in from 0.02 to 20 on a text box near the middle of the scene (360 frames), hold. At zoom 0.02 the whole scene is in view; at zoom 20 the view's top-left corner is the text box's top-left corner.
+1. Zoom in from 0.02 to 20 on a text box near the middle of the scene (360 frames), hold. At zoom 0.02 the 960-pixel view covers 48,000 of the scene's 57,600 units, so nearly all of it is in view; at zoom 20 the view's top-left corner is the text box's top-left corner.
 2. Zoom back out to 0.02 (360 frames), hold.
 3. Fly to the left edge (90 frames), pan across the top row at zoom 0.15 (480 frames), hold.
-4. Fly through ten stops (90 frames each, with a hold at each stop). The stops alternate between the two rows and look at a whole cluster, at the largest text box or at the largest image of a cluster. Flights zoom out and in as in van Wijk and Nuij, "Smooth and efficient zooming and panning" (IEEE InfoVis 2003).
+4. Fly through ten stops (90 frames each, with a hold at each stop). The stops alternate between the two rows and look at a whole cluster, at the largest text box or at the largest image of a cluster. Flights zoom out and in as in van Wijk and Nuij, "Smooth and efficient zooming and panning" (IEEE InfoVis 2003), never below zoom 0.02.
 
-A hold is 45 frames (750 ms at 60 Hz) of a still camera. The run is framed for a 1,280 x 720 viewport; other sizes see more or less around the same centre. Because the run is a list of frames, every engine renders the same poses; a slow engine takes longer instead of skipping poses.
+A hold is 45 frames (750 ms at 60 Hz) of a still camera. The run is framed for a 960 x 540 viewport; other sizes see more or less around the same centre. Because the run is a list of frames, every engine renders the same poses; a slow engine takes longer instead of skipping poses.
 
 The poses use `Math.exp`, `Math.log` and hyperbolic functions, which JavaScript engines may round differently in the last bits, so poses can differ between browsers by about 1e-15 relative. A unit test pins their hash at 9 significant digits.
 
 ## What is measured
 
-A run first waits until the page is idle (at least 2 seconds, then until five idle callbacks in a row offer 40 ms, at most 10 seconds; Safari has no idle callbacks and only waits), so that garbage from generating the images or from a previous run does not land in it. Then it measures the display's refresh interval over 120 animation frames with nothing drawing (the trimmed mean of the frame timestamp differences), loads the engine, renders 60 warm-up frames and runs the camera run.
+A run first settles: it waits at least 2 seconds; then, where the browser has `requestIdleCallback`, until five idle callbacks in a row offer 40 ms; then until frames come steadily (two windows of 30 frames with 90 % of intervals near their median and medians within 3 %; three windows in browsers without idle callbacks, such as WebKit); at most 15 seconds. Then it measures the display's refresh interval over 120 idle frames: the median of the frame timestamp differences, then the mean of those within 25 % of it (robust to doubled frames and to the alternating timestamps of Firefox), retried up to three times until steady. It loads the engine, renders 60 warm-up frames, runs the camera run, and measures the refresh interval again.
 
 Per frame, in `frames` of the JSON result:
 
-- `frameMs`: wall-clock time from the start of one animation-frame callback to the start of the next (`performance.now()`). This is the frame time. It includes `render()`, any other work the engine causes, and the browser's style, layout and paint on the main thread.
-- `timestampMs`: the difference between the timestamps the browser passes to the callbacks, kept for reference only. These are display-frame start times, not durations: in headless Chromium a frame that blocks 30 ms read 16.7 ms and one that blocks 110 ms read 100 ms, and in Firefox and WebKitGTK they jitter.
-- `renderMs`: time spent inside `render()`.
+- `workMs`: main-thread time of the frame, from the start of its animation-frame callback to the first task after the browser's rendering step (a message posted after `render()`). It includes `render()` and the browser's style, layout and paint on the main thread, and no display rounds it. It does not see rasterisation or GPU work on other threads.
+- `frameMs`: wall-clock interval between the starts of consecutive callbacks: what the display paced. On a vsync-paced display it is a whole number of refreshes; it also shows delays from other threads.
+- `timestampMs`: differences of the timestamps the browser passes to the callbacks, for reference only (display-frame start times, not durations).
+- `renderMs`: time inside `render()`.
 - `excluded`: frames left out of all statistics (paused for a capture).
 
-`verdictInputs` holds the numbers to judge an engine by:
+### The targets
 
-| Field                                | Meaning                                                                                       |
-| ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `refreshIntervalMs`, `refreshRateHz` | the display's measured refresh interval and rate                                              |
-| `missedFrames`                       | frames over 1.5 refresh intervals (25 ms at 60 Hz): at least one refresh missed               |
-| `longFrames`                         | frames over 2.5 refresh intervals (41.7 ms at 60 Hz): slower than half the refresh rate       |
-| `missedFrames60Hz`, `longFrames60Hz` | the same against a 60 Hz display (25 and 41.7 ms), for comparing machines with other displays |
-| `stalls`                             | frames over 100 ms, whatever the display                                                      |
-| `frameMs`, `renderMs`                | count, mean, min, p50, p95, p99, max                                                          |
-| `textSharp`                          | p50 and max latency to sharp text, and holds without a report                                 |
-| `loadMs`                             | time in `load()`                                                                              |
-| `peakMemory`                         | the most complete memory figure available, with its source                                    |
-| `valid`, `problems`                  | whether something made the run unreliable                                                     |
+`verdictInputs.targets` judges the run against the proposed targets, with `pass: true`, `false`, or `null` where the run cannot tell:
 
-Each count has `thresholdMs`, `count` and `ratio` (of the counted frames). At 60 Hz, a target such as "95 % of frames within 16.7 ms" reads as `missedFrames.ratio` at most 0.05; "95 % within 33 ms" as `longFrames.ratio` at most 0.05; "no frame over 100 ms" as `stalls.count` 0.
+| Target                                           | Field                | Pass when                                                                 |
+| ------------------------------------------------ | -------------------- | ------------------------------------------------------------------------- |
+| 95 % of frames within 16.7 ms (Chromium)         | `targets.frames16_7` | `ratio` at most 0.05                                                      |
+| 95 % of frames within 33 ms (WebKitGTK, Firefox) | `targets.frames33`   | `ratio` at most 0.05                                                      |
+| no frame over 100 ms                             | `targets.stalls`     | `count` 0 (wall clock or work over 100 ms)                                |
+| text sharp within 200 ms after the camera stops  | `targets.textSharp`  | `maxMs` at most 200 and `missing` 0                                       |
+| memory at most 1.5 GB                            | `targets.memory`     | host sampler peak at most 1.5 x 10^9 bytes; `null` without a host sampler |
 
-The thresholds sit halfway between whole refresh intervals, so that the jitter of normal frames does not count (wall-clock frame times of an empty engine at 60 Hz spread from about 16 to 18.5 ms in Chromium and more in WebKitGTK), while a frame that takes one refresh more does. On a 120 Hz display `missedFrames` is stricter than a 60 fps target; use `missedFrames60Hz` for that. A frame that overruns the refresh interval only slightly (17 to 25 ms at 60 Hz) counts as missed where the browser then waits for the next refresh (it reads about 33 ms), but not where the browser starts the next frame at once, as headless browsers do (it reads about 17 ms); `renderMs.p95` compared with the refresh interval shows such engines too.
+A frame counts against a frame-time target when its `workMs` is over the target, or when the display shows it later than the target. The display can only judge where the target is a whole number of refresh intervals (within 10 % of one), because a vsync-paced display only shows whole numbers of refreshes: 16.7 ms at 60, 120 and 240 Hz, 33 ms at 60, 120 and 240 Hz. There the threshold sits half a refresh above that number (25 ms for 16.7 ms at 60 Hz, 20.8 ms at 120 Hz; 41.7 ms for 33 ms at 60 Hz), away from the values intervals take. At 75, 100 or 144 Hz a frame shown after two refreshes may have taken more or less than the target, so the target is judged by work alone (`judgedBy: "work only"`), and delays outside the main thread are not counted; `missedRefreshes` still shows them for that display. Each frame check lists `workOver`, `presentedOver` and the thresholds used.
 
-`stats` has the same statistics for `frameMs`, `timestampMs` and `renderMs`, and `frameMs` per kind of segment (zoom, pan, flight, hold). `environment` records the browser, the stage position, the refresh measurement, the settle time and the timer resolution.
+`verdictInputs` also has `missedRefreshes` and `longRefreshes` (frames over 1.5 and 2.5 refresh intervals on this display), statistics for `frameMs`, `workMs` and `renderMs`, `textSharp`, `loadMs`, `peakMemory`, and `valid` with `problems`. A run is not valid for a decision when the page was hidden, the window resized, the stage not fully visible or covered, frames never became steady, the refresh calibration was unsteady, the display ran at about 30 Hz (a low-power mode) or at a rate that is not a usual display rate, the refresh interval changed during the run by more than 3 %, or it was a capture run.
 
 ### Text sharpness
 
-`textSharp` has one event per hold. `latencyMs` is the time from just before `render()` of the first still frame to the start of the first animation frame after the engine's first `reportTextSharp()`, so it is at least one refresh interval; `reportMs` is the time to the call itself; both are `null` if the engine did not report before the camera moved again.
+`textSharp` has one event per hold. The clock starts just before `render()` of the stop frame: the last frame of the movement, which already shows the final pose (`stopFrame`). It stops at the start of the first animation frame after the engine's first `reportTextSharp()`, so the result is at least one refresh interval; `reportMs` is the time to the call itself; both are `null` if the engine did not report before the camera moved again. An engine that detects stillness by comparing poses learns it one frame after the stop frame, and that frame is counted, as a viewer would see it.
 
-This relies on the engine's word. An engine that zooms with CSS transforms leaves re-rasterising the text to the browser, which happens later and cannot be observed from the page, so its latency is a lower bound. The empty engine reports in every frame and so gets one refresh interval. Look at the captures before trusting a small figure.
+This relies on the engine's word. An engine that zooms with CSS transforms leaves re-rasterising the text to the browser, which happens later and cannot be observed from the page, so its latency is a lower bound. Look at the captures before trusting a small figure.
 
 ### Memory
 
-Memory is reported where the browser offers it and marked unavailable where it does not:
+The memory target is judged only from the host's sampler (`setMemorySampler`), the memory of the whole program as the operating system sees it, sampled through the run. The page cannot see that memory: the browser's own figures cover the JavaScript heap and little else (in one run of a canvas engine with a GPU, 9.7 MB from `measureUserAgentSpecificMemory()` against 1,610 MiB of process memory, 984 MiB with the empty engine), so without a host sampler `targets.memory` is `null`. Every engine carries the same baseline of about 317 MB of encoded image files in the page.
 
-- `measureUserAgentSpecificMemory()` before load, after load and after the run (not at the peak, because it may wait for a garbage collection). Chromium only, and only on a cross-origin isolated page; not available in Chromium's separate headless shell. `--enable-blink-features=ForceEagerMeasureMemory` makes Chromium answer at once.
-- `performance.memory` every 30 frames (Chromium only, JavaScript heap only). Chromium rounds the values unless started with `--enable-precise-memory-info`.
-- An external sampler, if the host sets one (see above).
-
-The first two cover neither decoded images nor GPU memory, so they understate what an engine uses, and Firefox and WebKitGTK offer neither. The 1.5 GB target can therefore only be checked with an external sampler (process memory, measured by a desktop shell) at the `hold-start` events of the run. Every engine carries the same baseline of about 317 MB of encoded image files in the page.
+For information only, the result also has `measureUserAgentSpecificMemory()` before load, after load and after the run (Chromium, cross-origin isolated pages only; not in Chromium's separate headless shell; `--enable-blink-features=ForceEagerMeasureMemory` makes it answer at once) and `performance.memory` every 30 frames (Chromium, JavaScript heap only, rounded unless Chromium runs with `--enable-precise-memory-info`). Firefox and WebKitGTK offer neither.
 
 ## Repeatability
 
-`compareRuns(a, b)` compares the verdict inputs of two runs. A metric agrees when the difference is at most 5 % of the larger value or an absolute floor, whichever is larger: counts max(3, 0.2 % of the frames), refresh interval 0.5 ms, mean frame time 0.5 ms, render time 0.25 ms, text-sharp latency one refresh interval. Deciding: frames, refresh interval, missed frames, long frames, stalls, mean frame time, `render()` p50 and p95, text-sharp p50 and missing. Shown but not deciding: frame time p95 and max, `render()` max, text-sharp max and load time (one garbage-collection pause moves a maximum).
+`compareRuns(a, b)` compares two runs by their verdicts: they agree when every target gets the same verdict (pass, fail or cannot judge) in both. It also lists raw differences of the main numbers, each with an allowance of 5 % or an absolute floor (counts max(3, 0.2 % of the frames), refresh interval and mean frame time 0.5 ms, work and render p95 1 ms, text-sharp latency one refresh interval), for judging how steady the meter is; those do not decide. A real engine's counts vary more between runs than the empty engine's (two runs of a canvas engine prototype in headless Chromium: 17 against 5 frames over 16.7 ms, 0.61 % and 0.18 %, and load times of 1,082 against 916 ms), while its verdict stays the same; a run whose ratio lies near a target's limit can flip, and comparing verdicts shows that.
 
-`tests/e2e/bench-repeatability.spec.ts` runs the empty and the synthetic engine twice each, in Chromium and Firefox, and requires agreement. `tests/e2e/bench-meter.spec.ts` checks that the meter counts deliberately slow frames, refuses a stage that does not fit, keeps the stage in place, and makes captures. Headless browsers pace frames with an even clock and do not wait for a display after a late frame, so these runs do not show how much a real display adds; that needs runs on real machines.
+`tests/e2e/bench-repeatability.spec.ts` runs the empty and the synthetic engine twice each, in Chromium and Firefox, and requires the same verdicts and raw numbers within their allowances. `tests/e2e/bench-meter.spec.ts` checks that the meter counts deliberately slow frames, refuses a stage that does not fit, keeps the stage in place and on top, and makes captures. `src/stats.test.ts` feeds vsync-quantised frames at 60, 75, 100, 120, 144 and 240 Hz through the targets. Headless browsers pace frames with an even clock and do not wait for a display after a late frame, so the browser tests do not show how much a real display adds; that needs runs on real machines.
