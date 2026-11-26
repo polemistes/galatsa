@@ -7,9 +7,6 @@ import {
   flattenReport,
   isAcceptable,
   findWorkspaceViolations,
-  hasConfigDependencies,
-  lockfilePackageIds,
-  normalizeLockKey,
   type PackageLicense,
 } from "./licenses.ts";
 
@@ -208,84 +205,6 @@ describe("report helpers", () => {
       { id: "a@2.0.0", license: "MIT" },
       { id: "b@3.0.0", license: "(MIT AND CC-BY-3.0)" },
     ]);
-  });
-
-  it("normalises lockfile keys with peer suffixes and quotes", () => {
-    expect(normalizeLockKey("'@rolldown/binding-linux-x64-gnu@1.2.19'")).toBe(
-      "@rolldown/binding-linux-x64-gnu@1.2.19",
-    );
-    expect(normalizeLockKey("eslint@10.14.0(supports-color@7.2.0)")).toBe(
-      "eslint@10.14.0",
-    );
-  });
-
-  const twoDocumentLockfile = [
-    "---",
-    "lockfileVersion: '9.0'",
-    "",
-    "importers:",
-    "",
-    "  .:",
-    "    configDependencies: {}",
-    "    packageManagerDependencies:",
-    "      pnpm:",
-    "        specifier: 12.19.0",
-    "        version: 12.19.0",
-    "",
-    "packages:",
-    "",
-    "  '@pnpm/exe.linux-x64@12.19.0':",
-    "    resolution: {integrity: sha512-x}",
-    "",
-    "  pnpm@12.19.0:",
-    "    resolution: {integrity: sha512-x}",
-    "",
-    "---",
-    "lockfileVersion: '9.0'",
-    "",
-    "importers:",
-    "",
-    "  .:",
-    "    devDependencies:",
-    "      vite:",
-    "        specifier: 8.3.8",
-    "        version: 8.3.8",
-    "",
-    "packages:",
-    "",
-    "  '@rolldown/binding-win32-x64-msvc@1.2.19':",
-    "    resolution: {integrity: sha512-x}",
-    "    cpu: [x64]",
-    "    os: [win32]",
-    "",
-    "  vite@8.3.8:",
-    "    resolution: {integrity: sha512-x}",
-    "",
-    "snapshots:",
-    "",
-    "  not-a-package@1.0.0: {}",
-    "",
-  ].join("\r\n");
-
-  it("reads lockfile ids from the project document and skips the boot document", () => {
-    expect([...lockfilePackageIds(twoDocumentLockfile)]).toEqual([
-      "@rolldown/binding-win32-x64-msvc@1.2.19",
-      "vite@8.3.8",
-    ]);
-  });
-
-  it("reads a lockfile that has only the project document", () => {
-    const single = twoDocumentLockfile.split("---\r\n").at(-1) ?? "";
-    expect(lockfilePackageIds(single).has("vite@8.3.8")).toBe(true);
-  });
-
-  it("detects config dependencies in the boot document", () => {
-    expect(hasConfigDependencies(twoDocumentLockfile)).toBe(false);
-    const withConfig = twoDocumentLockfile.replace(
-      "    configDependencies: {}",
-      "    configDependencies:\r\n      some-plugin: 1.0.0+sha512-x",
-    );
-    expect(hasConfigDependencies(withConfig)).toBe(true);
   });
 });
 

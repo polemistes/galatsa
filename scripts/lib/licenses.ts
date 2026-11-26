@@ -5,14 +5,16 @@
 //
 // Two policies, chosen by how a dependency is used:
 //
-// - Production: the package is reachable from a `dependencies` or
-//   `optionalDependencies` entry of any workspace package. It may end up in the
-//   distributed program, so its license must be compatible with GPL-3.0-or-later.
-//   A package that is both production and development counts as production.
-// - Development: the package is reachable only from `devDependencies`. It is not
-//   shipped, so any free (open-source) license is accepted. Non-free licenses are
-//   still rejected: non-commercial and no-derivatives Creative Commons licenses,
-//   SSPL, BUSL, Commons Clause, proprietary, and unknown or missing licenses.
+// - Production: the package is reachable from any dependency field of any workspace
+//   package other than the root (see scripts/lib/lockfile.ts for the exact rule). It
+//   may end up in the distributed program, so its license must be compatible with
+//   GPL-3.0-or-later. A package that is both production and development counts as
+//   production.
+// - Development: the package is reachable only from the root's `devDependencies`
+//   (repository tooling). It is not shipped, so any free (open-source) license is
+//   accepted. Non-free licenses are still rejected: non-commercial and
+//   no-derivatives Creative Commons licenses, SSPL, BUSL, Commons Clause,
+//   proprietary, and unknown or missing licenses.
 //
 // IMPORTANT: the license lists below (PRODUCTION_LICENSES, DEVELOPMENT_FREE_LICENSES,
 // ACCEPTED_EXCEPTIONS, WORKSPACE_LICENSES and NON_FREE_PATTERN) were written from
@@ -233,58 +235,6 @@ export function flattenReport(
     }
   }
   return result;
-}
-
-/**
- * Normalises a key from pnpm-lock.yaml to "name@version". Drops peer dependency
- * suffixes such as "(eslint@10.14.0)" and surrounding quotes.
- */
-export function normalizeLockKey(key: string): string {
-  return key.replace(/^'|'$/g, "").replace(/\(.*$/, "");
-}
-
-/**
- * Splits pnpm-lock.yaml into its YAML documents. pnpm 12 can write a "boot document"
- * first, which holds the pnpm version pinned by the "packageManager" field
- * (packageManagerDependencies) and pnpm config dependencies (configDependencies). The
- * project lockfile is always the last document. See https://pnpm.io/lockfile.
- */
-function lockfileDocuments(lockfileText: string): { boot: string; project: string } {
-  const documents = lockfileText
-    .replace(/\r\n/g, "\n")
-    .split(/^---$/m)
-    .filter((document) => document.trim().length > 0);
-  const project = documents.at(-1) ?? "";
-  const boot = documents.length > 1 ? (documents[0] ?? "") : "";
-  return { boot, project };
-}
-
-/**
- * Returns the "name@version" ids of every package in the project lockfile (the last
- * document of pnpm-lock.yaml), for all platforms: optional and platform-specific
- * packages included. The boot document is not read; it describes pnpm itself.
- */
-export function lockfilePackageIds(lockfileText: string): Set<string> {
-  const ids = new Set<string>();
-  const section = lockfileDocuments(lockfileText).project.split(/^packages:\n/m)[1];
-  if (section === undefined) return ids;
-  // The section ends at the next top-level key (for example "snapshots:").
-  const body = section.split(/^\S/m)[0] ?? "";
-  for (const match of body.matchAll(/^ {2}(\S.*?):\s*$/gm)) {
-    ids.add(normalizeLockKey(match[1] ?? ""));
-  }
-  return ids;
-}
-
-/**
- * Returns true if the boot document of pnpm-lock.yaml lists pnpm config dependencies.
- * `pnpm licenses list` does not report them, so the check refuses to pass silently
- * when there are any: support for them must be added first.
- */
-export function hasConfigDependencies(lockfileText: string): boolean {
-  return /^ {4}configDependencies:(?! *\{\} *$)/m.test(
-    lockfileDocuments(lockfileText).boot,
-  );
 }
 
 /**
