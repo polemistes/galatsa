@@ -27,5 +27,14 @@ pnpm --filter @galatsa/proto-canvas e2e --project=chromium bench        # result
 - `src/engine.ts`: the engine. One canvas of the viewport size times `devicePixelRatio`. Per element one transform, computed in double precision relative to the camera so that the numbers given to the canvas stay small.
 - `src/spatial.ts`: a uniform grid over the rotated bounding boxes, for culling.
 - `src/text-layout.ts`: line breaking in world units, measured once at a reference size, so lines break the same way at every zoom level. Text is drawn line by line with `fillText` at its size in device pixels; text below 4 device pixels is drawn as bars.
-- `src/image-cache.ts`: images decoded at reduced size with `createImageBitmap` resize options: a thumbnail of each at load, finer levels on demand, least recently used levels freed beyond a budget.
+- `src/image-cache.ts`: images decoded at reduced size, off the main thread, with WebCodecs `ImageDecoder` (`desiredWidth`, so JPEG is decoded at reduced size) or, where that is missing, `createImageBitmap` resize options: a thumbnail of each at load, finer levels on demand, least recently used levels freed beyond a budget.
 - `src/editor.ts`: editing through a hidden textarea that holds the text and selection; the canvas draws text, selection, composition underline and caret.
+
+## Results
+
+In `results/`, from headless browsers on one Linux laptop (AMD Ryzen 7 PRO 7840U with Radeon 780M), viewport 1280 x 720 at device pixel ratio 1:
+
+- `bench-<project>-<decoder>.json`: the harness output, plus `engineStats` (the engine's own counters, including decoded image bytes), `renderer` (the WebGL renderer string) and `processMemory` (PSS of all browser processes from `/proc`, sampled every 500 ms; the baseline is a no-op engine run on the same page with the images generated). Projects: `chromium` (headless Chromium rasterises canvas in software), `chromium-gpu` (with `--enable-gpu --ignore-gpu-blocklist`) and `firefox`. Decoders: `imagedecoder` (the default) and `createimagebitmap` (the first version).
+- `decode-<project>.json`: thumbnail decoding with `createImageBitmap` resize options against `ImageDecoder` with `desiredWidth` (`tests/decode.spec.ts`).
+- `text-<name>-<id>-zoom<z>-dpr<d>-<project>.png`: the same texts at zoom 0.1, 1, 8 and 40.
+- `edit-*-<project>.png`: the steps of the editing test.
