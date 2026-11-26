@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The benchmark harness page with the Konva engine.
+// The benchmark harness page with the Konva engine. Besides the harness's own query
+// parameters, for experiments that show where frame time goes:
+//   maxImage=<pixels>         caps the image level of detail (decoding and uploading)
+//   movingGlyphMin=<pixels>   smallest font size drawn with glyphs while moving
+//                             (a large value draws all text as bars while moving)
 
 import { startHarness } from "@galatsa/bench/harness";
 import { createKonvaEngine, type KonvaEngine } from "./engine.ts";
@@ -18,7 +22,13 @@ startHarness({
     {
       id: "konva",
       create: () => {
-        const engine = createKonvaEngine();
+        const params = new URLSearchParams(location.search);
+        const maxImage = Number(params.get("maxImage"));
+        const movingGlyphMin = Number(params.get("movingGlyphMin"));
+        const engine = createKonvaEngine({
+          ...(maxImage > 0 ? { maxImageLongSide: maxImage } : {}),
+          ...(movingGlyphMin > 0 ? { movingGlyphMinPx: movingGlyphMin } : {}),
+        });
         window.protoKonvaEngine = engine;
         return engine;
       },

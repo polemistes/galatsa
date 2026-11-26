@@ -1,0 +1,157 @@
+{
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36",
+  "rows": [
+    {
+      "sizing": "screen",
+      "zoom": 0.1,
+      "boxes": 600,
+      "differentLineCount": 42,
+      "examples": [
+        {
+          "id": "t0011",
+          "fontPx": 0.7000000000000001,
+          "konva": 9,
+          "browser": 8
+        },
+        {
+          "id": "t0045",
+          "fontPx": 1.2000000000000002,
+          "konva": 18,
+          "browser": 16
+        },
+        {
+          "id": "t0106",
+          "fontPx": 0.2,
+          "konva": 9,
+          "browser": 8
+        },
+        {
+          "id": "t0117",
+          "fontPx": 2.1,
+          "konva": 5,
+          "browser": 4
+        },
+        {
+          "id": "t0118",
+          "fontPx": 0.30000000000000004,
+          "konva": 20,
+          "browser": 19
+        }
+      ]
+    },
+    {
+      "sizing": "screen at zoom 1, and scaled at any zoom",
+      "zoom": 1,
+      "boxes": 600,
+      "differentLineCount": 9,
+      "examples": [
+        {
+          "id": "t0152",
+          "fontPx": 28,
+          "konva": 9,
+          "browser": 8
+        },
+        {
+          "id": "t0176",
+          "fontPx": 13,
+          "konva": 4,
+          "browser": 3
+        },
+        {
+          "id": "t0207",
+          "fontPx": 35,
+          "konva": 9,
+          "browser": 8
+        },
+        {
+          "id": "t0211",
+          "fontPx": 3,
+          "konva": 25,
+          "browser": 24
+        },
+        {
+          "id": "t0273",
+          "fontPx": 39,
+          "konva": 41,
+          "browser": 39
+        }
+      ]
+    },
+    {
+      "sizing": "screen",
+      "zoom": 8,
+      "boxes": 600,
+      "differentLineCount": 9,
+      "examples": [
+        {
+          "id": "t0152",
+          "fontPx": 224,
+          "konva": 9,
+          "browser": 8
+        },
+        {
+          "id": "t0176",
+          "fontPx": 104,
+          "konva": 4,
+          "browser": 3
+        },
+        {
+          "id": "t0207",
+          "fontPx": 280,
+          "konva": 9,
+          "browser": 8
+        },
+        {
+          "id": "t0211",
+          "fontPx": 24,
+          "konva": 25,
+          "browser": 24
+        },
+        {
+          "id": "t0273",
+          "fontPx": 312,
+          "konva": 41,
+          "browser": 39
+        }
+      ]
+    },
+    {
+      "sizing": "screen",
+      "zoom": 40,
+      "boxes": 600,
+      "differentLineCount": 9,
+      "examples": [
+        {
+          "id": "t0152",
+          "fontPx": 1120,
+          "konva": 9,
+          "browser": 8
+        },
+        {
+          "id": "t0176",
+          "fontPx": 520,
+          "konva": 4,
+          "browser": 3
+        },
+        {
+          "id": "t0207",
+          "fontPx": 1400,
+          "konva": 9,
+          "browser": 8
+        },
+        {
+          "id": "t0211",
+          "fontPx": 120,
+          "konva": 25,
+          "browser": 24
+        },
+        {
+          "id": "t0273",
+          "fontPx": 1560,
+          "konva": 41,
+          "browser": 39
+        }
+      ]
+    }
+  ]
+}

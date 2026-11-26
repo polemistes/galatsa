@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Runs the benchmark's camera run with the Konva engine on the built harness page and
-// saves the results to results/bench-<browser>.json (the harness output plus the
-// engine's own counters) and the printed summary to results/bench-<browser>.txt.
+// saves the results to results/bench-<project>.json (the harness output plus the
+// engine's own counters) and the printed summary to results/bench-<project>.txt.
 // Takes about a minute and a half: the images are generated first (about 17 s in
 // Chromium), then the run itself is about 46 s at 60 Hz.
 
@@ -13,9 +13,15 @@ import { expect, test } from "@playwright/test";
 import type { EngineStats } from "../src/engine.ts";
 import { RESULTS_DIR } from "./playground.ts";
 
-test("camera run with the Konva engine", async ({ page, browserName }) => {
+// BENCH_QUERY adds query parameters to the page (for example "maxImage=256"), and
+// names the result files after them.
+const extra = process.env["BENCH_QUERY"] ?? "";
+
+test("camera run with the Konva engine", async ({ page }, testInfo) => {
+  const name =
+    testInfo.project.name + (extra ? `-${extra.replace(/[^a-z0-9]+/gi, "-")}` : "");
   test.setTimeout(10 * 60_000);
-  await page.goto("/?engine=konva");
+  await page.goto(`/?engine=konva${extra ? `&${extra}` : ""}`);
   await expect(page.getByRole("status")).toBeVisible();
 
   const output: HarnessOutput = await page.evaluate(() => {
@@ -29,11 +35,11 @@ test("camera run with the Konva engine", async ({ page, browserName }) => {
   const summary = (await page.locator("pre").textContent()) ?? "";
 
   writeFileSync(
-    join(RESULTS_DIR, `bench-${browserName}.json`),
+    join(RESULTS_DIR, `bench-${name}.json`),
     `${JSON.stringify({ ...output, engineStats })}\n`,
   );
   writeFileSync(
-    join(RESULTS_DIR, `bench-${browserName}.txt`),
+    join(RESULTS_DIR, `bench-${name}.txt`),
     `${summary}\n\nEngine counters:\n${JSON.stringify(engineStats, null, 2)}\n`,
   );
   console.log(summary);

@@ -43,6 +43,8 @@ export interface KonvaEngineOptions {
   readonly movingGlyphMinPx?: number;
   readonly stillGlyphMinPx?: number;
   readonly imageBudgetBytes?: number;
+  /** Largest image level used, as its longest side in pixels (for experiments). */
+  readonly maxImageLongSide?: number;
 }
 
 export interface EngineStats {
@@ -125,6 +127,7 @@ function rotatedBounds(
 export function createKonvaEngine(options: KonvaEngineOptions = {}): KonvaEngine {
   const movingGlyphMin = options.movingGlyphMinPx ?? MOVING_GLYPH_MIN_PX;
   const stillGlyphMin = options.stillGlyphMinPx ?? STILL_GLYPH_MIN_PX;
+  const maxImageLongSide = options.maxImageLongSide ?? Infinity;
 
   let stage: Konva.Stage | undefined;
   let layer: Konva.Layer | undefined;
@@ -401,7 +404,10 @@ export function createKonvaEngine(options: KonvaEngineOptions = {}): KonvaEngine
         const e = item.element;
         if (e.kind === "image") {
           const node = item.node as Konva.Image;
-          const bitmap = images.bitmapFor(e.assetId, Math.max(e.width, e.height) * scale);
+          const bitmap = images.bitmapFor(
+            e.assetId,
+            Math.min(Math.max(e.width, e.height) * scale, maxImageLongSide),
+          );
           if (bitmap !== node.image()) {
             node.image(bitmap);
             node.fill(bitmap === undefined ? "#d8d8d8" : "");

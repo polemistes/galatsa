@@ -1,0 +1,102 @@
+{
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:159.0) Gecko/20100101 Firefox/159.0",
+  "rows": [
+    {
+      "sizing": "screen",
+      "zoom": 0.1,
+      "boxes": 600,
+      "differentLineCount": 21,
+      "examples": [
+        {
+          "id": "t0068",
+          "fontPx": 1.8,
+          "konva": 7,
+          "browser": 8
+        },
+        {
+          "id": "t0142",
+          "fontPx": 0.4,
+          "konva": 17,
+          "browser": 16
+        },
+        {
+          "id": "t0152",
+          "fontPx": 2.8000000000000003,
+          "konva": 8,
+          "browser": 9
+        },
+        {
+          "id": "t0160",
+          "fontPx": 0.8,
+          "konva": 11,
+          "browser": 12
+        },
+        {
+          "id": "t0176",
+          "fontPx": 1.3,
+          "konva": 3,
+          "browser": 4
+        }
+      ]
+    },
+    {
+      "sizing": "screen at zoom 1, and scaled at any zoom",
+      "zoom": 1,
+      "boxes": 600,
+      "differentLineCount": 0,
+      "examples": []
+    },
+    {
+      "sizing": "screen",
+      "zoom": 8,
+      "boxes": 600,
+      "differentLineCount": 1,
+      "examples": [
+        {
+          "id": "t0241",
+          "fontPx": 272,
+          "konva": 31,
+          "browser": 32
+        }
+      ]
+    },
+    {
+      "sizing": "screen",
+      "zoom": 40,
+      "boxes": 600,
+      "differentLineCount": 40,
+      "examples": [
+        {
+          "id": "t0028",
+          "fontPx": 4440,
+          "konva": 2,
+          "browser": 1
+        },
+        {
+          "id": "t0030",
+          "fontPx": 3960,
+          "konva": 2,
+          "browser": 1
+        },
+        {
+          "id": "t0047",
+          "fontPx": 2840,
+          "konva": 2,
+          "browser": 1
+        },
+        {
+          "id": "t0134",
+          "fontPx": 3400,
+          "konva": 2,
+          "browser": 1
+        },
+        {
+          "id": "t0145",
+          "fontPx": 5600,
+          "konva": 2,
+          "browser": 1
+        }
+      ]
+    }
+  ]
+}

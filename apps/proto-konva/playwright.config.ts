@@ -44,6 +44,26 @@ export default defineConfig({
       },
     },
     {
+      // Headless Chromium rasterizes canvas in software unless told to use the GPU.
+      // These flags give hardware-accelerated canvas and compositing through ANGLE on
+      // OpenGL (checked on chrome://gpu on a Linux machine with an AMD GPU).
+      name: "chromium-gpu",
+      use: {
+        browserName: "chromium",
+        channel: "chromium",
+        viewport: { width: 1400, height: 1000 },
+        launchOptions: {
+          args: [
+            "--enable-precise-memory-info",
+            "--enable-blink-features=ForceEagerMeasureMemory",
+            "--enable-gpu",
+            "--ignore-gpu-blocklist",
+            "--use-angle=gl",
+          ],
+        },
+      },
+    },
+    {
       name: "firefox",
       use: { browserName: "firefox", viewport: { width: 1400, height: 1000 } },
     },
