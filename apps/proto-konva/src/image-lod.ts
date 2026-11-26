@@ -189,21 +189,24 @@ export class ImageLod {
 
   private pump(): void {
     while (this.active < MAX_CONCURRENT_DECODES && this.queue.length > 0) {
-      // Most recently requested first; drop requests nobody repeated lately.
-      let best = -1;
+      // Drop requests nobody repeated lately, then take the most recently requested.
       for (let i = this.queue.length - 1; i >= 0; i--) {
         const q = this.queue[i]!;
         const l = q.entry.levels[q.level]!;
         if (this.frame - l.lastUsed > STALE_FRAMES) {
           l.state = "none";
           this.queue.splice(i, 1);
-          continue;
         }
-        if (
-          best < 0 ||
-          l.lastUsed > this.queue[best]!.entry.levels[this.queue[best]!.level]!.lastUsed
-        )
+      }
+      let best = -1;
+      let bestUsed = -Infinity;
+      for (let i = 0; i < this.queue.length; i++) {
+        const q = this.queue[i]!;
+        const used = q.entry.levels[q.level]!.lastUsed;
+        if (used >= bestUsed) {
           best = i;
+          bestUsed = used;
+        }
       }
       if (best < 0) return;
       const [q] = this.queue.splice(best, 1);

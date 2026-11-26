@@ -16,10 +16,15 @@ import { RESULTS_DIR } from "./playground.ts";
 // BENCH_QUERY adds query parameters to the page (for example "maxImage=256"), and
 // names the result files after them.
 const extra = process.env["BENCH_QUERY"] ?? "";
+// BENCH_DPR sets the device pixel ratio (default 1), also named in the files.
+const dpr = Number(process.env["BENCH_DPR"] ?? "1");
+test.use({ deviceScaleFactor: dpr });
 
 test("camera run with the Konva engine", async ({ page }, testInfo) => {
   const name =
-    testInfo.project.name + (extra ? `-${extra.replace(/[^a-z0-9]+/gi, "-")}` : "");
+    testInfo.project.name +
+    (dpr !== 1 ? `-dpr${dpr}` : "") +
+    (extra ? `-${extra.replace(/[^a-z0-9]+/gi, "-")}` : "");
   test.setTimeout(10 * 60_000);
   await page.goto(`/?engine=konva${extra ? `&${extra}` : ""}`);
   await expect(page.getByRole("status")).toBeVisible();
