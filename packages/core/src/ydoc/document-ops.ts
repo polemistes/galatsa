@@ -59,14 +59,64 @@ export interface TidySummary {
   other: number;
 }
 
-function dropUnknownKeys(record: Y.Map<unknown>, known: readonly string[]): number {
-  let dropped = 0;
-  for (const key of [...record.keys()]) {
-    if (known.includes(key)) continue;
-    record.delete(key);
-    dropped++;
+/** The shared types directly inside a shared type. */
+function childTypes(type: Y.AbstractType<unknown>): Y.AbstractType<unknown>[] {
+  const out: unknown[] = [];
+  if (type instanceof Y.Map) out.push(...(type as Y.Map<unknown>).values());
+  else if (type instanceof Y.Array) out.push(...(type as Y.Array<unknown>).toArray());
+  else if (type instanceof Y.XmlFragment) out.push(...type.toArray());
+  if (type instanceof Y.Text) {
+    for (const op of type.toDelta() as Array<{ insert: unknown }>) out.push(op.insert);
   }
-  return dropped;
+  if (type instanceof Y.Text || type instanceof Y.XmlElement) {
+    out.push(...Object.values(type.getAttributes() as Record<string, unknown>));
+  }
+  return out.filter((v): v is Y.AbstractType<unknown> => v instanceof Y.AbstractType);
+}
+
+/** Levels of nested shared types Yjs can safely delete in one go. */
+const SAFE_DEPTH = 32;
+
+/**
+ * Empties a value that is about to be deleted, if it is nested deeper than Yjs
+ * can delete at once. Yjs deletes and garbage-collects nested shared types by
+ * recursion, and a structure nested thousands of levels deep (only a faulty peer
+ * makes one) would overflow the stack. So such a value is emptied from the
+ * deepest level upwards, a few levels per transaction.
+ */
+function emptyDeep(doc: Y.Doc, value: unknown): void {
+  if (!(value instanceof Y.AbstractType)) return;
+  const levels: Y.AbstractType<unknown>[][] = [];
+  const stack: Array<[Y.AbstractType<unknown>, number]> = [
+    [value as Y.AbstractType<unknown>, 0],
+  ];
+  while (stack.length > 0) {
+    const [type, depth] = stack.pop()!;
+    (levels[depth] ??= []).push(type);
+    for (const child of childTypes(type)) stack.push([child, depth + 1]);
+  }
+  for (let top = levels.length; top > SAFE_DEPTH; top -= SAFE_DEPTH) {
+    doc.transact(() => {
+      for (let depth = top - 1; depth >= top - SAFE_DEPTH && depth > 0; depth--) {
+        for (const type of levels[depth]!) {
+          if (type instanceof Y.Map) for (const key of [...type.keys()]) type.delete(key);
+          else if (type instanceof Y.Array) type.delete(0, type.length);
+          else if (type instanceof Y.Text) type.delete(0, type.length);
+          else if (type instanceof Y.XmlFragment) type.delete(0, type.length);
+        }
+      }
+    }, ORIGIN.tidy);
+  }
+}
+
+function unknownKeys(record: Y.Map<unknown>, known: readonly string[]): string[] {
+  return [...record.keys()].filter((key) => !known.includes(key));
+}
+
+function dropUnknownKeys(record: Y.Map<unknown>, known: readonly string[]): number {
+  const keys = unknownKeys(record, known);
+  for (const key of keys) record.delete(key);
+  return keys.length;
 }
 
 function clearMap(value: unknown): void {
@@ -122,6 +172,29 @@ export function tidyUp(doc: Y.Doc): TidySummary {
   for (const [id, record] of r.stops.entries()) stopFates.set(id, removed(id, record));
   const routeFates = new Map<string, Fate>();
   for (const [id, record] of r.routes.entries()) routeFates.set(id, removed(id, record));
+
+  // What is about to be deleted is emptied first where it is nested too deep.
+  const doomed = (
+    table: Y.Map<unknown>,
+    list: Map<string, Fate>,
+    known: readonly string[],
+  ) => {
+    for (const [id, fate] of list) {
+      const record = table.get(id);
+      if (fate !== "keep" && fate !== "marker") emptyDeep(doc, record);
+      else if (record instanceof Y.Map) {
+        for (const key of unknownKeys(record as Y.Map<unknown>, known))
+          emptyDeep(doc, (record as Y.Map<unknown>).get(key));
+        if (fate === "marker") {
+          emptyDeep(doc, (record as Y.Map<unknown>).get("data"));
+          emptyDeep(doc, (record as Y.Map<unknown>).get("ext"));
+        }
+      }
+    }
+  };
+  doomed(r.elements as Y.Map<unknown>, fates, RECORD_KEYS.elements);
+  doomed(r.stops as Y.Map<unknown>, stopFates, RECORD_KEYS.stops);
+  doomed(r.routes as Y.Map<unknown>, routeFates, RECORD_KEYS.routes);
 
   doc.transact(() => {
     for (const [id, fate] of fates) {

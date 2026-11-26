@@ -610,6 +610,10 @@ describe("review 2: operations cannot write what a file cannot hold", () => {
       expect(nestingDepth(snapshot, 10_000)).toBeLessThanOrEqual(MAX_DEPTH);
       expect(JSON.stringify(snapshot)).toContain("nested too deep");
       expect(toSnapshot(fromSnapshot(snapshot))).toEqual(snapshot);
+      // Tidy up can remove it, although Yjs deletes nested types by recursion.
+      deleteElements(d, ["X"]);
+      expect(tidyUp(d).elements).toBe(1);
+      expect(d.getMap("elements").has("X")).toBe(false);
     }
   });
 });
