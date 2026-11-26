@@ -85,10 +85,33 @@ Element types from extensions draw themselves through a small drawing context th
 
 ## Risks and open points
 
-- **Memory in WebKitGTK.** In a trial run of the desktop shell under a virtual display, both canvas prototypes used about 6 GB in the Linux system web engine, against 1.2–1.5 GB in Chromium. The scene's images need 5.6 GB when decoded at full size, so the likely cause is that this engine decodes and keeps full-size images where Chromium decodes at reduced size. This is a hypothesis, not yet verified. Storing reduced-size levels with the document, as required above, removes the need to decode originals at all. If memory or speed in WebKitGTK still falls short with the real renderer, the Linux desktop app uses Electron instead of Tauri.
+- **WebKitGTK is slower than Chromium, and decoding originals is what breaks it.** See "Measurement in WebKitGTK" below. Storing reduced-size levels with the document, as required above, removes the need to decode originals. If speed in WebKitGTK still falls short with the real renderer, the Linux desktop app uses Electron instead of Tauri.
 - **Rich text.** Mixed styles within a text box, right-to-left text and full Unicode line breaking are the expensive part of owning text layout. To be evaluated first: letting the browser lay the text out in a hidden element at the reference size, reading the line boxes from it, and drawing those lines on the canvas. That would give the browser's line breaking and bidirectional text without a layout library. Not verified.
 - **Accessibility.** A canvas is invisible to screen readers. The plan is a hidden DOM mirror of the visible text, kept in sync with the canvas. Not built in the first version.
 - **Input methods.** Composition was tested in Chromium through the DevTools protocol only, not with a real input-method window and not in WebKit.
+
+## Measurement in WebKitGTK
+
+After the decision, the three prototypes were run in the desktop shell on a real display (Arch Linux, WebKitGTK 2.54.3, Radeon 780M, 60 Hz, 960×540 stage, second version of the meter, two timing runs per engine). WebKitGTK is the web engine the Linux desktop app uses.
+
+|                                              | A: Konva        | B: Canvas 2D       | C: DOM                                   |
+| -------------------------------------------- | --------------- | ------------------ | ---------------------------------------- |
+| Frames over 16.7 ms, of 2,775                | 260–267 (9.5 %) | 1,031–1,072 (38 %) | 621–654 (23 %)                           |
+| Frames over 33 ms                            | 202 (7.3 %)     | 275–279 (10 %)     | 502–539 (19 %)                           |
+| Frames over 100 ms                           | 78–79           | 50–51              | 341–387                                  |
+| `render()` time while the camera moves, mean | 3.8 ms          | 12.1 ms            | 1.3 ms (most cost is outside `render()`) |
+| Whole run, ideal 46 s                        | 61 s            | 66 s               | 107–117 s                                |
+| Process memory, peak while loading           | 5.9 GB          | 6.4 GB             | 1.2 GB                                   |
+| Process memory during the run, last third    | 0.9 GB          | 1.3 GB             | 1.3 GB                                   |
+
+What this shows:
+
+- **The choice holds.** The DOM prototype is far behind in this engine too, with seven times as many frames over 100 ms as the canvas prototype.
+- **The 6 GB is a peak while loading, not steady use.** Both canvas prototypes decode all 200 originals when they load, to make thumbnails. Memory climbs to about the size of the fully decoded scene (5.6 GB) and falls back when loading ends. During the run they use 1–2.5 GB. The DOM prototype re-encodes small versions and lets the originals go, and never shows the peak.
+- **The frames over 100 ms come from decoding, not drawing.** In every one of them `render()` took under 50 ms. They cluster where new images come into view, in both canvas prototypes.
+- **Drawing is several times slower than in Chromium.** The canvas prototype spends 12 ms per moving frame in `render()` here, against about 2.5 ms in Chromium. The Konva prototype spends 3.8 ms on the same scene, so part of this is something our prototype does that WebKitGTK handles badly, not a limit of Canvas 2D. Finding it is the first job of the real renderer.
+
+No prototype meets the targets in WebKitGTK as it stands. The two causes found (decoding originals, and an expensive drawing path) are both addressed by the requirements above. Whether that is enough for 60 frames per second in WebKitGTK is open and is measured again with the real renderer.
 
 ## Rejected alternatives
 
