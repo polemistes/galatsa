@@ -14,9 +14,6 @@ const gitignore = includeIgnoreFile(
 
 export default tseslint.config(
   gitignore,
-  {
-    ignores: ["**/.vite/**", "pnpm-lock.yaml", "target/**"],
-  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
