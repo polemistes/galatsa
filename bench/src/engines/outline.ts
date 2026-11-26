@@ -97,6 +97,15 @@ export function createOutlineEngine(): BenchEngine {
       // Lines are always drawn at device resolution, so "text" is always sharp.
       reportTextSharp();
     },
+    snapshot() {
+      const source = canvas;
+      if (source === undefined) return Promise.reject(new Error("Not loaded"));
+      return new Promise<Blob>((resolve, reject) =>
+        source.toBlob((blob) =>
+          blob !== null ? resolve(blob) : reject(new Error("Snapshot failed")),
+        ),
+      );
+    },
     dispose() {
       canvas?.remove();
       canvas = undefined;

@@ -7,18 +7,28 @@
 //   import { startHarness } from "@galatsa/bench/harness";
 //   startHarness({ root: document.body, engines: [{ id: "x", create: createXEngine }] });
 //
+// The drawing area (stage) is fixed at the top-left corner of the window, so that it
+// never moves between runs; the controls and the text sit below it. A run refuses to
+// start unless the whole stage is inside the window.
+//
 // Query parameters, for automated runs (a desktop shell, a test):
 //   engine=<id>     engine to select (default: the first)
-//   runs=1|2        start this many runs as soon as the page has loaded
-//   width, height   viewport in CSS pixels (default 1280 x 720)
+//   runs=<n>        start this many runs as soon as the page has loaded
+//   capture=1       with runs=<n>: pause at the end of each hold and keep an image
+//   width, height   stage size in CSS pixels (default 960 x 540, see camera.ts)
 //   memory=0        skip measureUserAgentSpecificMemory()
 //
-// The page also exposes window.galatsaBench (see HarnessApi) for scripts.
+// For scripts and hosts, the page sets window.galatsaBench (see HarnessApi) and
+// dispatches every BenchEvent as a "galatsa-bench" CustomEvent on window. A host
+// that can take screenshots may set window.galatsaBenchHostCapture (see below); it
+// is used in capture runs for engines without snapshot().
 
+import { REFERENCE_VIEWPORT } from "../camera.ts";
 import type { BenchEngine } from "../engine.ts";
 import { type ImageStore, prepareImages } from "../image-store.ts";
-import { type BenchResult, formatSummary } from "../result.ts";
-import { runBenchmark } from "../runner.ts";
+import type { ExternalMemorySampler } from "../memory.ts";
+import { type BenchResult, type Capture, formatSummary } from "../result.ts";
+import { type BenchEvent, type CaptureFunction, runBenchmark } from "../runner.ts";
 import { generateScene } from "../scene.ts";
 import { type Comparison, compareRuns } from "../stats.ts";
 import { STRINGS } from "../strings.ts";
@@ -36,19 +46,45 @@ export interface HarnessOptions {
 
 export interface HarnessOutput {
   readonly results: readonly BenchResult[];
+  /** First against last run, when there were two or more. */
   readonly comparison: Comparison | null;
+}
+
+export interface HarnessRunOptions {
+  /** Pause at the end of each hold and keep an image of the stage. */
+  readonly capture?: boolean;
 }
 
 export interface HarnessApi {
   /** Runs `runs` times in a row (1 or more) with the given or selected engine. */
-  run(runs?: number, engineId?: string): Promise<HarnessOutput>;
+  run(
+    runs?: number,
+    engineId?: string,
+    options?: HarnessRunOptions,
+  ): Promise<HarnessOutput>;
   /** The output of the last finished run, or null. */
   readonly lastOutput: HarnessOutput | null;
+  /** Every event of every run since the page loaded. */
+  readonly events: readonly BenchEvent[];
+  /**
+   * Sets an external memory sampler (for example a desktop shell reading its process
+   * memory) for the next runs; null removes it.
+   */
+  setMemorySampler(sampler: ExternalMemorySampler | null): void;
 }
+
+/** Host screenshot of the stage; returns a data: URL or Blob, or null. */
+export type HostCapture = (stage: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) => Promise<string | Blob | null>;
 
 declare global {
   interface Window {
     galatsaBench?: HarnessApi;
+    galatsaBenchHostCapture?: HostCapture;
   }
 }
 
@@ -66,13 +102,25 @@ function positiveInt(value: string | null, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the image"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 function comparisonText(comparison: Comparison): string {
   return [
-    STRINGS.comparisonTitle(comparison.tolerance, comparison.agree),
-    ...comparison.metrics.map((m) =>
-      STRINGS.comparisonRow(m.name, m.a, m.b, m.relativeDifference, m.decisive),
+    STRINGS.comparisonTitle(comparison.agree),
+    ...comparison.verdicts.map((v) =>
+      STRINGS.comparisonVerdictRow(v.target, v.a, v.b, v.valueA, v.valueB),
     ),
-    STRINGS.comparisonFootnote,
+    STRINGS.comparisonDeltasTitle(comparison.tolerance),
+    ...comparison.metrics.map((m) =>
+      STRINGS.comparisonRow(m.name, m.a, m.b, m.allowed, m.withinTolerance),
+    ),
   ].join("\n");
 }
 
@@ -81,12 +129,31 @@ export function startHarness(options: HarnessOptions): HarnessApi {
   if (engines.length === 0) throw new Error("startHarness needs at least one engine");
   const params = new URLSearchParams(location.search);
   const viewport = {
-    width: positiveInt(params.get("width"), 1280),
-    height: positiveInt(params.get("height"), 720),
+    width: positiveInt(params.get("width"), REFERENCE_VIEWPORT.width),
+    height: positiveInt(params.get("height"), REFERENCE_VIEWPORT.height),
   };
   const measureMemory = params.get("memory") !== "0";
 
   document.title = STRINGS.pageTitle;
+
+  // The stage: fixed in the window, independent of the text below.
+  const stage = element("div");
+  stage.className = "stage";
+  stage.style.position = "fixed";
+  stage.style.left = "0";
+  stage.style.top = "0";
+  stage.style.width = `${viewport.width}px`;
+  stage.style.height = `${viewport.height}px`;
+  // Above everything else on the page, so that nothing can be drawn over it.
+  stage.style.zIndex = "2147483647";
+  stage.style.background = "#fff";
+
+  const panel = element("div");
+  panel.className = "panel";
+  panel.style.position = "absolute";
+  panel.style.left = "12px";
+  panel.style.right = "12px";
+  panel.style.top = `${viewport.height + 12}px`;
   const controls = element("div");
   controls.className = "controls";
   const label = element("label", `${STRINGS.engineLabel} `);
@@ -102,25 +169,42 @@ export function startHarness(options: HarnessOptions): HarnessApi {
   label.append(select);
   const runButton = element("button", STRINGS.runButton);
   const runTwiceButton = element("button", STRINGS.runTwiceButton);
+  const captureButton = element("button", STRINGS.captureButton);
   const downloadButton = element("button", STRINGS.downloadButton);
   downloadButton.disabled = true;
-  controls.append(label, runButton, runTwiceButton, downloadButton);
+  controls.append(label, runButton, runTwiceButton, captureButton, downloadButton);
   const status = element("p", STRINGS.statusIdle);
   status.setAttribute("role", "status");
   const output = element("pre");
-  const stage = element("div");
-  stage.className = "stage";
-  root.append(controls, status, output, stage);
+  panel.append(controls, status, output);
+  root.append(stage, panel);
+
+  const stageFits = () =>
+    viewport.width <= document.documentElement.clientWidth &&
+    viewport.height <= document.documentElement.clientHeight;
+  if (!stageFits())
+    status.textContent = STRINGS.stageNotVisible(viewport.width, viewport.height);
 
   const scene = generateScene();
   let images: Promise<ImageStore> | undefined;
   let busy = false;
   let lastOutput: HarnessOutput | null = null;
+  let memorySampler: ExternalMemorySampler | undefined;
+  const events: BenchEvent[] = [];
+
+  // During a run the page is scrolled to the top and cannot scroll, so that the
+  // stage and the panel stay where they are.
+  const lockScroll = (locked: boolean) => {
+    if (locked) window.scrollTo(0, 0);
+    document.documentElement.style.overflow = locked ? "hidden" : "";
+  };
 
   const setBusy = (value: boolean) => {
     busy = value;
+    lockScroll(value);
     runButton.disabled = value;
     runTwiceButton.disabled = value;
+    captureButton.disabled = value;
     select.disabled = value;
     downloadButton.disabled = value || lastOutput === null;
     root.dataset["benchState"] = value
@@ -130,12 +214,44 @@ export function startHarness(options: HarnessOptions): HarnessApi {
         : "idle";
   };
 
-  const run = async (runs = 1, engineId = select.value): Promise<HarnessOutput> => {
+  const makeCapture =
+    (engine: BenchEngine): CaptureFunction =>
+    async (hold) => {
+      let image: Blob | string | null = null;
+      let by: Capture["by"] = "engine";
+      if (engine.snapshot !== undefined) {
+        image = await engine.snapshot();
+      } else if (window.galatsaBenchHostCapture !== undefined) {
+        by = "host";
+        const rect = stage.getBoundingClientRect();
+        image = await window.galatsaBenchHostCapture({
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+        });
+      }
+      if (image === null) return null;
+      const dataUrl = typeof image === "string" ? image : await blobToDataUrl(image);
+      return { label: hold.label, frame: hold.frame, by, dataUrl };
+    };
+
+  const run = async (
+    runs = 1,
+    engineId = select.value,
+    runOptions: HarnessRunOptions = {},
+  ): Promise<HarnessOutput> => {
     if (busy) throw new Error("A run is already in progress");
-    const engine = engines.find((e) => e.id === engineId);
-    if (engine === undefined) throw new Error(`Unknown engine ${engineId}`);
+    const entry = engines.find((e) => e.id === engineId);
+    if (entry === undefined) throw new Error(`Unknown engine ${engineId}`);
+    // Refuse at once, before generating images, if the stage cannot fit.
+    if (!stageFits()) {
+      const message = STRINGS.stageNotVisible(viewport.width, viewport.height);
+      status.textContent = STRINGS.statusFailed(message);
+      throw new Error(message);
+    }
     setBusy(true);
-    output.textContent = "";
+    output.textContent = runOptions.capture === true ? STRINGS.capturesNote : "";
     try {
       images ??= prepareImages(scene, (done, total) => {
         status.textContent = STRINGS.statusGenerating(done, total);
@@ -146,28 +262,40 @@ export function startHarness(options: HarnessOptions): HarnessApi {
       const store = await images;
       const results: BenchResult[] = [];
       for (let i = 0; i < runs; i++) {
+        const engine = entry.create();
         const result = await runBenchmark({
-          engine: engine.create(),
+          engine,
           container: stage,
           images: store,
           scene,
           viewport,
           measureMemory,
-          onPhase: (phase) => {
-            status.textContent =
-              phase === "memory"
-                ? STRINGS.statusMeasuringMemory
-                : phase === "load"
-                  ? STRINGS.statusLoading
-                  : STRINGS.statusRunning(i + 1, runs);
+          ...(memorySampler !== undefined ? { memorySampler } : {}),
+          ...(runOptions.capture === true ? { capture: makeCapture(engine) } : {}),
+          onEvent: (event) => {
+            events.push(event);
+            window.dispatchEvent(new CustomEvent("galatsa-bench", { detail: event }));
+            // Status text changes only outside the timed frames.
+            if (event.type === "settle-start")
+              status.textContent = STRINGS.statusSettling;
+            else if (event.type === "calibrate-start")
+              status.textContent = STRINGS.statusCalibrating;
+            else if (event.type === "load-start")
+              status.textContent = STRINGS.statusLoading;
+            else if (event.type === "load-end")
+              status.textContent = STRINGS.statusRunning(i + 1, runs);
+            else if (event.type === "run-end")
+              status.textContent = STRINGS.statusMeasuringMemory;
           },
         });
         results.push(result);
         output.textContent = results.map(formatSummary).join("\n\n");
       }
+      const first = results[0];
+      const last = results[results.length - 1];
       const comparison =
-        results.length >= 2
-          ? compareRuns(results[0]!, results[results.length - 1]!)
+        results.length >= 2 && first !== undefined && last !== undefined
+          ? compareRuns(first.verdictInputs, last.verdictInputs)
           : null;
       if (comparison !== null) output.textContent += `\n\n${comparisonText(comparison)}`;
       lastOutput = { results, comparison };
@@ -202,6 +330,9 @@ export function startHarness(options: HarnessOptions): HarnessApi {
   const ignore = () => {};
   runButton.addEventListener("click", () => run(1).catch(ignore));
   runTwiceButton.addEventListener("click", () => run(2).catch(ignore));
+  captureButton.addEventListener("click", () =>
+    run(1, select.value, { capture: true }).catch(ignore),
+  );
   downloadButton.addEventListener("click", download);
   setBusy(false);
 
@@ -210,10 +341,16 @@ export function startHarness(options: HarnessOptions): HarnessApi {
     get lastOutput() {
       return lastOutput;
     },
+    events,
+    setMemorySampler(sampler) {
+      memorySampler = sampler ?? undefined;
+    },
   };
   window.galatsaBench = api;
 
   const autorun = positiveInt(params.get("runs"), 0);
-  if (autorun > 0) run(autorun).catch(ignore);
+  if (autorun > 0) {
+    run(autorun, select.value, { capture: params.get("capture") === "1" }).catch(ignore);
+  }
   return api;
 }

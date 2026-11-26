@@ -30,12 +30,12 @@ The two-week rule covers only the dependencies the project chooses and bundles (
 
 Other scripts:
 
-| Script        | What it does                                                                                                                                                                                                                                                             |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm build`  | Builds all packages that have a `build` script                                                                                                                                                                                                                           |
-| `pnpm test`   | Runs unit tests with Vitest                                                                                                                                                                                                                                              |
-| `pnpm e2e`    | Runs end-to-end tests with Playwright. Needs `pnpm --filter @galatsa/e2e exec playwright install chromium` the first time. Not part of `pnpm check`. Includes the benchmark repeatability check, which takes about two minutes (see [bench/README.md](bench/README.md)). |
-| `pnpm format` | Formats the repository with Prettier                                                                                                                                                                                                                                     |
+| Script        | What it does                                                                                                                                                                                                                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm build`  | Builds all packages that have a `build` script                                                                                                                                                                                                                                                  |
+| `pnpm test`   | Runs unit tests with Vitest                                                                                                                                                                                                                                                                     |
+| `pnpm e2e`    | Runs end-to-end tests with Playwright. Needs `pnpm --filter @galatsa/e2e exec playwright install chromium firefox` the first time. Not part of `pnpm check`. Includes the benchmark meter checks in Chromium and Firefox, which take about 15 minutes (see [bench/README.md](bench/README.md)). |
+| `pnpm format` | Formats the repository with Prettier                                                                                                                                                                                                                                                            |
 
 ## Repository layout
 

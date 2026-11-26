@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Tests the runner's bookkeeping in Node, with a fake animation-frame clock that
-// ticks exactly 16 ms per frame. Real frame timing is tested in a browser (tests/e2e).
+// Tests the runner's bookkeeping in Node, with a fake animation-frame clock whose
+// timestamps advance exactly 1/60 s per frame. Real frame timing is tested in
+// browsers (tests/e2e).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CameraPose, CameraRun } from "./camera.ts";
 import type { BenchEngine, EngineSetup } from "./engine.ts";
 import { createNoopEngine } from "./engines/noop.ts";
-import { runBenchmark } from "./runner.ts";
+import { syntheticBusyMs } from "./engines/synthetic.ts";
+import { type BenchEvent, type RunOptions, runBenchmark } from "./runner.ts";
 import { generateScene } from "./scene.ts";
 
 const scene = generateScene();
@@ -33,20 +35,64 @@ const images = {
   },
 };
 
-function fakeContainer(): HTMLElement {
-  return { style: {}, replaceChildren: () => {} } as unknown as HTMLElement;
+let windowSize = { width: 2000, height: 2000 };
+let lastContainer: unknown;
+let obstructed = false;
+
+function fakeContainer(width = 960, height = 540): HTMLElement {
+  const container = {
+    style: {},
+    replaceChildren: () => {},
+    contains: () => false,
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      right: width,
+      bottom: height,
+      width,
+      height,
+    }),
+  };
+  lastContainer = container;
+  return container as unknown as HTMLElement;
+}
+
+function options(engine: BenchEngine, extra: Partial<RunOptions> = {}): RunOptions {
+  return {
+    engine,
+    container: fakeContainer(),
+    images,
+    scene,
+    cameraRun: shortRun,
+    warmupFrames: 2,
+    calibrationFrames: 10,
+    settle: { minMs: 0, maxMs: 2000 },
+    measureMemory: false,
+    ...extra,
+  };
 }
 
 describe("runBenchmark", () => {
   beforeEach(() => {
     let now = 1000;
+    windowSize = { width: 2000, height: 2000 };
+    obstructed = false;
     vi.stubGlobal("requestAnimationFrame", (callback: (t: number) => void) =>
-      setTimeout(() => callback((now += 16)), 0),
+      setTimeout(() => callback((now += 1000 / 60)), 0),
     );
     vi.stubGlobal("document", {
       visibilityState: "visible",
       addEventListener: () => {},
       removeEventListener: () => {},
+      elementFromPoint: () => (obstructed ? {} : lastContainer),
+      documentElement: {
+        get clientWidth() {
+          return windowSize.width;
+        },
+        get clientHeight() {
+          return windowSize.height;
+        },
+      },
     });
   });
 
@@ -69,61 +115,57 @@ describe("runBenchmark", () => {
         disposed = true;
       },
     };
-    const result = await runBenchmark({
-      engine,
-      container: fakeContainer(),
-      images,
-      scene,
-      cameraRun: shortRun,
-      warmupFrames: 5,
-      measureMemory: false,
-    });
+    const result = await runBenchmark(options(engine, { warmupFrames: 5 }));
     expect(loaded).toBe(true);
     expect(disposed).toBe(true);
     expect(rendered).toHaveLength(5 + 12);
     expect(rendered.slice(0, 5)).toEqual(Array(5).fill(pose(0)));
     expect(rendered.slice(5)).toEqual(shortRun.poses);
-    expect(result.frames.intervalMs).toEqual(Array(12).fill(16));
-    expect(result.frames.callbackIntervalMs).toHaveLength(12);
-    expect(result.stats.callbackInterval.count).toBe(12);
-    expect(result.timings.runMs).toBe(12 * 16);
-    expect(result.stats.interval.p95).toBe(16);
-    expect(result.stats.intervalByKind.hold?.count).toBe(5);
-    expect(result.stats.intervalByKind.pan?.count).toBe(7);
-    expect(result.environment.warmupIntervalMs).toBe(16);
-    expect(result.environment.hiddenDuringRun).toBe(false);
-    expect(result.engine).toBe("recorder");
-    expect(result.scene.elements).toBe(2000);
-    expect(result.memory.userAgentSpecific.available).toBe(false);
-    expect(result.memory.jsHeap.available).toBe(false);
+    for (const t of result.frames.timestampMs) expect(t).toBeCloseTo(1000 / 60, 2);
+    expect(result.frames.frameMs).toHaveLength(12);
+    expect(result.frames.renderMs).toHaveLength(12);
+    expect(result.frames.workMs).toHaveLength(12);
+    for (const w of result.frames.workMs) expect(w).toBeGreaterThan(0);
+    expect(result.frames.excluded).toEqual([]);
+    expect(result.mode).toBe("timing");
+    expect(result.environment.refresh.intervalMs).toBeCloseTo(1000 / 60, 6);
+    expect(result.environment.refresh.attempts).toBe(1);
+    expect(result.environment.settle.framesSteady).toBe(true);
+    expect(result.environment.viewport).toMatchObject({ width: 960, height: 540 });
+    expect(result.environment.stage.fullyVisible).toBe(true);
+    expect(result.environment.stage.unobstructed).toBe(true);
+    const v = result.verdictInputs;
+    expect(v.frames).toBe(12);
+    expect(v.missedRefreshes.thresholdMs).toBeCloseTo(25, 6);
+    expect(v.targets.frames16_7.judgedBy).toBe("work and display");
+    expect(v.targets.memory).toEqual({ peakBytes: null, pass: null });
+    expect(v.problems).toEqual([]);
+    expect(v.valid).toBe(true);
+    expect(result.stats.frameMsByKind.hold?.count).toBe(5);
+    expect(result.stats.frameMsByKind.pan?.count).toBe(7);
+    expect(result.memory.external.available).toBe(false);
+    expect(result.captures).toEqual([]);
     expect(() => JSON.stringify(result)).not.toThrow();
   });
 
-  it("records the text-sharp latency of each hold, or null if never reported", async () => {
-    const noop = await runBenchmark({
-      engine: createNoopEngine(),
-      container: fakeContainer(),
-      images,
-      scene,
-      cameraRun: shortRun,
-      warmupFrames: 2,
-      measureMemory: false,
-    });
+  it("starts the text-sharp clock when the camera stops and stops it a frame after the report", async () => {
+    const noop = await runBenchmark(options(createNoopEngine()));
     expect(noop.textSharp.events.map((e) => e.label)).toEqual([
       "first hold",
       "second hold",
     ]);
     expect(noop.textSharp.events.map((e) => e.frame)).toEqual([4, 10]);
+    // The camera reaches the hold pose in the last frame of the movement.
+    expect(noop.textSharp.events.map((e) => e.stopFrame)).toEqual([3, 9]);
     expect(noop.textSharp.reported).toBe(2);
     for (const event of noop.textSharp.events) {
-      expect(event.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(event.latencyMs).toBeLessThan(50);
+      expect(event.reportMs).not.toBeNull();
+      expect(event.latencyMs!).toBeGreaterThanOrEqual(event.reportMs!);
     }
 
-    // Reports only in the second frame of a hold: the first hold gets a latency,
-    // and so does the second; an engine that never reports gets nulls.
+    // Reports only in frame index 5 (inside the first hold); never in the second.
     let setup: EngineSetup | undefined;
-    let frame = 0;
+    let calls = 0;
     const late: BenchEngine = {
       name: "late",
       load: (s) => {
@@ -131,24 +173,124 @@ describe("runBenchmark", () => {
         return Promise.resolve();
       },
       render: () => {
-        frame++;
-        if (frame === 2 + 6) setup!.reportTextSharp(); // warm-up 2, then frame index 5
+        calls++;
+        if (calls === 2 + 6) setup!.reportTextSharp(); // warm-up 2, then frame index 5
       },
       dispose: () => {},
     };
-    const lateResult = await runBenchmark({
-      engine: late,
-      container: fakeContainer(),
-      images,
-      scene,
-      cameraRun: shortRun,
-      warmupFrames: 2,
-      measureMemory: false,
-    });
+    const lateResult = await runBenchmark(options(late));
     expect(lateResult.textSharp.events[0]!.latencyMs).not.toBeNull();
     expect(lateResult.textSharp.events[1]!.latencyMs).toBeNull();
-    expect(lateResult.textSharp.reported).toBe(1);
     expect(lateResult.textSharp.missing).toBe(1);
+    expect(lateResult.verdictInputs.targets.textSharp.pass).toBe(false);
+  });
+
+  it("emits phase and hold events in order, and polls the host's memory sampler", async () => {
+    const events: BenchEvent[] = [];
+    let bytes = 100;
+    const result = await runBenchmark(
+      options(createNoopEngine(), {
+        onEvent: (e) => events.push(e),
+        memorySampler: {
+          source: "test",
+          intervalMs: 1,
+          sample: () => Promise.resolve((bytes += 10)),
+        },
+      }),
+    );
+    expect(events.map((e) => e.type)).toEqual([
+      "settle-start",
+      "settle-end",
+      "calibrate-start",
+      "calibrate-end",
+      "load-start",
+      "load-end",
+      "run-start",
+      "hold-start",
+      "hold-end",
+      "hold-start",
+      "hold-end",
+      "run-end",
+    ]);
+    expect(events.filter((e) => e.type === "hold-start").map((e) => e.frame)).toEqual([
+      4, 10,
+    ]);
+    const samples = result.memory.external.samples;
+    expect(samples.filter((s) => s.event !== "poll").map((s) => s.event)).toEqual([
+      "load-start",
+      "load-end",
+      "run-start",
+      "hold-start",
+      "hold-start",
+      "run-end",
+    ]);
+    expect(samples.some((s) => s.event === "poll")).toBe(true);
+    const peak = Math.max(...samples.map((s) => s.bytes));
+    expect(result.verdictInputs.peakMemory).toEqual({ bytes: peak, source: "test" });
+    expect(result.verdictInputs.targets.memory).toEqual({ peakBytes: peak, pass: true });
+    expect(result.memory.external.unanswered).toBe(0);
+  });
+
+  it("does not wait forever for a memory sampler that never answers", async () => {
+    const result = await runBenchmark(
+      options(createNoopEngine(), {
+        memorySampler: { source: "stuck", sample: () => new Promise(() => {}) },
+      }),
+    );
+    expect(result.memory.external.unanswered).toBeGreaterThan(0);
+    expect(result.verdictInputs.peakMemory).toBeNull();
+  }, 15000);
+
+  it("pauses for captures at the end of each hold, leaves those frames out and marks the run", async () => {
+    const captured: number[] = [];
+    const result = await runBenchmark(
+      options(createNoopEngine(), {
+        capture: (hold) => {
+          captured.push(hold.frame);
+          return Promise.resolve({
+            label: hold.label,
+            frame: hold.frame,
+            by: "host",
+            dataUrl: "data:,",
+          });
+        },
+      }),
+    );
+    expect(captured).toEqual([6, 11]);
+    expect(result.captures.map((c) => c.frame)).toEqual([6, 11]);
+    expect(result.frames.excluded).toEqual([6, 11]);
+    expect(result.verdictInputs.frames).toBe(10);
+    expect(result.mode).toBe("capture");
+    expect(result.verdictInputs.valid).toBe(false);
+    expect(result.verdictInputs.problems[0]).toMatch(/capture run/);
+  });
+
+  it("refuses to run when the stage is not fully inside the window", async () => {
+    windowSize = { width: 900, height: 600 };
+    let loaded = false;
+    const engine: BenchEngine = {
+      ...createNoopEngine(),
+      load: () => {
+        loaded = true;
+        return Promise.resolve();
+      },
+    };
+    await expect(runBenchmark(options(engine))).rejects.toThrow(
+      /does not fit in the window/,
+    );
+    expect(loaded).toBe(false);
+    const allowed = await runBenchmark(
+      options(createNoopEngine(), { requireVisibleStage: false }),
+    );
+    expect(allowed.environment.stage.fullyVisible).toBe(false);
+    expect(allowed.verdictInputs.valid).toBe(false);
+  });
+
+  it("refuses to run when something covers the stage", async () => {
+    obstructed = true;
+    await expect(runBenchmark(options(createNoopEngine()))).rejects.toThrow(
+      /covers the drawing area/,
+    );
   });
 
   it("disposes the engine and rejects when render() throws", async () => {
@@ -163,16 +305,32 @@ describe("runBenchmark", () => {
         disposed = true;
       },
     };
-    await expect(
-      runBenchmark({
-        engine: broken,
-        container: fakeContainer(),
-        images,
-        scene,
-        cameraRun: shortRun,
-        measureMemory: false,
-      }),
-    ).rejects.toThrow("boom");
+    await expect(runBenchmark(options(broken))).rejects.toThrow("boom");
     expect(disposed).toBe(true);
+  });
+});
+
+describe("syntheticBusyMs", () => {
+  it("is the same for the same frame, in four classes away from the thresholds", () => {
+    const counts = { short: 0, missed: 0, long: 0, stall: 0 };
+    for (let i = 0; i < 2775; i++) {
+      const ms = syntheticBusyMs(i);
+      expect(ms).toBe(syntheticBusyMs(i));
+      const inClass =
+        (ms >= 2 && ms < 12) ||
+        (ms >= 27 && ms < 31) ||
+        (ms >= 48 && ms < 60) ||
+        (ms >= 105 && ms < 130);
+      expect(inClass, String(ms)).toBe(true);
+      if (ms < 12) counts.short++;
+      else if (ms < 31) counts.missed++;
+      else if (ms < 60) counts.long++;
+      else counts.stall++;
+    }
+    expect(counts.short / 2775).toBeCloseTo(0.7, 1);
+    expect(counts.missed / 2775).toBeCloseTo(0.2, 1);
+    expect(counts.long).toBeGreaterThan(200);
+    expect(counts.stall).toBeGreaterThan(3);
+    expect(syntheticBusyMs(1)).not.toBe(syntheticBusyMs(2));
   });
 });
