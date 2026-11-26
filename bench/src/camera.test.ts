@@ -16,7 +16,7 @@ import { generateScene } from "./scene.ts";
 
 // Pinned hash of the default run, with poses rounded to 9 significant digits, so
 // that last-bit differences between JavaScript engines do not change it.
-const DEFAULT_RUN_HASH = "6e7ec1fc";
+const DEFAULT_RUN_HASH = "ff1b76c9";
 
 const scene = generateScene();
 const run = createCameraRun(scene);

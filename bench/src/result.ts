@@ -10,16 +10,25 @@ import { type FrameStats, frameStats, type VerdictInputs } from "./stats.ts";
 import { STRINGS } from "./strings.ts";
 
 export const RESULT_FORMAT = "galatsa-bench-result";
-/** 2: wall-clock frame times as the primary measure, verdictInputs, captures. */
-export const RESULT_VERSION = 2;
+/**
+ * 2: wall-clock frame times, verdictInputs, captures.
+ * 3: per-frame main-thread work time, targets judged on any refresh rate, run mode,
+ *    memory verdict from the host sampler only.
+ */
+export const RESULT_VERSION = 3;
 
 export interface TextSharpEvent {
   /** Label of the hold segment in which the camera stood still. */
   readonly label: string;
-  /** First frame of the hold. */
+  /** First frame of the hold segment. */
   readonly frame: number;
   /**
-   * Milliseconds from just before render() of the first still frame to the start of
+   * The frame in which the camera reached its final pose: the last frame of the
+   * movement before the hold. The clock starts there.
+   */
+  readonly stopFrame: number;
+  /**
+   * Milliseconds from just before render() of the stop frame to the start of
    * the first animation frame after the engine's first reportTextSharp() call, that
    * is, after the browser has had a chance to show what the engine drew. At least
    * one refresh interval. Null if the engine did not report before the camera moved.
@@ -51,12 +60,22 @@ export interface StageInfo {
   readonly windowHeight: number;
   /** True if the whole stage was inside the window at the start and at the end. */
   readonly fullyVisible: boolean;
+  /**
+   * True if nothing covered the stage at the start and at the end (checked with
+   * elementFromPoint at its centre and corners).
+   */
+  readonly unobstructed: boolean;
 }
 
 export interface BenchResult {
   readonly format: typeof RESULT_FORMAT;
   readonly version: typeof RESULT_VERSION;
   readonly engine: string;
+  /**
+   * "timing" for a normal run; "capture" for a run paused at each hold for images,
+   * which is never valid for decisions.
+   */
+  readonly mode: "timing" | "capture";
   /** Wall-clock start time (ISO 8601). Metadata only. */
   readonly startedAt: string;
   /** The numbers to judge the engine by. See VerdictInputs in stats.ts. */
@@ -69,15 +88,25 @@ export interface BenchResult {
     /** Smallest step of performance.now() seen; frame times are no finer than this. */
     readonly timerResolutionMs: number;
     readonly refresh: {
-      /** Trimmed mean of animation-frame timestamp differences while idle. */
+      /** Before the run (see estimateRefresh in stats.ts). */
       readonly intervalMs: number;
       readonly rateHz: number;
-      /** Median of the same differences, to show how regular the display clock is. */
       readonly medianMs: number;
+      /** Share of calibration samples within 25 % of the median. */
+      readonly stableShare: number;
       readonly samples: number;
+      /** Calibration attempts needed to get a steady estimate (at most 3). */
+      readonly attempts: number;
+      /** Measured again after the run; a change of more than 3 % is a problem. */
+      readonly afterRunMs: number;
     };
-    /** Time waited before the run for the page to become idle. */
-    readonly settle: { readonly ms: number; readonly idleDetected: boolean };
+    /** Time waited before the run for the page to become idle and frames steady. */
+    readonly settle: {
+      readonly ms: number;
+      /** Null where the browser has no requestIdleCallback. */
+      readonly idleDetected: boolean | null;
+      readonly framesSteady: boolean;
+    };
     readonly hiddenDuringRun: boolean;
     readonly resizedDuringRun: boolean;
   };
@@ -96,6 +125,12 @@ export interface BenchResult {
   /** Per frame, in run order. */
   readonly frames: {
     /**
+     * Main-thread time of this frame: from the start of its animation-frame callback
+     * to the first task after the browser's rendering step (render(), style, layout,
+     * paint). Not rounded to display refreshes.
+     */
+    readonly workMs: readonly number[];
+    /**
      * Wall-clock time from the start of this frame's animation-frame callback to the
      * start of the next one. The primary frame time.
      */
@@ -109,6 +144,7 @@ export interface BenchResult {
   };
   readonly stats: {
     readonly frameMs: FrameStats;
+    readonly workMs: FrameStats;
     readonly timestampMs: FrameStats;
     readonly renderMs: FrameStats;
     /** Wall-clock frame times grouped by segment kind. */
@@ -168,25 +204,27 @@ export function summarizeTextSharp(
 export function formatSummary(result: BenchResult): string {
   const s = STRINGS.summary;
   const v = result.verdictInputs;
+  const t = v.targets;
   const env = result.environment;
   const lines = [
-    s.run(result.engine, v.frames, result.timings.runMs, v.loadMs),
+    s.run(result.engine, result.mode, v.frames, result.timings.runMs, v.loadMs),
     s.refresh(v.refreshIntervalMs, v.refreshRateHz),
-    s.missed(v.missedFrames.count, v.missedFrames.ratio, v.missedFrames.thresholdMs),
-    s.long(v.longFrames.count, v.longFrames.ratio, v.longFrames.thresholdMs),
-    s.at60Hz(v.missedFrames60Hz.ratio, v.longFrames60Hz.ratio),
-    s.stalls(v.stalls.count, v.frameMs.max),
-    s.frame(v.frameMs.mean, v.frameMs.p50, v.frameMs.p95, v.frameMs.p99),
-    s.render(v.renderMs.p50, v.renderMs.p95, v.renderMs.p99, v.renderMs.max),
+    s.frameTarget(t.frames16_7),
+    s.frameTarget(t.frames33),
+    s.stalls(t.stalls.count, t.stalls.pass, v.frameMs.max),
     s.textSharp(
       result.textSharp.reported,
-      v.textSharp.missing,
+      t.textSharp.missing,
       v.textSharp.p50Ms,
-      v.textSharp.maxMs,
+      t.textSharp.maxMs,
+      t.textSharp.pass,
     ),
-    v.peakMemory === null
+    t.memory.pass === null
       ? s.memoryUnavailable
-      : s.memory(v.peakMemory.bytes, v.peakMemory.source),
+      : s.memory(t.memory.peakBytes ?? 0, t.memory.pass),
+    s.refreshes(v.missedRefreshes.count, v.missedRefreshes.ratio, v.longRefreshes.count),
+    s.frame(v.frameMs.mean, v.frameMs.p95, v.workMs.p50, v.workMs.p95, v.workMs.max),
+    s.render(v.renderMs.p50, v.renderMs.p95, v.renderMs.max),
     s.environment(
       env.viewport.width,
       env.viewport.height,

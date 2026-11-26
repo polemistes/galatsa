@@ -15,7 +15,7 @@
 //   engine=<id>     engine to select (default: the first)
 //   runs=<n>        start this many runs as soon as the page has loaded
 //   capture=1       with runs=<n>: pause at the end of each hold and keep an image
-//   width, height   stage size in CSS pixels (default 1280 x 720)
+//   width, height   stage size in CSS pixels (default 960 x 540, see camera.ts)
 //   memory=0        skip measureUserAgentSpecificMemory()
 //
 // For scripts and hosts, the page sets window.galatsaBench (see HarnessApi) and
@@ -23,6 +23,7 @@
 // that can take screenshots may set window.galatsaBenchHostCapture (see below); it
 // is used in capture runs for engines without snapshot().
 
+import { REFERENCE_VIEWPORT } from "../camera.ts";
 import type { BenchEngine } from "../engine.ts";
 import { type ImageStore, prepareImages } from "../image-store.ts";
 import type { ExternalMemorySampler } from "../memory.ts";
@@ -112,11 +113,14 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 
 function comparisonText(comparison: Comparison): string {
   return [
-    STRINGS.comparisonTitle(comparison.tolerance, comparison.agree),
-    ...comparison.metrics.map((m) =>
-      STRINGS.comparisonRow(m.name, m.a, m.b, m.allowed, m.decisive),
+    STRINGS.comparisonTitle(comparison.agree),
+    ...comparison.verdicts.map((v) =>
+      STRINGS.comparisonVerdictRow(v.target, v.a, v.b, v.valueA, v.valueB),
     ),
-    STRINGS.comparisonFootnote,
+    STRINGS.comparisonDeltasTitle(comparison.tolerance),
+    ...comparison.metrics.map((m) =>
+      STRINGS.comparisonRow(m.name, m.a, m.b, m.allowed, m.withinTolerance),
+    ),
   ].join("\n");
 }
 
@@ -125,8 +129,8 @@ export function startHarness(options: HarnessOptions): HarnessApi {
   if (engines.length === 0) throw new Error("startHarness needs at least one engine");
   const params = new URLSearchParams(location.search);
   const viewport = {
-    width: positiveInt(params.get("width"), 1280),
-    height: positiveInt(params.get("height"), 720),
+    width: positiveInt(params.get("width"), REFERENCE_VIEWPORT.width),
+    height: positiveInt(params.get("height"), REFERENCE_VIEWPORT.height),
   };
   const measureMemory = params.get("memory") !== "0";
 
@@ -140,6 +144,9 @@ export function startHarness(options: HarnessOptions): HarnessApi {
   stage.style.top = "0";
   stage.style.width = `${viewport.width}px`;
   stage.style.height = `${viewport.height}px`;
+  // Above everything else on the page, so that nothing can be drawn over it.
+  stage.style.zIndex = "2147483647";
+  stage.style.background = "#fff";
 
   const panel = element("div");
   panel.className = "panel";
@@ -185,8 +192,16 @@ export function startHarness(options: HarnessOptions): HarnessApi {
   let memorySampler: ExternalMemorySampler | undefined;
   const events: BenchEvent[] = [];
 
+  // During a run the page is scrolled to the top and cannot scroll, so that the
+  // stage and the panel stay where they are.
+  const lockScroll = (locked: boolean) => {
+    if (locked) window.scrollTo(0, 0);
+    document.documentElement.style.overflow = locked ? "hidden" : "";
+  };
+
   const setBusy = (value: boolean) => {
     busy = value;
+    lockScroll(value);
     runButton.disabled = value;
     runTwiceButton.disabled = value;
     captureButton.disabled = value;

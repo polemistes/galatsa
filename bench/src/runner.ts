@@ -3,30 +3,40 @@
 // Runs the camera run against an engine in the browser and measures it. Browser only.
 //
 // One run:
-//   1. settle: wait (at least 2 s) until the page is idle, so that garbage from
-//      earlier work (image generation, a previous run) does not land in this run;
-//   2. calibrate: 120 animation frames with nothing drawing, to measure the
-//      display's refresh interval;
+//   1. settle: wait until the page is idle and frames come at a steady rate, so that
+//      garbage from earlier work (image generation, a previous run) does not land in
+//      this run;
+//   2. calibrate: animation frames with nothing drawing, to measure the display's
+//      refresh interval (retried up to three times until steady);
 //   3. load the engine (timed);
 //   4. warm up: 60 frames at the first pose (not timed);
-//   5. the run: one camera pose per animation frame.
+//   5. the run: one camera pose per animation frame;
+//   6. measure the refresh interval again, to catch a display that changed rate.
 //
-// Frame time is the wall-clock interval between the starts of consecutive
-// animation-frame callbacks (performance.now()). It covers everything between two
-// frames on the main thread: the engine's render(), any work it schedules, and the
-// browser's style, layout and paint. The timestamps the browser passes to the
-// callbacks are recorded too, but they are display-frame start times, not
-// durations: a frame that blocks 40 ms reads 33.3 ms in Chromium at 60 Hz, and they
-// jitter in Firefox and WebKitGTK. Missed and long frames are therefore counted from
-// the wall-clock times, against thresholds relative to the measured refresh
-// interval (see stats.ts).
+// Two times are recorded per frame:
+// - frameMs, the wall-clock interval between the starts of consecutive
+//   animation-frame callbacks: what the display paced, in whole refreshes on a
+//   vsync-paced display;
+// - workMs, the main-thread time of the frame: from the start of its callback to the
+//   first task after the browser's rendering step, that is render() plus style,
+//   layout and paint. No display rounds it, so it can be judged against a target in
+//   milliseconds on any refresh rate. It does not see work on other threads
+//   (rasterisation, the GPU); delays there show in frameMs.
+// See stats.ts for how the targets use the two. The timestamps the browser passes to
+// the callbacks are recorded for reference only: they are display-frame start times,
+// not durations.
 //
-// The page must stay visible and the drawing area must be fully inside the window:
-// browsers slow down hidden pages and skip painting what is off-screen.
+// The page must stay visible and the drawing area must be fully inside the window,
+// with nothing in front of it: browsers slow down hidden pages and skip painting what
+// is off-screen or covered.
 
-import { type CameraRun, createCameraRun } from "./camera.ts";
+import { type CameraRun, createCameraRun, REFERENCE_VIEWPORT } from "./camera.ts";
 import type { BenchEngine, BenchViewport, ImageSource } from "./engine.ts";
-import { bestPeakMemory, type ExternalMemorySampler, MemoryRecorder } from "./memory.ts";
+import {
+  type ExternalMemorySampler,
+  externalPeakMemory,
+  MemoryRecorder,
+} from "./memory.ts";
 import {
   type BenchResult,
   type Capture,
@@ -39,9 +49,11 @@ import {
 } from "./result.ts";
 import { generateScene, type Scene, summarizeScene } from "./scene.ts";
 import {
-  estimateRefreshInterval,
+  estimateRefresh,
   frameStats,
-  percentile,
+  MIN_STABLE_SHARE,
+  type RefreshEstimate,
+  refreshProblems,
   verdictInputs,
 } from "./stats.ts";
 import { STRINGS } from "./strings.ts";
@@ -83,7 +95,8 @@ export interface RunOptions {
   /**
    * Element the engine draws in. The runner empties it, sizes it to the viewport,
    * sets `overflow: hidden`, and sets `position: relative` unless the element has an
-   * inline position already. It must be fully inside the window.
+   * inline position already. It must be fully inside the window, with nothing in
+   * front of it.
    */
   readonly container: HTMLElement;
   /** The scene's encoded images, from prepareImages(). */
@@ -95,27 +108,28 @@ export interface RunOptions {
   readonly scene?: Scene;
   /** Defaults to createCameraRun(scene). */
   readonly cameraRun?: CameraRun;
-  /** CSS pixels. Defaults to the reference viewport, 1280 x 720. */
+  /** CSS pixels. Defaults to the reference viewport (see camera.ts). */
   readonly viewport?: { readonly width: number; readonly height: number };
   /** Frames rendered at the first pose before timing starts. Default 60. */
   readonly warmupFrames?: number;
   /** Idle frames for measuring the refresh interval. Default 120. */
   readonly calibrationFrames?: number;
-  /** Minimum and maximum time to wait for an idle page before the run. Default 2 s and 10 s. */
+  /** Minimum and maximum time to wait for an idle, steady page before the run. Default 2 s and 15 s. */
   readonly settle?: { readonly minMs: number; readonly maxMs: number };
-  /** Refuse to run if the stage is not fully inside the window. Default true. */
+  /** Refuse to run if the stage is not fully visible and unobstructed. Default true. */
   readonly requireVisibleStage?: boolean;
   /** Call measureUserAgentSpecificMemory() before load, after load and after the run. Default true. */
   readonly measureMemory?: boolean;
   /** Time limit for each measureUserAgentSpecificMemory() call. Default 30000 ms. */
   readonly memoryTimeoutMs?: number;
-  /** Sampled at load, run start, each hold start and run end, without waiting. */
+  /** The host's memory sampler; the only source for the memory verdict. */
   readonly memorySampler?: ExternalMemorySampler;
   /** Called at each phase of the run. Must return quickly. */
   readonly onEvent?: (event: BenchEvent) => void;
   /**
    * If given, the run pauses at the end of each hold and calls it; the paused frame
-   * is left out of the statistics. Use for a run to look at, not for timing.
+   * is left out of the statistics, and the run is marked as a capture run, not valid
+   * for decisions.
    */
   readonly capture?: CaptureFunction;
 }
@@ -136,31 +150,6 @@ export function estimateTimerResolution(samples = 20): number {
   return Number.isFinite(smallest) ? Math.round(smallest * 1e6) / 1e6 : Number.NaN;
 }
 
-/**
- * Waits at least `minMs`, then until five idle callbacks in a row offer 40 ms or more
- * (the page has nothing to do), or until `maxMs` has passed. Browsers without
- * requestIdleCallback (Safari) only wait `minMs`.
- */
-export async function settle(
-  minMs: number,
-  maxMs: number,
-): Promise<{ ms: number; idleDetected: boolean }> {
-  const start = performance.now();
-  await new Promise((resolve) => setTimeout(resolve, minMs));
-  const idle = globalThis.requestIdleCallback as typeof requestIdleCallback | undefined;
-  if (typeof idle !== "function")
-    return { ms: performance.now() - start, idleDetected: false };
-  let streak = 0;
-  while (performance.now() - start < maxMs) {
-    const remaining = await new Promise<number>((resolve) =>
-      idle((deadline) => resolve(deadline.timeRemaining()), { timeout: 1000 }),
-    );
-    streak = remaining >= 40 ? streak + 1 : 0;
-    if (streak >= 5) return { ms: performance.now() - start, idleDetected: true };
-  }
-  return { ms: performance.now() - start, idleDetected: false };
-}
-
 /** Animation-frame timestamp differences over `frames` idle frames. */
 export function sampleFrameTimestamps(frames: number): Promise<number[]> {
   return new Promise((resolve) => {
@@ -176,6 +165,72 @@ export function sampleFrameTimestamps(frames: number): Promise<number[]> {
   });
 }
 
+/**
+ * Waits until the page is ready for a run: at least `minMs`; then, where the browser
+ * has requestIdleCallback, until five idle callbacks in a row offer 40 ms or more;
+ * then until two consecutive windows of 30 frames are steady (90 % near their median,
+ * medians within 3 % of each other); three windows where there is no idle callback
+ * (WebKit), as frame steadiness is then the only sign. Gives up at `maxMs`.
+ */
+export async function settle(
+  minMs: number,
+  maxMs: number,
+): Promise<{ ms: number; idleDetected: boolean | null; framesSteady: boolean }> {
+  const start = performance.now();
+  const timeLeft = () => maxMs - (performance.now() - start);
+  await new Promise((resolve) => setTimeout(resolve, minMs));
+
+  const idle = globalThis.requestIdleCallback as typeof requestIdleCallback | undefined;
+  let idleDetected: boolean | null = null;
+  if (typeof idle === "function") {
+    idleDetected = false;
+    let streak = 0;
+    while (timeLeft() > 0) {
+      const remaining = await new Promise<number>((resolve) =>
+        idle((deadline) => resolve(deadline.timeRemaining()), { timeout: 1000 }),
+      );
+      streak = remaining >= 40 ? streak + 1 : 0;
+      if (streak >= 5) {
+        idleDetected = true;
+        break;
+      }
+    }
+  }
+
+  const needed = idleDetected === null ? 3 : 2;
+  let steadyWindows = 0;
+  let previousMedian = Number.NaN;
+  let framesSteady = false;
+  do {
+    const estimate = estimateRefresh(await sampleFrameTimestamps(30));
+    const steady =
+      estimate.stableShare >= MIN_STABLE_SHARE &&
+      (Number.isNaN(previousMedian) ||
+        Math.abs(estimate.medianMs - previousMedian) <= 0.03 * previousMedian);
+    steadyWindows = steady ? steadyWindows + 1 : 0;
+    previousMedian = estimate.medianMs;
+    if (steadyWindows >= needed) {
+      framesSteady = true;
+      break;
+    }
+  } while (timeLeft() > 0);
+  return { ms: performance.now() - start, idleDetected, framesSteady };
+}
+
+/** Measures the refresh interval, retrying up to `attempts` times until steady. */
+export async function calibrate(
+  frames: number,
+  attempts = 3,
+): Promise<RefreshEstimate & { attempts: number }> {
+  let estimate = estimateRefresh(await sampleFrameTimestamps(frames));
+  let tries = 1;
+  while (estimate.stableShare < MIN_STABLE_SHARE && tries < attempts) {
+    estimate = estimateRefresh(await sampleFrameTimestamps(frames));
+    tries++;
+  }
+  return { ...estimate, attempts: tries };
+}
+
 function round3(values: Float64Array): number[] {
   return Array.from(values, (v) => Math.round(v * 1000) / 1000);
 }
@@ -184,6 +239,26 @@ function measureStage(container: HTMLElement) {
   const rect = container.getBoundingClientRect();
   const windowWidth = document.documentElement.clientWidth;
   const windowHeight = document.documentElement.clientHeight;
+  const inside =
+    rect.left >= 0 &&
+    rect.top >= 0 &&
+    rect.right <= windowWidth + 0.5 &&
+    rect.bottom <= windowHeight + 0.5;
+  // Nothing may be in front of the stage: the topmost element at its centre and
+  // near its corners must be the stage or something inside it.
+  const points = [
+    [rect.left + rect.width / 2, rect.top + rect.height / 2],
+    [rect.left + 1, rect.top + 1],
+    [rect.right - 2, rect.top + 1],
+    [rect.left + 1, rect.bottom - 2],
+    [rect.right - 2, rect.bottom - 2],
+  ] as const;
+  const unobstructed =
+    typeof document.elementFromPoint !== "function" ||
+    points.every(([x, y]) => {
+      const hit = document.elementFromPoint(x, y);
+      return hit !== null && (hit === container || container.contains(hit));
+    });
   return {
     x: rect.left,
     y: rect.top,
@@ -191,11 +266,8 @@ function measureStage(container: HTMLElement) {
     height: rect.height,
     windowWidth,
     windowHeight,
-    inside:
-      rect.left >= 0 &&
-      rect.top >= 0 &&
-      rect.right <= windowWidth + 0.5 &&
-      rect.bottom <= windowHeight + 0.5,
+    inside,
+    unobstructed,
   };
 }
 
@@ -216,10 +288,11 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
     label: string | null = null,
   ) => options.onEvent?.({ type, time: performance.now(), frame, label });
   const startedAt = new Date().toISOString();
+  const mode = options.capture === undefined ? "timing" : "capture";
 
   const viewport: BenchViewport = {
-    width: options.viewport?.width ?? 1280,
-    height: options.viewport?.height ?? 720,
+    width: options.viewport?.width ?? run.viewport?.width ?? REFERENCE_VIEWPORT.width,
+    height: options.viewport?.height ?? run.viewport?.height ?? REFERENCE_VIEWPORT.height,
     devicePixelRatio: globalThis.devicePixelRatio ?? 1,
   };
   container.replaceChildren();
@@ -228,8 +301,10 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
   container.style.width = `${viewport.width}px`;
   container.style.height = `${viewport.height}px`;
   const stageAtStart = measureStage(container);
-  if (!stageAtStart.inside && options.requireVisibleStage !== false) {
-    throw new Error(STRINGS.stageNotVisible(viewport.width, viewport.height));
+  if (options.requireVisibleStage !== false) {
+    if (!stageAtStart.inside)
+      throw new Error(STRINGS.stageNotVisible(viewport.width, viewport.height));
+    if (!stageAtStart.unobstructed) throw new Error(STRINGS.stageObstructed);
   }
 
   let hiddenDuringRun = document.visibilityState !== "visible";
@@ -243,10 +318,12 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
   document.addEventListener("visibilitychange", onVisibility);
   globalThis.addEventListener?.("resize", onResize);
 
-  // Text-sharpness bookkeeping: one entry per hold segment.
+  // Text-sharpness bookkeeping: one entry per hold. The clock starts at the stop
+  // frame, the last frame of the movement, which already shows the final pose.
   interface PendingHold {
     readonly label: string;
     readonly frame: number;
+    readonly stopFrame: number;
     readonly end: number;
     readonly start: number;
     reportMs: number | null;
@@ -254,6 +331,7 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
     closed: boolean;
   }
   const holds = run.segments.filter((s) => s.kind === "hold");
+  const holdByStopFrame = new Map(holds.map((s) => [Math.max(0, s.start - 1), s]));
   const holdByStart = new Map(holds.map((s) => [s.start, s]));
   const holdByLastFrame = new Map(holds.map((s) => [s.end - 1, s]));
   const finished: PendingHold[] = [];
@@ -276,24 +354,30 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
     });
   };
 
+  // Main-thread work per frame: a message posted after render() is delivered as the
+  // first task after the browser's rendering step.
+  const channel = new MessageChannel();
+
   try {
     emit("settle-start");
     const settled = await settle(
       options.settle?.minMs ?? 2000,
-      options.settle?.maxMs ?? 10000,
+      options.settle?.maxMs ?? 15000,
     );
     emit("settle-end");
 
     const timerResolutionMs = estimateTimerResolution();
     emit("calibrate-start");
-    const calibration = await sampleFrameTimestamps(options.calibrationFrames ?? 120);
-    const refreshIntervalMs = estimateRefreshInterval(calibration);
+    const refresh = await calibrate(options.calibrationFrames ?? 120);
     emit("calibrate-end");
 
     memory.sampleHeap(-1);
     await memory.measure("beforeLoad");
 
+    const n = run.poses.length;
+    let currentFrame: number | null = null;
     emit("load-start");
+    memory.startPolling(() => currentFrame);
     memory.sampleExternal("load-start", null);
     const loadStart = performance.now();
     await engine.load({ container, viewport, scene, images, reportTextSharp });
@@ -303,16 +387,22 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
 
     await memory.measure("afterLoad");
 
-    const n = run.poses.length;
     const frameMs = new Float64Array(n);
+    const workMs = new Float64Array(n);
     const timestampMs = new Float64Array(n);
     const renderMs = new Float64Array(n);
+    const callbackStart = new Float64Array(n);
     const excluded = new Set<number>();
     const captures: Capture[] = [];
     const firstPose = run.poses[0];
     if (firstPose === undefined) throw new Error("The camera run has no frames");
     let runStart = 0;
     let runEnd = 0;
+    channel.port1.onmessage = (message: MessageEvent<number>) => {
+      const frame = message.data;
+      if (frame >= 0 && frame < n)
+        workMs[frame] = performance.now() - (callbackStart[frame] ?? 0);
+    };
 
     await new Promise<void>((resolve, reject) => {
       let index = -warmupFrames;
@@ -339,18 +429,25 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
             memory.sampleExternal("run-start", 0);
           }
           if (index >= 0) {
+            currentFrame = index;
+            callbackStart[index] = callback;
             if (pending !== undefined && index >= pending.end) closePending();
-            const hold = holdByStart.get(index);
-            if (hold !== undefined) {
+            const stopped = holdByStopFrame.get(index);
+            if (stopped !== undefined) {
+              closePending();
               pending = {
-                label: hold.label,
-                frame: index,
-                end: hold.end,
+                label: stopped.label,
+                frame: stopped.start,
+                stopFrame: index,
+                end: stopped.end,
                 start: performance.now(),
                 reportMs: null,
                 latencyMs: null,
                 closed: false,
               };
+            }
+            const hold = holdByStart.get(index);
+            if (hold !== undefined) {
               emit("hold-start", index, hold.label);
               memory.sampleExternal("hold-start", index);
             }
@@ -365,6 +462,7 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
               : undefined;
           if (index >= 0) {
             renderMs[index] = t1 - t0;
+            channel.port2.postMessage(index);
             if (index % HEAP_SAMPLE_EVERY === 0) memory.sampleHeap(index);
           }
           const frame = index;
@@ -393,12 +491,14 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
     closePending();
     emit("run-end");
     memory.sampleExternal("run-end", n);
+    memory.stopPolling();
     memory.sampleHeap(n);
+    const stageAtEnd = measureStage(container);
 
+    const refreshAfter = estimateRefresh(await sampleFrameTimestamps(60));
     await memory.measure("afterRun");
     await memory.settleExternal();
 
-    const stageAtEnd = measureStage(container);
     const stage: StageInfo = {
       x: stageAtStart.x,
       y: stageAtStart.y,
@@ -407,31 +507,45 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
       windowWidth: stageAtStart.windowWidth,
       windowHeight: stageAtStart.windowHeight,
       fullyVisible: stageAtStart.inside && stageAtEnd.inside,
+      unobstructed: stageAtStart.unobstructed && stageAtEnd.unobstructed,
     };
+    const p = STRINGS.problems;
     const problems: string[] = [];
-    if (hiddenDuringRun) problems.push(STRINGS.problems.hidden);
-    if (resizedDuringRun) problems.push(STRINGS.problems.resized);
-    if (!stage.fullyVisible) problems.push(STRINGS.problems.stageNotVisible);
+    if (mode === "capture") problems.push(p.capture);
+    if (hiddenDuringRun) problems.push(p.hidden);
+    if (resizedDuringRun) problems.push(p.resized);
+    if (!stage.fullyVisible) problems.push(p.stageNotVisible);
+    if (!stage.unobstructed) problems.push(p.stageObstructed);
+    if (!settled.framesSteady) problems.push(p.framesNotSteady);
+    problems.push(...refreshProblems(refresh));
+    if (
+      Math.abs(refreshAfter.intervalMs - refresh.intervalMs) >
+      0.03 * refresh.intervalMs
+    ) {
+      problems.push(p.refreshChanged(refresh.intervalMs, refreshAfter.intervalMs));
+    }
 
     const keep = (values: Float64Array) => values.filter((_, i) => !excluded.has(i));
     const events: TextSharpEvent[] = finished.map((h) => ({
       label: h.label,
       frame: h.frame,
+      stopFrame: h.stopFrame,
       latencyMs: h.latencyMs,
       reportMs: h.reportMs,
     }));
     const textSharp = summarizeTextSharp(events);
     const memoryReport = memory.report();
-    const sortedCalibration = Float64Array.from(calibration).sort();
 
     return {
       format: RESULT_FORMAT,
       version: RESULT_VERSION,
       engine: engine.name,
+      mode,
       startedAt,
       verdictInputs: verdictInputs({
-        refreshIntervalMs,
+        refreshIntervalMs: refresh.intervalMs,
         frameMs: keep(frameMs),
+        workMs: keep(workMs),
         renderMs: keep(renderMs),
         textSharp: {
           p50Ms: textSharp.p50Ms,
@@ -439,7 +553,7 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
           missing: textSharp.missing,
         },
         loadMs,
-        peakMemory: bestPeakMemory(memoryReport),
+        peakMemory: externalPeakMemory(memoryReport),
         problems,
       }),
       environment: {
@@ -449,10 +563,13 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
         crossOriginIsolated: globalThis.crossOriginIsolated === true,
         timerResolutionMs,
         refresh: {
-          intervalMs: refreshIntervalMs,
-          rateHz: 1000 / refreshIntervalMs,
-          medianMs: percentile(sortedCalibration, 50),
-          samples: calibration.length,
+          intervalMs: refresh.intervalMs,
+          rateHz: 1000 / refresh.intervalMs,
+          medianMs: refresh.medianMs,
+          stableShare: refresh.stableShare,
+          samples: refresh.samples,
+          attempts: refresh.attempts,
+          afterRunMs: refreshAfter.intervalMs,
         },
         settle: settled,
         hiddenDuringRun,
@@ -467,6 +584,7 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
         runMs: runEnd - runStart,
       },
       frames: {
+        workMs: round3(workMs),
         frameMs: round3(frameMs),
         timestampMs: round3(timestampMs),
         renderMs: round3(renderMs),
@@ -474,6 +592,7 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
       },
       stats: {
         frameMs: frameStats(keep(frameMs)),
+        workMs: frameStats(keep(workMs)),
         timestampMs: frameStats(keep(timestampMs)),
         renderMs: frameStats(keep(renderMs)),
         frameMsByKind: statsByKind(frameMs, run.segments, excluded),
@@ -483,6 +602,8 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
       captures,
     };
   } finally {
+    memory.stopPolling();
+    channel.port1.close();
     document.removeEventListener("visibilitychange", onVisibility);
     globalThis.removeEventListener?.("resize", onResize);
     engine.dispose();

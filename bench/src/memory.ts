@@ -11,9 +11,10 @@
 //   decoded by the browser and GPU memory are not included. Chromium rounds the
 //   values unless started with --enable-precise-memory-info.
 // - An external sampler: a function the host gives the runner (for example a desktop
-//   shell that reads the memory of its own processes). It is called at the phase
-//   events of the run (see BenchEvent in runner.ts) and is the only source that can
-//   include decoded images and GPU memory.
+//   shell that reads the memory of its own processes). It is polled during load and
+//   the run, and called at the run's events (see BenchEvent in runner.ts). It is the
+//   only source that can include decoded images and GPU memory, and the only one
+//   used for the memory verdict.
 
 export interface JsHeapSample {
   /** Frame index: -1 before load, 0 to frames - 1 during the run, frames after it. */
@@ -46,11 +47,13 @@ export interface MemoryReport {
     readonly source: string | null;
     readonly peakBytes: number | null;
     readonly samples: readonly ExternalMemorySample[];
+    /** Polls that had not answered when the run ended (after a 5 s wait). */
+    readonly unanswered: number;
   };
 }
 
 export interface ExternalMemorySample {
-  /** The event at which it was taken, for example "run-start" or "hold-start". */
+  /** The event at which it was taken ("run-start", "hold-start", ...) or "poll". */
   readonly event: string;
   /** Frame index of the run, or null outside the frames. */
   readonly frame: number | null;
@@ -61,37 +64,33 @@ export interface ExternalMemorySample {
 export interface ExternalMemorySampler {
   /** What it measures, for example "resident memory of the app and its web processes". */
   readonly source: string;
-  /** Bytes in use now, or null if it cannot tell. Must not block for long. */
+  /**
+   * Bytes in use now, or null if it cannot tell. Called every `intervalMs` from
+   * the start of load() to the end of the run, and at the run's events, without
+   * waiting for the answer; it must not block the page.
+   */
   sample(): Promise<number | null>;
+  /** Milliseconds between polls. Default 250. */
+  readonly intervalMs?: number;
 }
 
-/** The most complete memory peak available, preferring external, then browser, then heap. */
-export function bestPeakMemory(
+/** Waiting for the external sampler's outstanding answers stops after this long. */
+export const EXTERNAL_SETTLE_TIMEOUT_MS = 5000;
+
+/**
+ * The memory peak to judge an engine by: only the host's sampler, which can see the
+ * whole program (decoded images, GPU memory, other processes). The browser's own
+ * figures cover the JavaScript heap and little else (in one run 9.7 MB against
+ * 1,610 MiB of process memory), so they are never used for the verdict.
+ */
+export function externalPeakMemory(
   report: MemoryReport,
 ): { bytes: number; source: string } | null {
-  if (report.external.peakBytes !== null) {
-    return {
-      bytes: report.external.peakBytes,
-      source: `external: ${report.external.source ?? ""}`,
-    };
-  }
-  const ua = report.userAgentSpecific;
-  const uaValues = [ua.afterLoadBytes, ua.afterRunBytes].filter(
-    (v): v is number => v !== null,
-  );
-  if (uaValues.length > 0) {
-    return {
-      bytes: Math.max(...uaValues),
-      source: "measureUserAgentSpecificMemory (after load, after run)",
-    };
-  }
-  if (report.jsHeap.peakUsedBytes !== null) {
-    return {
-      bytes: report.jsHeap.peakUsedBytes,
-      source: "performance.memory (JavaScript heap only)",
-    };
-  }
-  return null;
+  if (report.external.peakBytes === null) return null;
+  return {
+    bytes: report.external.peakBytes,
+    source: report.external.source ?? "host sampler",
+  };
 }
 
 interface ChromiumMemoryInfo {
@@ -174,6 +173,9 @@ export class MemoryRecorder {
   private readonly sampler: ExternalMemorySampler | undefined;
   private readonly externalSamples: ExternalMemorySample[] = [];
   private readonly pendingExternal: Promise<void>[] = [];
+  private readonly isSettled: (() => boolean)[] = [];
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private unanswered = 0;
 
   /**
    * @param enabled whether to call measureUserAgentSpecificMemory at all
@@ -192,19 +194,46 @@ export class MemoryRecorder {
    */
   sampleExternal(event: string, frame: number | null): void {
     if (this.sampler === undefined) return;
+    let settled = false;
+    const done = this.sampler.sample().then(
+      (bytes) => {
+        if (bytes !== null) this.externalSamples.push({ event, frame, bytes });
+      },
+      () => {},
+    );
     this.pendingExternal.push(
-      this.sampler.sample().then(
-        (bytes) => {
-          if (bytes !== null) this.externalSamples.push({ event, frame, bytes });
-        },
-        () => {},
-      ),
+      done.finally(() => {
+        settled = true;
+      }),
+    );
+    this.isSettled.push(() => settled);
+  }
+
+  /** Polls the external sampler every intervalMs until stopPolling(). */
+  startPolling(currentFrame: () => number | null): void {
+    if (this.sampler === undefined || this.timer !== undefined) return;
+    this.timer = setInterval(
+      () => this.sampleExternal("poll", currentFrame()),
+      this.sampler.intervalMs ?? 250,
     );
   }
 
+  stopPolling(): void {
+    clearInterval(this.timer);
+    this.timer = undefined;
+  }
+
   /** Waits for the external sampler's outstanding answers. */
-  async settleExternal(): Promise<void> {
-    await Promise.all(this.pendingExternal);
+  async settleExternal(timeoutMs = EXTERNAL_SETTLE_TIMEOUT_MS): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.all(this.pendingExternal),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    this.unanswered = this.isSettled.filter((settled) => !settled()).length;
   }
 
   /** Records a JavaScript heap sample, if available. Cheap enough to call during the run. */
@@ -249,6 +278,7 @@ export class MemoryRecorder {
             ? Math.max(...this.externalSamples.map((s) => s.bytes))
             : null,
         samples: this.externalSamples,
+        unanswered: this.unanswered,
       },
     };
   }

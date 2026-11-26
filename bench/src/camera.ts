@@ -5,7 +5,8 @@
 // instead of skipping poses. Frame counts assume a nominal 60 frames per second.
 //
 // The run, in order:
-//   1. zoom in from 0.02 to 20 on a text box near the middle of the scene, hold;
+//   1. zoom in from 0.02 to 20 on a text box near the middle of the scene, hold (at
+//      zoom 0.02 the 960 px wide view covers 48,000 of the scene's 57,600 units);
 //   2. zoom back out to 0.02, hold;
 //   3. a short flight to the left edge, then a pan across the top row of clusters, hold;
 //   4. a route flight between ten stops, holding at each stop.
@@ -35,8 +36,13 @@ export interface CameraPose {
   readonly zoom: number;
 }
 
-/** The viewport size the run is framed for (CSS pixels). Other sizes see more or less. */
-export const REFERENCE_VIEWPORT = { width: 1280, height: 720 } as const;
+/**
+ * The viewport size the run is framed for (CSS pixels), also the default stage size.
+ * 960 x 540 fits in a desktop window on common laptop screens, including 1920 x 1080
+ * at 150 % and 175 % scaling (1280 x 720 and 1097 x 617 CSS pixels for the whole
+ * screen). Other sizes see more or less around the same centre.
+ */
+export const REFERENCE_VIEWPORT = { width: 960, height: 540 } as const;
 export const NOMINAL_FPS = 60;
 export const MIN_ZOOM = 0.02;
 export const MAX_ZOOM = 20;
@@ -67,6 +73,8 @@ export interface CameraRun {
   readonly segments: readonly Segment[];
   /** The ten route stops, in visiting order. */
   readonly stops: readonly CameraPose[];
+  /** The viewport the run is framed for (CSS pixels); the default stage size. */
+  readonly viewport?: { readonly width: number; readonly height: number };
 }
 
 /** Smooth start and stop: 3t^2 - 2t^3. */
@@ -225,7 +233,11 @@ export function createCameraRun(scene: Scene): CameraRun {
     path: (s: number) => CameraPose,
   ) => {
     const start = poses.length;
-    for (let i = 1; i <= frames; i++) poses.push(path(smoothstep(i / frames)));
+    for (let i = 1; i <= frames; i++) {
+      // Keep flights within the run's zoom range; a long flight would zoom out further.
+      const pose = path(smoothstep(i / frames));
+      poses.push(pose.zoom < MIN_ZOOM ? { ...pose, zoom: MIN_ZOOM } : pose);
+    }
     current = path(1);
     segments.push({ kind, label, start, end: poses.length });
   };
@@ -274,7 +286,7 @@ export function createCameraRun(scene: Scene): CameraRun {
     hold(`at stop ${i + 1}`);
   });
 
-  return { poses, segments, stops };
+  return { poses, segments, stops, viewport: REFERENCE_VIEWPORT };
 }
 
 /** Total frames of a run and its length in seconds at the nominal frame rate. */

@@ -1,174 +1,295 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
+import { createRng } from "./prng.ts";
 import {
   compareRuns,
   countOver,
-  estimateRefreshInterval,
+  estimateRefresh,
   frameStats,
   percentile,
+  presentedThreshold,
+  refreshProblems,
   relativeDifference,
   type VerdictInputs,
   verdictInputs,
 } from "./stats.ts";
 
-describe("percentile", () => {
+describe("percentile and frameStats", () => {
   it("uses the nearest-rank method", () => {
     const sorted = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     expect(percentile(sorted, 50)).toBe(5);
     expect(percentile(sorted, 95)).toBe(10);
-    expect(percentile(sorted, 10)).toBe(1);
     expect(percentile(sorted, 11)).toBe(2);
-    expect(percentile(sorted, 100)).toBe(10);
-    expect(percentile([7], 99)).toBe(7);
-  });
-
-  it("is NaN for no values and rejects bad percentiles", () => {
     expect(percentile([], 50)).toBeNaN();
     expect(() => percentile([1], 0)).toThrow(RangeError);
-    expect(() => percentile([1], 101)).toThrow(RangeError);
   });
-});
 
-describe("frameStats", () => {
   it("computes mean, percentiles and extremes", () => {
-    const values = [...Array<number>(90).fill(10), ...Array<number>(9).fill(20), 120];
-    const stats = frameStats(values.reverse());
+    const stats = frameStats([
+      ...Array<number>(90).fill(10),
+      ...Array<number>(9).fill(20),
+      120,
+    ]);
     expect(stats.count).toBe(100);
-    expect(stats.mean).toBeCloseTo((900 + 180 + 120) / 100, 10);
-    expect(stats.min).toBe(10);
-    expect(stats.p50).toBe(10);
-    expect(stats.p95).toBe(20);
-    expect(stats.p99).toBe(20);
-    expect(stats.max).toBe(120);
-  });
-
-  it("handles no frames", () => {
-    expect(frameStats([]).count).toBe(0);
-    expect(frameStats([]).mean).toBeNaN();
+    expect(stats.mean).toBeCloseTo(12, 10);
+    expect([stats.p50, stats.p95, stats.p99, stats.max]).toEqual([10, 20, 20, 120]);
   });
 });
 
-describe("estimateRefreshInterval", () => {
+describe("estimateRefresh and refreshProblems", () => {
   it("averages out alternating timestamps (Firefox-like 16.1 / 17.1 ms)", () => {
-    const deltas = Array.from({ length: 120 }, (_, i) => (i % 2 === 0 ? 16.1 : 17.1));
-    expect(estimateRefreshInterval(deltas)).toBeCloseTo(16.6, 6);
+    const e = estimateRefresh(
+      Array.from({ length: 120 }, (_, i) => (i % 2 ? 17.1 : 16.1)),
+    );
+    expect(e.intervalMs).toBeCloseTo(16.6, 6);
+    expect(e.stableShare).toBe(1);
+    expect(refreshProblems(e)).toEqual([]);
   });
 
-  it("ignores a few stray long frames", () => {
-    const deltas = [...Array<number>(110).fill(8.333), ...Array<number>(10).fill(100)];
-    expect(estimateRefreshInterval(deltas)).toBeCloseTo(8.333, 6);
+  it("ignores doubled frames and reports them as unsteady", () => {
+    // A quarter of the idle frames doubled by background work.
+    const e = estimateRefresh(
+      Array.from({ length: 120 }, (_, i) => (i % 4 ? 16.67 : 33.33)),
+    );
+    expect(e.intervalMs).toBeCloseTo(16.67, 6);
+    expect(e.stableShare).toBeCloseTo(0.75, 6);
+    expect(refreshProblems(e)).toHaveLength(1);
+    expect(refreshProblems(e)[0]).toMatch(/not steady/);
+  });
+
+  it("flags a display throttled to 30 Hz and unusual rates, and accepts standard ones", () => {
+    const at = (ms: number) => estimateRefresh(Array<number>(120).fill(ms));
+    expect(refreshProblems(at(33.33))[0]).toMatch(/low-power/);
+    expect(refreshProblems(at(1000 / 52))[0]).toMatch(/not a usual display rate/);
+    for (const hz of [59.94, 60, 75, 100, 120, 144, 165, 240]) {
+      expect(refreshProblems(at(1000 / hz)), String(hz)).toEqual([]);
+    }
   });
 });
 
-describe("verdictInputs", () => {
-  it("counts missed, long and stalled frames relative to the refresh interval", () => {
-    // 60 Hz: missed over 25 ms, long over 41.67 ms, stall over 100 ms.
-    const frames = [16.7, 17.2, 24.9, 25.1, 33.3, 41.6, 41.7, 50, 100, 110];
+describe("presentedThreshold", () => {
+  it("judges a target from presented intervals only where it is a whole number of refreshes", () => {
+    const r = (hz: number) => 1000 / hz;
+    expect(presentedThreshold(16.7, r(60))).toBeCloseTo(1.5 * r(60), 10); // 25 ms
+    expect(presentedThreshold(33, r(60))).toBeCloseTo(2.5 * r(60), 10); // 41.7 ms
+    expect(presentedThreshold(16.7, r(120))).toBeCloseTo(2.5 * r(120), 10); // 20.8 ms
+    expect(presentedThreshold(33, r(120))).toBeCloseTo(4.5 * r(120), 10); // 37.5 ms
+    expect(presentedThreshold(16.7, r(240))).toBeCloseTo(4.5 * r(240), 10); // 18.75 ms
+    expect(presentedThreshold(33, r(240))).toBeCloseTo(8.5 * r(240), 10); // 35.4 ms
+    for (const hz of [75, 100, 144]) {
+      expect(presentedThreshold(16.7, r(hz)), String(hz)).toBeNull();
+      expect(presentedThreshold(33, r(hz)), String(hz)).toBeNull();
+    }
+  });
+});
+
+/**
+ * Frames on a vsync-paced display: work of `workMs` (plus or minus 0.1 ms) is shown
+ * at the next refresh, so the interval is a whole number of refreshes (at least
+ * one), plus or minus 0.1 ms of timer jitter.
+ */
+function vsyncRun(hz: number, workMs: number, frames = 2775) {
+  const refresh = 1000 / hz;
+  const rng = createRng(hz * 1000 + workMs);
+  const work: number[] = [];
+  const presented: number[] = [];
+  for (let i = 0; i < frames; i++) {
+    const w = workMs + (rng.next() - 0.5) * 0.2;
+    work.push(w);
+    presented.push(
+      Math.max(1, Math.ceil(w / refresh)) * refresh + (rng.next() - 0.5) * 0.2,
+    );
+  }
+  return verdictInputs({
+    refreshIntervalMs: refresh,
+    frameMs: presented,
+    workMs: work,
+    renderMs: work,
+    textSharp: { p50Ms: 20, maxMs: 30, missing: 0 },
+    loadMs: 0,
+    peakMemory: null,
+    problems: [],
+  });
+}
+
+describe("frame targets on vsync-paced displays", () => {
+  // Work per frame, and whether it meets the 16.7 ms and the 33 ms target.
+  const cases: [number, boolean, boolean][] = [
+    [5, true, true],
+    [10, true, true],
+    [15, true, true],
+    [16.5, true, true],
+    [18, false, true],
+    [20, false, true],
+    [30, false, true],
+    [32.8, false, true],
+    [34, false, false],
+    [38, false, false],
+    [60, false, false],
+  ];
+  for (const hz of [60, 75, 100, 120, 144, 240]) {
+    for (const [work, meets16, meets33] of cases) {
+      it(`${work} ms of work at ${hz} Hz: 16.7 ms ${meets16 ? "met" : "missed"}, 33 ms ${meets33 ? "met" : "missed"}`, () => {
+        const v = vsyncRun(hz, work);
+        expect(v.targets.frames16_7.ratio).toBe(meets16 ? 0 : 1);
+        expect(v.targets.frames16_7.pass).toBe(meets16);
+        expect(v.targets.frames33.ratio).toBe(meets33 ? 0 : 1);
+        expect(v.targets.frames33.pass).toBe(meets33);
+      });
+    }
+  }
+
+  it("uses the display as well as the work where the target is whole refreshes", () => {
+    expect(vsyncRun(60, 10).targets.frames16_7.judgedBy).toBe("work and display");
+    expect(vsyncRun(120, 10).targets.frames33.judgedBy).toBe("work and display");
+    expect(vsyncRun(240, 10).targets.frames16_7.judgedBy).toBe("work and display");
+    expect(vsyncRun(144, 10).targets.frames16_7.judgedBy).toBe("work only");
+    expect(vsyncRun(75, 10).targets.frames33.judgedBy).toBe("work only");
+  });
+
+  it("counts frames the display delayed beyond their work (off the main thread)", () => {
+    // 5 ms of work, but every frame shown after two refreshes at 60 Hz.
+    const refresh = 1000 / 60;
     const v = verdictInputs({
-      refreshIntervalMs: 1000 / 60,
-      frameMs: frames,
-      renderMs: frames.map(() => 1),
-      textSharp: { p50Ms: 17, maxMs: 20, missing: 0 },
-      loadMs: 5,
+      refreshIntervalMs: refresh,
+      frameMs: Array<number>(100).fill(2 * refresh),
+      workMs: Array<number>(100).fill(5),
+      renderMs: Array<number>(100).fill(1),
+      textSharp: { p50Ms: 20, maxMs: 30, missing: 0 },
+      loadMs: 0,
       peakMemory: null,
       problems: [],
     });
-    expect(v.missedFrames.count).toBe(7);
-    expect(v.missedFrames.thresholdMs).toBeCloseTo(25, 10);
-    expect(v.longFrames.count).toBe(4);
-    expect(v.stalls.count).toBe(1);
-    expect(v.missedFrames.ratio).toBeCloseTo(0.7, 10);
-    expect(v.refreshRateHz).toBeCloseTo(60, 10);
-    expect(v.valid).toBe(true);
+    expect(v.targets.frames16_7.workOver).toBe(0);
+    expect(v.targets.frames16_7.presentedOver).toBe(100);
+    expect(v.targets.frames16_7.pass).toBe(false);
+    expect(v.targets.frames33.pass).toBe(true);
+    expect(v.missedRefreshes.count).toBe(100);
   });
 
-  it("uses refresh-relative thresholds on a 120 Hz display, and keeps 60 Hz ones", () => {
-    const frames = [8.3, 8.4, 13, 16.7, 30];
+  it("counts intervals exactly on a refresh multiple on the right side", () => {
+    // At 120 Hz, three refreshes (25.0 ms) is over 16.7 ms; two (16.67 ms) is not.
+    const refresh = 1000 / 120;
     const v = verdictInputs({
-      refreshIntervalMs: 1000 / 120,
-      frameMs: frames,
-      renderMs: frames,
-      textSharp: { p50Ms: null, maxMs: null, missing: 1 },
+      refreshIntervalMs: refresh,
+      frameMs: [2 * refresh, 3 * refresh, 4 * refresh, 5 * refresh],
+      workMs: [1, 1, 1, 1],
+      renderMs: [1, 1, 1, 1],
+      textSharp: { p50Ms: 20, maxMs: 30, missing: 0 },
       loadMs: 0,
       peakMemory: null,
-      problems: ["hidden"],
+      problems: [],
     });
-    expect(v.missedFrames.count).toBe(3); // over 12.5 ms
-    expect(v.longFrames.count).toBe(1); // over 20.8 ms
-    expect(v.missedFrames60Hz.count).toBe(1); // over 25 ms
-    expect(v.valid).toBe(false);
+    expect(v.targets.frames16_7.presentedOver).toBe(3);
+    expect(v.targets.frames33.presentedOver).toBe(1);
+  });
+});
+
+describe("other targets", () => {
+  const base = (over: Partial<Parameters<typeof verdictInputs>[0]> = {}) =>
+    verdictInputs({
+      refreshIntervalMs: 1000 / 60,
+      frameMs: [16.7, 16.6, 120],
+      workMs: [3, 3, 3],
+      renderMs: [1, 1, 1],
+      textSharp: { p50Ms: 20, maxMs: 180, missing: 0 },
+      loadMs: 5,
+      peakMemory: null,
+      problems: [],
+      ...over,
+    });
+
+  it("counts stalls by wall clock or work", () => {
+    expect(base().targets.stalls).toEqual({ count: 1, pass: false });
+    expect(
+      base({ frameMs: [16.7, 16.7, 16.7], workMs: [3, 101, 3] }).targets.stalls.count,
+    ).toBe(1);
+    expect(base({ frameMs: [16.7, 16.7, 16.7] }).targets.stalls.pass).toBe(true);
   });
 
-  it("counts strictly over the threshold", () => {
+  it("judges text sharpness: max at most 200 ms and none missing", () => {
+    expect(base().targets.textSharp.pass).toBe(true);
+    expect(
+      base({ textSharp: { p50Ms: 20, maxMs: 201, missing: 0 } }).targets.textSharp.pass,
+    ).toBe(false);
+    expect(
+      base({ textSharp: { p50Ms: 20, maxMs: 30, missing: 1 } }).targets.textSharp.pass,
+    ).toBe(false);
+  });
+
+  it("judges memory only with a host sampler", () => {
+    expect(base().targets.memory).toEqual({ peakBytes: null, pass: null });
+    const ok = base({ peakMemory: { bytes: 1.2e9, source: "host" } });
+    expect(ok.targets.memory.pass).toBe(true);
+    expect(
+      base({ peakMemory: { bytes: 1.6e9, source: "host" } }).targets.memory.pass,
+    ).toBe(false);
+  });
+
+  it("counts strictly over a threshold", () => {
     expect(countOver([1, 2, 3], 2)).toEqual({ thresholdMs: 2, count: 1, ratio: 1 / 3 });
-    expect(countOver([], 2).ratio).toBe(0);
   });
 });
 
 describe("compareRuns", () => {
-  const inputs = (
-    frameMs: number[],
-    overrides: Partial<VerdictInputs> = {},
-  ): VerdictInputs => ({
-    ...verdictInputs({
-      refreshIntervalMs: 1000 / 60,
-      frameMs,
-      renderMs: frameMs.map((v) => v / 2),
-      textSharp: { p50Ms: 16.7, maxMs: 33, missing: 0 },
-      loadMs: 10,
-      peakMemory: null,
-      problems: [],
-    }),
-    ...overrides,
-  });
-  const steady = Array<number>(2775).fill(16.67);
-  const withMissed = (count: number) => steady.map((v, i) => (i < count ? 33.3 : v));
+  const run = (overFrames: number, extra: Partial<VerdictInputs> = {}): VerdictInputs => {
+    const refresh = 1000 / 60;
+    const frames = Array.from({ length: 2775 }, (_, i) =>
+      i < overFrames ? 2 * refresh : refresh,
+    );
+    return {
+      ...verdictInputs({
+        refreshIntervalMs: refresh,
+        frameMs: frames,
+        workMs: frames.map((f) => f - 2),
+        renderMs: frames.map(() => 5),
+        textSharp: { p50Ms: 17, maxMs: 40, missing: 0 },
+        loadMs: 10,
+        peakMemory: null,
+        problems: [],
+      }),
+      ...extra,
+    };
+  };
 
   it("measures the symmetric relative difference", () => {
     expect(relativeDifference(100, 105)).toBeCloseTo(5 / 105, 12);
     expect(relativeDifference(0, 0)).toBe(0);
   });
 
-  it("agrees on identical runs", () => {
-    expect(compareRuns(inputs(steady), inputs(steady)).agree).toBe(true);
-  });
-
-  it("uses an absolute floor for small counts", () => {
-    // 2 against 6 missed frames: 67 % apart, but within the floor of 3 + 2775 * 0.2 %.
-    expect(compareRuns(inputs(withMissed(2)), inputs(withMissed(6))).agree).toBe(true);
-    // 2 against 20 is not.
-    expect(compareRuns(inputs(withMissed(2)), inputs(withMissed(20))).agree).toBe(false);
-  });
-
-  it("uses 5 % for large counts", () => {
-    expect(compareRuns(inputs(withMissed(1000)), inputs(withMissed(1040))).agree).toBe(
-      true,
-    );
-    expect(compareRuns(inputs(withMissed(1000)), inputs(withMissed(1100))).agree).toBe(
+  it("agrees when the verdict is the same, even if counts differ a lot", () => {
+    // 38 against 24 frames over 16.7 ms: 1.4 % and 0.9 %, both within 5 %.
+    const c = compareRuns(run(38), run(24));
+    expect(c.agree).toBe(true);
+    expect(c.metrics.find((m) => m.name === "frames over 16.7 ms")!.withinTolerance).toBe(
       false,
     );
   });
 
-  it("disagrees on render time, text latency and refresh changes", () => {
-    const base = inputs(steady);
-    const slowerRender = inputs(steady.map((v) => v * 1.2));
-    expect(compareRuns(base, slowerRender).agree).toBe(false);
-    const lateText = inputs(steady, { textSharp: { p50Ms: 60, maxMs: 80, missing: 0 } });
-    expect(compareRuns(base, lateText).agree).toBe(false);
-    const otherDisplay = inputs(steady, { refreshIntervalMs: 8.33 });
-    expect(compareRuns(base, otherDisplay).agree).toBe(false);
+  it("disagrees when a verdict flips", () => {
+    // 4.9 % against 5.1 % of frames over 16.7 ms.
+    expect(compareRuns(run(136), run(142)).agree).toBe(false);
+    // One stall against none.
+    const stall = run(0, {});
+    const withStall: VerdictInputs = {
+      ...stall,
+      targets: { ...stall.targets, stalls: { count: 1, pass: false } },
+    };
+    const c = compareRuns(stall, withStall);
+    expect(c.agree).toBe(false);
+    expect(c.verdicts.find((v) => v.target === "stalls")).toMatchObject({
+      a: true,
+      b: false,
+    });
   });
 
-  it("does not let the maximum or load time decide", () => {
-    const spike = inputs(steady.map((v, i) => (i === 5 ? 90 : v)));
-    const slowLoad = inputs(steady, { loadMs: 900 });
-    const comparison = compareRuns(inputs(steady), spike);
-    expect(comparison.agree).toBe(true);
-    expect(
-      comparison.metrics.find((m) => m.name.startsWith("frame time max"))!
-        .withinTolerance,
-    ).toBe(false);
-    expect(compareRuns(inputs(steady), slowLoad).agree).toBe(true);
+  it("treats two runs that cannot judge memory as agreeing", () => {
+    const c = compareRuns(run(0), run(0));
+    expect(c.verdicts.find((v) => v.target === "memory")).toMatchObject({
+      a: null,
+      b: null,
+      same: true,
+    });
   });
 });

@@ -60,26 +60,34 @@ test("the meter counts missed, long and stalled frames", async ({ page }) => {
     });
   });
   const v = result.verdictInputs;
+  const t = v.targets;
+  const at = (series: readonly number[]) =>
+    [15, 35, 55, 80].map((i) => series[i]).join("/");
   console.log(
-    `${test.info().project.name}: refresh ${v.refreshIntervalMs.toFixed(3)} ms; missed ${v.missedFrames.count}, long ${v.longFrames.count}, stalls ${v.stalls.count}, max ${v.frameMs.max.toFixed(1)} ms; ` +
-      `frames 15/35/55/80 wall ${[15, 35, 55, 80].map((i) => result.frames.frameMs[i]).join("/")} ms, timestamps ${[15, 35, 55, 80].map((i) => result.frames.timestampMs[i]).join("/")} ms`,
+    `${test.info().project.name}: refresh ${v.refreshIntervalMs.toFixed(3)} ms; over 16.7 ms ${t.frames16_7.count} (work ${t.frames16_7.workOver}, display ${t.frames16_7.presentedOver}), over 33 ms ${t.frames33.count}, stalls ${t.stalls.count}, missed refreshes ${v.missedRefreshes.count}; ` +
+      `frames 15/35/55/80: work ${at(result.frames.workMs)} ms, wall ${at(result.frames.frameMs)} ms, timestamps ${at(result.frames.timestampMs)} ms`,
   );
   expect(v.refreshIntervalMs).toBeGreaterThan(15);
   expect(v.refreshIntervalMs).toBeLessThan(18.5);
-  expect(v.missedFrames.count).toBeGreaterThanOrEqual(21);
-  expect(v.missedFrames.count).toBeLessThanOrEqual(31);
-  expect(result.frames.frameMs[35]).toBeGreaterThanOrEqual(30);
-  expect(v.longFrames.count).toBeGreaterThanOrEqual(11);
-  expect(v.longFrames.count).toBeLessThanOrEqual(12);
-  expect(v.stalls.count).toBe(1);
+  // By work time every blocked frame is counted, whether or not the browser waits
+  // for the next refresh after it: 10 + 10 + 10 + 1 over 16.7 ms, 10 + 1 over 33 ms.
+  expect(t.frames16_7.count).toBe(31);
+  expect(t.frames16_7.workOver).toBe(31);
+  expect(t.frames33.count).toBe(11);
+  expect(t.stalls.count).toBe(1);
+  expect(result.frames.workMs[15]).toBeGreaterThanOrEqual(17);
+  expect(result.frames.workMs[80]).toBeGreaterThanOrEqual(110);
   expect(result.frames.frameMs[80]).toBeGreaterThanOrEqual(110);
-  expect(v.renderMs.max).toBeGreaterThanOrEqual(110);
+  // The display-native count depends on whether the browser waits for vsync after a
+  // late frame (headless browsers do not): 21 to 31.
+  expect(v.missedRefreshes.count).toBeGreaterThanOrEqual(21);
+  expect(v.missedRefreshes.count).toBeLessThanOrEqual(31);
 });
 
 test("the harness refuses to run when the stage does not fit in the window", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1000, height: 600 });
+  await page.setViewportSize({ width: 900, height: 500 });
   await page.goto("/?engine=noop");
   await expect(page.getByRole("status")).toContainText("does not fit in the window");
   const error = await page.evaluate(() =>
@@ -98,8 +106,29 @@ test("the stage stays in place between runs", async ({ page }) => {
     pre.textContent = "line\n".repeat(40);
   });
   const after = await page.locator(".stage").boundingBox();
-  expect(before).toEqual({ x: 0, y: 0, width: 1280, height: 720 });
+  expect(before).toEqual({ x: 0, y: 0, width: 960, height: 540 });
   expect(after).toEqual(before);
+});
+
+test("nothing can cover the stage, even after scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 700 });
+  await page.goto("/?engine=noop");
+  await page.locator("pre").evaluate((pre) => {
+    pre.textContent = "line\n".repeat(200);
+  });
+  await page.evaluate(() => window.scrollTo(0, 500));
+  const hits = await page.evaluate(() => {
+    const stage = document.querySelector(".stage")!;
+    return [
+      [480, 270],
+      [2, 2],
+      [957, 537],
+    ].map(([x, y]) => {
+      const hit = document.elementFromPoint(x!, y!);
+      return hit !== null && (hit === stage || stage.contains(hit));
+    });
+  });
+  expect(hits).toEqual([true, true, true]);
 });
 
 test("capture runs keep an image at the end of each hold", async ({

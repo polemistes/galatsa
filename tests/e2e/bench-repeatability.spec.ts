@@ -37,32 +37,43 @@ test("the meter repeats for the empty and the synthetic engine", async ({
     for (const result of output.results) {
       expect(result.verdictInputs.problems, engine).toEqual([]);
       expect(result.environment.stage.fullyVisible).toBe(true);
+      expect(result.environment.stage.unobstructed).toBe(true);
+      expect(result.mode).toBe("timing");
       expect(result.verdictInputs.frames).toBe(result.cameraRun.frames);
       expect(result.textSharp.missing).toBe(0);
     }
     const comparison = output.comparison!;
-    for (const metric of comparison.metrics.filter((m) => m.decisive)) {
+    // The verdict on every target is the same in both runs.
+    expect(comparison.agree, engine).toBe(true);
+    // And the meter itself is steady: the raw numbers agree within 5 % or their
+    // absolute floor.
+    for (const metric of comparison.metrics) {
       expect(
         Math.abs(metric.a - metric.b),
         `${engine}: ${metric.name}`,
       ).toBeLessThanOrEqual(metric.allowed);
     }
-    expect(comparison.agree).toBe(true);
   }
 
-  // The empty engine misses (almost) no frames; the synthetic one misses many.
+  // The empty engine passes the frame targets; the synthetic one, by construction,
+  // has 829 frames over 16.7 ms, 286 over 33 ms and 16 over 100 ms (see
+  // syntheticBusyMs).
   for (const result of outputs["noop"]!.results) {
-    expect(result.verdictInputs.missedFrames.ratio).toBeLessThan(0.01);
+    const t = result.verdictInputs.targets;
+    expect(t.frames16_7.count).toBe(0);
+    expect(t.frames33.count).toBe(0);
+    expect(t.stalls.count).toBe(0);
+    expect(t.textSharp.pass).toBe(true);
   }
-  // The synthetic engine blocks 28 ms or more in 829 frames, 48 ms or more in 286
-  // and over 100 ms in 16 (see syntheticBusyMs).
   for (const result of outputs["synthetic"]!.results) {
-    const v = result.verdictInputs;
-    expect(v.missedFrames.count).toBeGreaterThanOrEqual(829);
-    expect(v.missedFrames.count).toBeLessThan(829 * 1.05);
-    expect(v.longFrames.count).toBeGreaterThanOrEqual(286);
-    expect(v.longFrames.count).toBeLessThan(286 * 1.05);
-    expect(v.stalls.count).toBeGreaterThanOrEqual(16);
-    expect(v.stalls.count).toBeLessThanOrEqual(18);
+    const t = result.verdictInputs.targets;
+    expect(t.frames16_7.workOver).toBe(829);
+    expect(t.frames16_7.count).toBeLessThan(829 * 1.02);
+    expect(t.frames33.workOver).toBe(286);
+    expect(t.frames33.count).toBeLessThan(286 * 1.02);
+    expect(t.stalls.count).toBeGreaterThanOrEqual(16);
+    expect(t.stalls.count).toBeLessThanOrEqual(17);
+    expect(t.frames16_7.pass).toBe(false);
+    expect(t.stalls.pass).toBe(false);
   }
 });
