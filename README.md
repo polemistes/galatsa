@@ -16,7 +16,7 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` runs, in order: type checking, linting, format checking, the license header check, the workspace check, unit tests, the dependency license check and the release-age check. It exits with a non-zero code on the first failure. It does not need `pnpm build` first: workspace packages import each other from source (see `tsconfig.base.json`). GitHub Actions runs `pnpm check` and then `pnpm build` on Linux, Windows and macOS.
+`pnpm check` runs, in order: type checking, linting, format checking, the license header check, the workspace check, the translation check, unit tests, the dependency license check and the release-age check. It exits with a non-zero code on the first failure. It does not need `pnpm build` first: workspace packages import each other from source (see `tsconfig.base.json`). GitHub Actions runs `pnpm check` and then `pnpm build` on Linux, Windows and macOS.
 
 The dependency license check covers the JavaScript dependencies of every workspace package, including the optional platform packages for every operating system. To make that possible, `pnpm-workspace.yaml` tells pnpm to install the platform packages for all systems, not only the current one. Every dependency of a workspace package counts as production and must be compatible with GPL-3.0-or-later. The root's `devDependencies` (repository tooling) only need a free license. The license lists and the sources behind them are described in [docs/adr/0002-kontroll-av-forutsetninger.md](docs/adr/0002-kontroll-av-forutsetninger.md) (in Norwegian).
 
