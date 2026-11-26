@@ -36,6 +36,20 @@ export interface LabApi {
    * between x0 and x1, with sub-pixel interpolation. Returns null if none.
    */
   findEdge(png: string, y: number, x0: number, x1: number): Promise<number | null>;
+  /**
+   * Mean absolute difference in brightness (0 to 255) between neighbouring pixels
+   * of a PNG screenshot (base64): higher is sharper for the same content.
+   */
+  sharpness(png: string): Promise<number>;
+}
+
+async function decodePng(png: string): Promise<ImageData> {
+  const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const context = canvas.getContext("2d", { willReadFrequently: true })!;
+  context.drawImage(bitmap, 0, 0);
+  return context.getImageData(0, 0, bitmap.width, bitmap.height);
 }
 
 declare global {
@@ -292,15 +306,11 @@ function start(): void {
       return engine?.stats() ?? {};
     },
     async findEdge(png, y, x0, x1) {
-      const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
-      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const context = canvas.getContext("2d", { willReadFrequently: true })!;
-      context.drawImage(bitmap, 0, 0);
-      const row = context.getImageData(0, y, bitmap.width, 1).data;
+      const image = await decodePng(png);
+      const row = image.data.subarray(4 * y * image.width, 4 * (y + 1) * image.width);
       const darkness = (x: number) =>
         1 - (row[4 * x]! + row[4 * x + 1]! + row[4 * x + 2]!) / (3 * 255);
-      for (let x = Math.max(1, x0); x < Math.min(x1, bitmap.width); x++) {
+      for (let x = Math.max(1, x0); x < Math.min(x1, image.width); x++) {
         const d = darkness(x);
         if (d >= 0.5) {
           const p = darkness(x - 1);
@@ -309,6 +319,21 @@ function start(): void {
         }
       }
       return null;
+    },
+    async sharpness(png) {
+      const { data, width, height } = await decodePng(png);
+      const lum = (i: number) => (data[i]! + data[i + 1]! + data[i + 2]!) / 3;
+      let sum = 0;
+      let count = 0;
+      for (let y = 0; y < height - 1; y++) {
+        for (let x = 0; x < width - 1; x++) {
+          const i = 4 * (y * width + x);
+          const v = lum(i);
+          sum += Math.abs(v - lum(i + 4)) + Math.abs(v - lum(i + 4 * width));
+          count += 2;
+        }
+      }
+      return sum / count;
     },
   };
   window.protoLab = api;

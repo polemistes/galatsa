@@ -232,9 +232,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     s.transformOrigin = "0 0";
     s.zIndex = String(item.index);
     if (e.opacity < 1) s.opacity = String(e.opacity);
-    if (e.kind === "text") {
-      if (mode === "layer") layoutText(item, 1);
-    }
+    item.node = node;
+    if (e.kind === "text" && mode === "layer") layoutText(item, 1);
     if (mode === "layer") {
       // Static matrix in world units: rotate around the element's centre.
       const m = `matrix(${item.cos},${item.sin},${-item.sin},${item.cos},${
