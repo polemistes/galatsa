@@ -1,0 +1,13 @@
+{
+  // Builds the bench modules to dist/, so that a package that compiles against
+  // dist/ (with tsc, without the "@galatsa/source" condition) can import the engine
+  // interface and the runner. The harness page itself is built by Vite.
+  "extends": "../tsconfig.build.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.mts", "src/**/*.cts"]
+}

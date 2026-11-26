@@ -179,6 +179,9 @@ catalogs:
     '@types/node':
       specifier: 26.6.6
       version: 26.6.6
+    vite:
+      specifier: 8.3.8
+      version: 8.3.8
     vitest:
       specifier: 5.1.0
       version: 5.1.0
@@ -212,7 +215,7 @@ importers:
         specifier: 8.72.2
         version: 8.72.2(eslint@10.14.0(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)
       vite:
-        specifier: 8.3.8
+        specifier: 'catalog:'
         version: 8.3.8(@types/node@26.6.6)(yaml@2.9.1)
       vitest:
         specifier: 'catalog:'
@@ -230,6 +233,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.8(@types/node@26.6.6)(yaml@2.9.1)
       vitest:
         specifier: 'catalog:'
         version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
@@ -242,6 +248,9 @@ importers:
 
   tests/e2e:
     devDependencies:
+      '@galatsa/bench':
+        specifier: workspace:*
+        version: link:../../bench
       '@playwright/test':
         specifier: 'catalog:'
         version: 1.65.0

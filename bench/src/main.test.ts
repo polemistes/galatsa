@@ -18,5 +18,8 @@ describe("bench", () => {
     expect(result.stderr).not.toMatch(/Error/);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(`@galatsa/core ${CORE_VERSION}`);
+    expect(result.stdout).toContain(
+      "2000 elements (1200 shapes, 600 text boxes, 200 images)",
+    );
   });
 });
