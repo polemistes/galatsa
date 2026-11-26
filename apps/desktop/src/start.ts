@@ -102,9 +102,12 @@ function render(root: HTMLElement, settings: Settings, done: string | null): voi
   });
 
   const single = el("div", "single");
+  const singleLabel = el("p");
+  singleLabel.textContent = t("action.runOneLabel");
+  single.append(singleLabel);
   for (const id of ENGINE_IDS) {
     const button = el("button");
-    button.textContent = t("action.runOne", { engine: engineName(id) });
+    button.textContent = engineName(id);
     button.addEventListener("click", () => start([id]).catch(showError));
     buttons.push(button);
     single.append(button);
@@ -164,6 +167,7 @@ async function main(): Promise<void> {
   if (done === null && settings.autorun !== null) {
     const engines = settings.autorun === "all" ? ENGINE_IDS : [settings.autorun];
     if (engines.every(isEngineId) && windowFits()) await start(engines);
+    else if (settings.exitWhenDone) await host.exitApp(2); // automated run cannot start
   } else if (done !== null && settings.exitWhenDone) {
     setTimeout(() => void host.exitApp(0), 2000);
   }

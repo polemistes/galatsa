@@ -16,7 +16,7 @@ export default {
   "action.runAll": "Kjør alle målinger",
   "action.runAllHint":
     "Tar omtrent {minutes} minutter. Hver motor kjøres tre ganger: én oppvarming med bilder og to tidsmålinger.",
-  "action.runOne": "Kjør bare {engine}",
+  "action.runOneLabel": "Eller kjør én motor om gangen:",
   "action.openFolder": "Åpne mappen med resultater",
   "action.back": "Tilbake til start",
   "window.tooSmall":

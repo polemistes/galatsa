@@ -16,7 +16,7 @@ export default {
   "action.runAll": "Run all measurements",
   "action.runAllHint":
     "Takes about {minutes} minutes. Each engine runs three times: one warm-up with images and two timing runs.",
-  "action.runOne": "Run {engine} only",
+  "action.runOneLabel": "Or run one engine at a time:",
   "action.openFolder": "Open the results folder",
   "action.back": "Back to start",
   "window.tooSmall":
