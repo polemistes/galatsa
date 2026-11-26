@@ -1,0 +1,22 @@
+{
+  "name": "@galatsa/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Document model, camera, routes, commands and extension registry for Galatsa",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

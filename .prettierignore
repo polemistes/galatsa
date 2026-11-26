@@ -1,0 +1,16 @@
+# Generated or installed output
+node_modules
+dist
+coverage
+playwright-report
+test-results
+.vite
+target
+pnpm-lock.yaml
+
+# Existing project documents, written in Norwegian and kept as they are
+plan
+PLAN.md
+idenotat.md
+CLAUDE.md
+LICENSE
