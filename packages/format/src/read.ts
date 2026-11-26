@@ -177,7 +177,7 @@ async function readUnchecked(
     assets.set(id, data);
   }
   for (const id of assetsInUse(snapshot)) {
-    if (!assets.has(id)) {
+    if (!assets.has(id) && !snapshot.assets[id]?.external) {
       warnings.push({
         code: "asset-missing",
         message: `The asset ${id} is not in the file.`,

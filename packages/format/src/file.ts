@@ -84,6 +84,7 @@ export function writeGalatsaFile(
     entries.push({ name: ENTRY.ydoc, data: Y.encodeStateAsUpdate(doc), compress: true });
   }
   for (const id of assetsToWrite(snapshot)) {
+    if (snapshot.assets[id]?.external) continue;
     const bytes = assets(id);
     if (!bytes) continue;
     const mediaType = snapshot.assets[id]?.mediaType ?? "application/octet-stream";
