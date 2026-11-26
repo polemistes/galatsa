@@ -7,3 +7,5 @@ export * from "./schema.ts";
 export * from "./encode.ts";
 export * from "./snapshot.ts";
 export * from "./ops.ts";
+export * from "./sync.ts";
+export * from "./testing.ts";
