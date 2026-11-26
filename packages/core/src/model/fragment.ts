@@ -153,7 +153,14 @@ export function copyFragment(
     setOwn(routes, id, copy);
   }
 
-  const fragment: Fragment = { elements, roots, stops, routes, fallbackViews, assets: {} };
+  const fragment: Fragment = {
+    elements,
+    roots,
+    stops,
+    routes,
+    fallbackViews,
+    assets: {},
+  };
   const used = referencedAssets({
     ...snapshot,
     elements,

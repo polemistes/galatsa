@@ -82,7 +82,8 @@ export function writeZip(
   // Before compressing anything: what is stored as it is must fit already.
   let total = 22;
   for (const entry of entries) {
-    if (!isSafeEntryName(entry.name)) throw new Error(`Unsafe zip entry name ${entry.name}`);
+    if (!isSafeEntryName(entry.name))
+      throw new Error(`Unsafe zip entry name ${entry.name}`);
     if (names.has(entry.name)) throw new Error(`Duplicate zip entry ${entry.name}`);
     names.add(entry.name);
     total += overhead(entry.name) + (entry.compress ? 0 : entry.data.length);
@@ -403,11 +404,14 @@ export function openZip(
   const ranges = [...pending].sort((a, b) => a.start - b.start);
   let expected = 0;
   for (const entry of ranges) {
-    if (entry.start < expected) throw damaged(`the entry ${entry.name} overlaps another entry`);
-    if (entry.start > expected) throw damaged("the archive holds bytes that belong to no entry");
+    if (entry.start < expected)
+      throw damaged(`the entry ${entry.name} overlaps another entry`);
+    if (entry.start > expected)
+      throw damaged("the archive holds bytes that belong to no entry");
     expected = entry.dataStart + entry.compressedSize;
   }
-  if (expected !== cdOffset) throw damaged("the archive holds bytes that belong to no entry");
+  if (expected !== cdOffset)
+    throw damaged("the archive holds bytes that belong to no entry");
 
   const contents: ZipContents = { entries: new Map(), damaged: new Set() };
   for (const entry of pending) {

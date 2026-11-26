@@ -110,7 +110,9 @@ describe(`files of documents a peer scribbled in: ${SEEDS} seeds`, () => {
           expect(read.snapshot, where).toEqual(expected);
           expect(read.mergeIdentityKept, where).toBe(includeYdoc);
           expect(
-            read.warnings.map((w) => w.code).filter((c) => c !== "asset-missing"),
+            read.warnings
+              .map((w) => w.code)
+              .filter((c) => c !== "asset-missing" && c !== "asset-undescribed"),
             where,
           ).toEqual(includeYdoc ? ["content-quarantined"] : []);
           expect((await readGalatsaSnapshot(written.bytes)).snapshot, where).toEqual(

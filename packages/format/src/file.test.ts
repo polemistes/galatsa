@@ -519,12 +519,15 @@ describe("review findings (format)", () => {
     expect((await readGalatsaFile(shared)).warnings.map((w) => w.code)).not.toContain(
       "content-quarantined",
     );
-    // Tidy up removes what can be removed (root types cannot).
+    // Tidy up removes it, also what an unknown root type holds.
     tidyUp(read.doc);
-    const tidy = await readGalatsaFile(writeGalatsaFile(read.doc, () => undefined));
-    expect(tidy.warnings.find((w) => w.code === "content-quarantined")?.details).toEqual([
-      "root secretRoot: unknown root type",
-    ]);
+    const tidyBytes = writeGalatsaFile(read.doc, () => undefined);
+    const tidy = await readGalatsaFile(tidyBytes);
+    expect(tidy.mergeIdentityKept).toBe(true);
+    expect(tidy.warnings.map((w) => w.code)).not.toContain("content-quarantined");
+    expect(fromUtf8(readZip(tidyBytes).get("ydoc.bin")!)).not.toContain(
+      "not in document.json",
+    );
   });
 
   it("uses ydoc.bin only as the manifest describes it", async () => {

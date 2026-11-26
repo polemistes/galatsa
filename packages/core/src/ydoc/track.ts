@@ -101,7 +101,11 @@ function locateRecord(doc: Y.Doc, record: RecordMap): Located | null {
  * Whether a record is hidden by a delete, the marks in `ignored` aside (those
  * the transaction at hand wrote itself).
  */
-function isDeleted(view: Resolver, located: Located, ignored: ReadonlySet<string>): boolean {
+function isDeleted(
+  view: Resolver,
+  located: Located,
+  ignored: ReadonlySet<string>,
+): boolean {
   if (located.kind === "elements") return view.isDeleted(located.id);
   const marks = marksOf(located.record);
   let digest: string | undefined;
@@ -196,14 +200,16 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
           tr,
           keys as Set<string>,
         ).changes.keys;
-        for (const [action, change] of changes) noteMark(located, action, change.oldValue);
+        for (const [action, change] of changes)
+          noteMark(located, action, change.oldValue);
       } else noteMark(located, second);
       continue;
     }
     if (type instanceof Y.Map) {
       // In a map, writing the value that is already there is not work.
       const map = type as Y.Map<unknown>;
-      const visits = located.kind === "routes" && first === "entries" && second === undefined;
+      const visits =
+        located.kind === "routes" && first === "entries" && second === undefined;
       let changed = false;
       for (const [key, change] of new Y.YMapEvent(map, tr, keys as Set<string>).changes
         .keys) {
@@ -214,7 +220,10 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
         // A new visit, or a visit pointed at another stop, is work on the stop.
         if (!visits || change.action === "delete") continue;
         const stop = stopOf(now);
-        if (stop !== null && (change.action === "add" || stopOf(change.oldValue) !== stop))
+        if (
+          stop !== null &&
+          (change.action === "add" || stopOf(change.oldValue) !== stop)
+        )
           visited.add(stop);
       }
       if (!changed) continue;
@@ -403,7 +412,8 @@ export class DocumentUndoManager extends Y.UndoManager {
     if (!step) return;
     this.doc.transact((tr) => {
       Y.iterateDeletedStructs(tr, step.insertions, (struct) => {
-        if (!(struct instanceof Y.Item) || !struct.deleted || struct.redone !== null) return;
+        if (!(struct instanceof Y.Item) || !struct.deleted || struct.redone !== null)
+          return;
         if (struct.parentSub === null) return;
         const parent = struct.parent;
         if (!(parent instanceof Y.Map) || parent._item?.parentSub !== "deleted") return;

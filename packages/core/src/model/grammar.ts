@@ -712,7 +712,11 @@ export function readSeen(seen: Record<string, unknown>, p: Problems): DeleteMark
   const read: DeleteMark["seen"] = {};
   for (const id of Object.keys(seen)) {
     const digest = seen[id];
-    if (ID_PATTERN.test(id) && typeof digest === "string" && DIGEST_PATTERN.test(digest)) {
+    if (
+      ID_PATTERN.test(id) &&
+      typeof digest === "string" &&
+      DIGEST_PATTERN.test(digest)
+    ) {
       setOwn(read, id, digest);
     } else p.at(id, () => p.add("not an id with a revision digest, left out"));
   }
@@ -899,7 +903,8 @@ export const envelopeField = {
   },
   /** A place marker left by tidy up; only frames and groups can be one. */
   purged: (value: unknown, type: string, p: Problems): boolean => {
-    if (typeof value !== "boolean") return fail(p, "must be a boolean, read as false", false);
+    if (typeof value !== "boolean")
+      return fail(p, "must be a boolean, read as false", false);
     if (value && !isContainerType(type))
       return fail(p, "only frames and groups can be place markers", false);
     return value;

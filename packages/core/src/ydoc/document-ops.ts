@@ -238,7 +238,8 @@ export function tidyUp(doc: Y.Doc): TidySummary {
   doomed(r.elements as Y.Map<unknown>, fates, RECORD_KEYS.elements);
   doomed(r.stops as Y.Map<unknown>, stopFates, RECORD_KEYS.stops);
   doomed(r.routes as Y.Map<unknown>, routeFates, RECORD_KEYS.routes);
-  for (const { type } of foreign) for (const inner of typesIn(type)) emptyDeep(doc, inner);
+  for (const { type } of foreign)
+    for (const inner of typesIn(type)) emptyDeep(doc, inner);
 
   /** Takes the entries for records deleted here out of the marks that stay. */
   const trimMarks = (record: Y.Map<unknown>, gone: Map<string, Fate>) => {
@@ -430,7 +431,8 @@ export function pasteFragment(
     };
     if (index !== undefined) {
       const seen: { [id: string]: string } = {};
-      for (const member of inside.get(oldId) ?? [oldId]) setOwn(seen, ids.get(member)!, NEW);
+      for (const member of inside.get(oldId) ?? [oldId])
+        setOwn(seen, ids.get(member)!, NEW);
       const action = newId(options?.randomBytes);
       actions.set(`elements ${id}`, action);
       next.deleted = { [action]: { seen } };
@@ -579,7 +581,8 @@ export function independentCopy(
   source: Y.Doc | DocumentSnapshot,
   options: OpOptions & { purge?: boolean } = {},
 ): Y.Doc {
-  let snapshot = source instanceof Y.Doc ? toSnapshot(source) : readSnapshot(source).snapshot;
+  let snapshot =
+    source instanceof Y.Doc ? toSnapshot(source) : readSnapshot(source).snapshot;
   if (!snapshot) throw new InvalidDocumentError("document", ["must be an object"]);
   if (options.purge) snapshot = purgeSnapshot(snapshot);
   return fromSnapshot(

@@ -305,16 +305,18 @@ describe("resolution", () => {
     expect(hex(sha256Ascii("abc"))).toBe(
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     );
-    expect(hex(sha256Ascii("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))).toBe(
-      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
-    );
+    expect(
+      hex(sha256Ascii("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")),
+    ).toBe("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
     expect(hex(sha256Ascii(""))).toBe(
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     );
     expect(revisionText({ "b.0": 3, "a.1": 64 })).toBe("a.1=64\nb.0=3");
     expect(revisionDigest({})).toBe("");
     expect(revisionDigest({ "abc.0": 7 })).toBe("kHrilVv4WhFPXweb");
-    expect(revisionDigest({ "b.0": 3, "a.1": 64 })).toBe(revisionDigest({ "a.1": 64, "b.0": 3 }));
+    expect(revisionDigest({ "b.0": 3, "a.1": 64 })).toBe(
+      revisionDigest({ "a.1": 64, "b.0": 3 }),
+    );
     expect(revisionDigest({ "a.1": 64 })).not.toBe(revisionDigest({ "a.1": 63 }));
   });
 

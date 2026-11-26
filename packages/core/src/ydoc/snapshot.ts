@@ -97,7 +97,9 @@ const QUIET = new Problems(0);
 /** A record's `refs` as stored: a set of ids. */
 function rawRefs(value: unknown): unknown {
   if (!(value instanceof Y.Map)) return jsonFromY(value);
-  return [...(value as Y.Map<unknown>).keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return [...(value as Y.Map<unknown>).keys()].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
 }
 
 /** The current revision of a record map. */
@@ -274,8 +276,7 @@ class LiveEnvelope implements ElementEnvelope {
   }
 
   get deleted(): DeleteMarks {
-    if (this._deleted === UNREAD)
-      this._deleted = marksOf(this.map);
+    if (this._deleted === UNREAD) this._deleted = marksOf(this.map);
     return this._deleted;
   }
 

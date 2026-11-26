@@ -147,7 +147,8 @@ export function writeGalatsaFile(
   for (const id of assetsToWrite(snapshot)) {
     if (Object.hasOwn(snapshot.assets, id) && snapshot.assets[id]?.external) continue;
     const bytes = assets(id);
-    if (bytes) entries.push({ name: ENTRY.assetsPrefix + id, data: bytes, compress: false });
+    if (bytes)
+      entries.push({ name: ENTRY.assetsPrefix + id, data: bytes, compress: false });
   }
   if (options.thumbnail) {
     entries.push({ name: ENTRY.thumbnail, data: options.thumbnail, compress: false });

@@ -57,11 +57,15 @@ export function sha256Ascii(text: string): Uint8Array {
     let [a, b, c, d, e, f, g, hh] = h as unknown as number[];
     for (let i = 0; i < 64; i++) {
       const s1 =
-        ((e! >>> 6) | (e! << 26)) ^ ((e! >>> 11) | (e! << 21)) ^ ((e! >>> 25) | (e! << 7));
+        ((e! >>> 6) | (e! << 26)) ^
+        ((e! >>> 11) | (e! << 21)) ^
+        ((e! >>> 25) | (e! << 7));
       const ch = (e! & f!) ^ (~e! & g!);
       const t1 = (hh! + s1 + ch + K[i]! + w[i]!) >>> 0;
       const s0 =
-        ((a! >>> 2) | (a! << 30)) ^ ((a! >>> 13) | (a! << 19)) ^ ((a! >>> 22) | (a! << 10));
+        ((a! >>> 2) | (a! << 30)) ^
+        ((a! >>> 13) | (a! << 19)) ^
+        ((a! >>> 22) | (a! << 10));
       const maj = (a! & b!) ^ (a! & c!) ^ (b! & c!);
       const t2 = (s0 + maj) >>> 0;
       hh = g;

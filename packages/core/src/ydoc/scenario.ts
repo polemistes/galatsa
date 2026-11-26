@@ -166,7 +166,12 @@ class Oracle {
   }
 
   /** Whether a mark hides the records on `path` (from a record up to the marked one). */
-  #hides(version: MarkVersion, path: readonly string[], kind: Kind, known: ReadonlySet<number>) {
+  #hides(
+    version: MarkVersion,
+    path: readonly string[],
+    kind: Kind,
+    known: ReadonlySet<number>,
+  ) {
     return path.every(
       (id) =>
         version.covered.has(id) &&
@@ -270,7 +275,10 @@ class Oracle {
         if (content(was) !== content(now)) worked.add(`${kind} ${id}`);
         for (const action of Object.keys(was.deleted)) {
           if (Object.hasOwn(now.deleted, action)) continue;
-          const version = this.#version(`${kind} ${id} ${action}`, was.deleted[action]!.seen);
+          const version = this.#version(
+            `${kind} ${id} ${action}`,
+            was.deleted[action]!.seen,
+          );
           if (version && this.#hides(version, [id], kind, this.known[r]!)) {
             worked.add(`${kind} ${id}`);
             restored.add(`${kind} ${id}`);
@@ -287,7 +295,8 @@ class Oracle {
         was === undefined ||
         (restored.has(`routes ${id}`) && !withoutOwn.hidden.has(`routes ${id}`));
       for (const entry of Object.keys(now.entries)) {
-        const old = was && Object.hasOwn(was.entries, entry) ? was.entries[entry] : undefined;
+        const old =
+          was && Object.hasOwn(was.entries, entry) ? was.entries[entry] : undefined;
         if (back || old === undefined || old.stop !== now.entries[entry]!.stop)
           worked.add(`stops ${now.entries[entry]!.stop}`);
       }
@@ -305,7 +314,8 @@ class Oracle {
     for (const key of written) {
       const [kind, id, action] = key.split(" ") as [Kind, string, string];
       const seen = recordOf(after, kind, id)!.deleted[action]!.seen;
-      const covered = kind === "elements" ? this.#coverage(after, now, id) : new Set([id]);
+      const covered =
+        kind === "elements" ? this.#coverage(after, now, id) : new Set([id]);
       const listed = Object.keys(seen).sort();
       if (stable(listed) !== stable([...covered].sort())) {
         this.failures.push(
@@ -357,7 +367,9 @@ class Oracle {
     for (const id of Object.keys(snapshot.elements)) {
       const parent = expected.tree.parent.get(id) ?? null;
       if (view.parentOf(id) !== parent)
-        this.failures.push(`${where}: ${id} is in ${String(view.parentOf(id))}, not ${String(parent)}`);
+        this.failures.push(
+          `${where}: ${id} is in ${String(view.parentOf(id))}, not ${String(parent)}`,
+        );
       const hidden = expected.hidden.has(`elements ${id}`);
       if (view.isDeleted(id) !== hidden || live.isDeleted(id) !== hidden) {
         this.failures.push(
@@ -646,7 +658,9 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
             doc,
             stop,
             id,
-            pick((["show", "hide", null] as const).filter((action) => action !== current)),
+            pick(
+              (["show", "hide", null] as const).filter((action) => action !== current),
+            ),
             o,
           ),
         );

@@ -164,7 +164,10 @@ function rebalance(
   if (!needsRebalance(items)) return;
   const sorted = sortOrdered(items);
   const keys = keysBetween(null, null, sorted.length);
-  doc.transact(() => sorted.forEach((item, i) => write(item.id, keys[i]!)), ORIGIN.rebalance);
+  doc.transact(
+    () => sorted.forEach((item, i) => write(item.id, keys[i]!)),
+    ORIGIN.rebalance,
+  );
 }
 
 /** Makes room for another order key among the children of a container. */
@@ -878,10 +881,7 @@ export function setVisibility(
 function removeRecord(id: string, map: Y.Map<unknown>, options?: OpOptions): void {
   const rev = revisionOf(map);
   if (isRemoved(id, { rev, deleted: marksOf(map) })) return;
-  marksMap(map).set(
-    newId(options?.randomBytes),
-    markToY({ [id]: revisionDigest(rev) }),
-  );
+  marksMap(map).set(newId(options?.randomBytes), markToY({ [id]: revisionDigest(rev) }));
 }
 
 /**
