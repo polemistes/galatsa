@@ -64,6 +64,7 @@ describe(`random scenarios: ${SEEDS} seeds from ${FIRST}`, () => {
         "remove stop",
         "visit stop",
         "move visit",
+        "command",
       ]) {
         expect(steps.get(name) ?? 0, name).toBeGreaterThan(0);
       }

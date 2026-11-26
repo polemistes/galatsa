@@ -4,7 +4,7 @@
 // self-contained fragment that can be pasted with new ids, into the same or
 // another document. Section 3.5 of docs/adr/0001-document-model-and-file-format.md.
 
-import { keysBetween } from "./order.ts";
+import { keysBetween, sortOrdered } from "./order.ts";
 import { Resolver, lookupFromRecord } from "./resolve.ts";
 import { isRemoved, stopRegion } from "./route.ts";
 import {
@@ -138,8 +138,19 @@ export function copyFragment(
   const routes: { [id: RouteId]: Route } = {};
   for (const id of routeIds) {
     const route = Object.hasOwn(snapshot.routes, id) ? snapshot.routes[id] : undefined;
-    if (route && !isRemoved(id, route))
-      setOwn(routes, id, { ...structuredJson(route), rev: {}, deleted: {} });
+    if (!route || isRemoved(id, route)) continue;
+    const copy: Route = { ...structuredJson(route), rev: {}, deleted: {} };
+    // Fresh order keys, in playing order: entries with equal keys are ordered by
+    // their ids, and a paste gives them new ids.
+    const entries = sortOrdered(
+      Object.keys(copy.entries).map((entry) => ({
+        id: entry,
+        order: copy.entries[entry]!.order,
+      })),
+    );
+    const keys = keysBetween(null, null, entries.length);
+    entries.forEach((entry, i) => (copy.entries[entry.id]!.order = keys[i]!));
+    setOwn(routes, id, copy);
   }
 
   const fragment: Fragment = { elements, roots, stops, routes, fallbackViews, assets: {} };

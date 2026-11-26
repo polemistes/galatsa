@@ -171,15 +171,15 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
   /** Routes that this transaction took a mark off, or whose visits it changed. */
   const restoredRoutes: Located[] = [];
   const visited = new Set<string>();
-  const noteMark = (located: Located, action: string) => {
+  const noteMark = (located: Located, action: string, removed?: unknown) => {
     const deleted = located.record.get("deleted");
     const mark = deleted instanceof Y.Map ? (deleted.get(action) as unknown) : undefined;
     if (mark instanceof Y.Map) {
       written.set(mark, { located, action });
       ignored.add(markKey(located, action));
       if (located.kind === "elements") ignoredElements.add(`${located.id} ${action}`);
-    } else {
-      // The mark is gone: taking a delete back is work on the record.
+    } else if (wasInEffect(located, removed)) {
+      // Taking back a delete that applied is work on the record: a restore.
       work(located);
       if (located.kind === "routes") restoredRoutes.push(located);
     }
@@ -188,28 +188,38 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
     const located = locate(doc, type as Y.AbstractType<unknown>);
     if (!located) continue;
     const [first, second] = located.path;
-    if (first === undefined) {
-      // The record map itself: every key except the bookkeeping is work.
-      for (const key of keys) if (key !== "rev" && key !== "deleted") work(located);
-    } else if (first === "rev") continue;
-    else if (first === "deleted") {
+    if (first === "rev") continue;
+    if (first === "deleted") {
       if (second === undefined) {
-        for (const action of keys) if (action !== null) noteMark(located, action);
+        const changes = new Y.YMapEvent(
+          type as unknown as Y.Map<unknown>,
+          tr,
+          keys as Set<string>,
+        ).changes.keys;
+        for (const [action, change] of changes) noteMark(located, action, change.oldValue);
       } else noteMark(located, second);
-    } else {
-      work(located);
-      if (located.kind === "routes" && first === "entries" && second === undefined) {
-        // A new visit, or a visit pointed at another stop, is work on the stop.
-        const entries = type as unknown as Y.Map<unknown>;
-        const changes = new Y.YMapEvent(entries, tr, keys as Set<string>).changes.keys;
-        for (const [entry, change] of changes) {
-          if (change.action === "delete") continue;
-          const stop = stopOf(entries.get(entry));
-          if (stop !== null && (change.action === "add" || stopOf(change.oldValue) !== stop))
-            visited.add(stop);
-        }
-      }
+      continue;
     }
+    if (type instanceof Y.Map) {
+      // In a map, writing the value that is already there is not work.
+      const map = type as Y.Map<unknown>;
+      const visits = located.kind === "routes" && first === "entries" && second === undefined;
+      let changed = false;
+      for (const [key, change] of new Y.YMapEvent(map, tr, keys as Set<string>).changes
+        .keys) {
+        if (first === undefined && (key === "rev" || key === "deleted")) continue;
+        const now = map.get(key);
+        if (change.action === "update" && sameValue(change.oldValue, now)) continue;
+        changed = true;
+        // A new visit, or a visit pointed at another stop, is work on the stop.
+        if (!visits || change.action === "delete") continue;
+        const stop = stopOf(now);
+        if (stop !== null && (change.action === "add" || stopOf(change.oldValue) !== stop))
+          visited.add(stop);
+      }
+      if (!changed) continue;
+    }
+    work(located);
   }
   for (const [record, force] of tracker.noted) work(locateRecord(doc, record), force);
   tracker.noted.clear();
@@ -255,6 +265,27 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
       if (!jsonEquals(mark.get("seen"), seen)) mark.set("seen", seen);
     }
   }, ORIGIN.track);
+}
+
+/** True if two values stored in a shared map are the same plain value. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a instanceof Y.AbstractType || b instanceof Y.AbstractType) return a === b;
+  return jsonEquals(a, b);
+}
+
+/**
+ * Whether a mark that a transaction took off a record applied to that record
+ * until then: it listed the record with the revision it still has. (The mark is
+ * deleted, but what it held can still be read while its transaction ends.)
+ */
+function wasInEffect(located: Located, removed: unknown): boolean {
+  if (!(removed instanceof Y.Map)) return false;
+  const item = (removed as Y.Map<unknown>)._map.get("seen");
+  const seen = item?.content.getContent()[0] as Record<string, unknown> | undefined;
+  if (typeof seen !== "object" || seen === null || !Object.hasOwn(seen, located.id)) {
+    return false;
+  }
+  return seen[located.id] === revisionDigest(revisionOf(located.record));
 }
 
 /** The stop a route entry visits, or null if the value is not an entry. */
