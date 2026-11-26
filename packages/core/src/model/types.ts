@@ -38,8 +38,10 @@ export type JsonObject = { [key: string]: Json };
 //
 // An element's `data` is a map whose values are either plain JSON (replaced as a
 // whole, last writer wins) or shared types that merge item by item. In the JSON
-// form a shared type is an object with a "$y" tag. A plain JSON object that itself
-// has a "$y" key is escaped as { "$y": "json", "value": ... }.
+// form a shared type is an object with a "$y" tag. Only values placed directly in
+// a data map, a shared map or a shared array are read as tagged; a plain object
+// in such a place that has a "$y" key of its own is escaped as
+// { "$y": "json", "value": ... }. Anything nested inside plain JSON is plain.
 // ---------------------------------------------------------------------------
 
 /** One run of a rich text delta, as in Yjs `Y.Text.toDelta()`. */
@@ -107,8 +109,8 @@ export type YValue =
   | EscapedJsonValue;
 
 /**
- * A value inside an element's `data`: plain JSON or a tagged shared type. Plain
- * objects with a "$y" key never appear unescaped.
+ * A value inside an element's `data`: plain JSON or a tagged shared type. At this
+ * level, a plain object with a "$y" key never appears unescaped.
  */
 export type DataValue = Json | YValue;
 

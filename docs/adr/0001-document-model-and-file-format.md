@@ -32,22 +32,22 @@ Element types (text, shapes, images, freehand drawing, tables, charts, maps, med
 
 The decisions, in short:
 
-| Topic                    | Decision                                                                                                                                                                                                        | Section |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| Storage                  | One Yjs `Y.Doc` per document. Flat maps of elements, stops, routes and assets keyed by random ids.                                                                                                              | 2       |
-| Element structure        | A fixed envelope that core understands (type, parent, order, position, size, rotation, name, lock, asset references, removal) plus type-specific `data` that only the extension understands.                    | 3       |
-| Z-order                  | A fractional order key per element, among its siblings. No arrays of children.                                                                                                                                  | 4       |
-| Frames and groups        | Containers with a translation-only local coordinate space. An element stores its parent; positions are local to the parent and tagged with the space they were written in.                                      | 5       |
-| Concurrency of structure | Every replica resolves the merged state with the same pure function: orphans go to the root, parent cycles are broken deterministically, stale positions are converted.                                         | 5       |
-| Deletion                 | Soft. A deleted element keeps its record, so concurrent edits are not lost and undo can restore everything. Ungroup and "remove frame, keep contents" dissolve the container instead of moving the children.    | 5.5     |
-| Stops                    | A stop shows a region (a frame, or a rectangle in some container's space), not a camera pose. It holds notes, a transition, and show/hide changes.                                                              | 6       |
-| Routes                   | A route is a list of entries, each pointing at a stop, ordered by fractional keys. Shared stops are simply stops that more than one route points at.                                                            | 6.3     |
-| Visibility               | Show/hide changes add up along the route. An element first shown at a stop is hidden before it.                                                                                                                 | 6.4     |
-| Precision                | float64 throughout; parent-local coordinates; the camera and stop regions are anchored in a container's space; rendering is camera-relative. Zoom 2^-32 to 2^32, clamped further where precision would run out. | 7       |
-| Assets                   | Identified by the SHA-256 of their bytes. The document holds descriptions; bytes are stored beside it.                                                                                                          | 8       |
-| File                     | A zip archive: `mimetype`, `manifest.json` (with the format version), `document.json` (canonical, plain JSON), optional `ydoc.bin` (Yjs state, to keep merge identity), `assets/`, `thumbnail.png`.             | 9       |
-| Old files                | Numbered format versions; a chain of pure JSON migrations upgrades old files on load. Newer files are refused with a clear message.                                                                             | 9.4     |
-| Missing extensions       | The element's envelope is used (position, size, z-order, grouping), its data is kept as opaque JSON and written back unchanged, and a placeholder is drawn.                                                     | 9.5     |
+| Topic                    | Decision                                                                                                                                                                                                                                                                                | Section |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Storage                  | One Yjs `Y.Doc` per document. Flat maps of elements, stops, routes and assets keyed by random ids.                                                                                                                                                                                      | 2       |
+| Element structure        | A fixed envelope that core understands (type, parent, order, position, size, rotation, name, lock, asset references, removal) plus type-specific `data` that only the extension understands.                                                                                            | 3       |
+| Z-order                  | A fractional order key per element, among its siblings. No arrays of children.                                                                                                                                                                                                          | 4       |
+| Frames and groups        | Containers with a translation-only local coordinate space. An element stores its parent; positions are local and tagged with the space they were written in. Moving into a container records a translation instead of rewriting the position, so it never overwrites a concurrent move. | 5       |
+| Concurrency of structure | Every replica resolves the merged state with the same pure function: orphans go to the root, parent cycles are broken deterministically, stale positions are converted.                                                                                                                 | 5       |
+| Deletion                 | Soft. A deleted element keeps its record, so concurrent edits are not lost and undo can restore everything. Ungroup and "remove frame, keep contents" dissolve the container instead of moving the children.                                                                            | 5.5     |
+| Stops                    | A stop shows a region (a frame, or a rectangle in some container's space), not a camera pose. It holds notes, a transition, and show/hide changes.                                                                                                                                      | 6       |
+| Routes                   | A route is a list of entries, each pointing at a stop, ordered by fractional keys. Shared stops are simply stops that more than one route points at.                                                                                                                                    | 6.3     |
+| Visibility               | Show/hide changes add up along the route. An element first shown at a stop is hidden before it.                                                                                                                                                                                         | 6.4     |
+| Precision                | float64 throughout; parent-local coordinates; the camera and stop regions are anchored in a container's space; rendering is camera-relative. Zoom 2^-32 to 2^32, clamped further where precision would run out.                                                                         | 7       |
+| Assets                   | Identified by the SHA-256 of their bytes. The document holds descriptions; bytes are stored beside it.                                                                                                                                                                                  | 8       |
+| File                     | A zip archive: `mimetype`, `manifest.json` (with the format version), `document.json` (canonical, plain JSON), optional `ydoc.bin` (Yjs state, to keep merge identity), `assets/`, `thumbnail.png`.                                                                                     | 9       |
+| Old files                | Numbered format versions; a chain of pure JSON migrations upgrades old files on load. Newer files are refused with a clear message.                                                                                                                                                     | 9.4     |
+| Missing extensions       | The element's envelope is used (position, size, z-order, grouping), its data is kept as opaque JSON and written back unchanged, and a placeholder is drawn.                                                                                                                             | 9.5     |
 
 ## 2. The document and its layout in Yjs
 
@@ -63,8 +63,8 @@ Y.Doc
 └─ "assets"    Y.Map    AssetId -> AssetInfo (JSON, section 8)
 
 element Y.Map
-  type, typeVersion, parent, order, pos, size, rot, name, locked, assets, removed
-                       JSON values; last writer wins per key
+  type, typeVersion, parent, order, pos, rebase, size, rot, name, locked, assets,
+  removed              JSON values; last writer wins per key
   data                 Y.Map: per key, a JSON value or a nested shared type
                        (Y.Text, Y.Map, Y.Array, Y.XmlFragment)
 
@@ -112,6 +112,7 @@ Every element has these keys. Core and every extension understand them; they are
 | `parent`      | id or null                       | The frame or group the element is in; null for the canvas root.                                                   |
 | `order`       | string                           | Fractional order key among siblings (section 4).                                                                  |
 | `pos`         | `{x, y, space}`                  | Top-left corner of the unrotated box, in the local space of the container `space` (section 5.3).                  |
+| `rebase`      | `{from, to, dx, dy}` or null     | Translation recorded when the element changed container after `pos` was written (section 5.3).                    |
 | `size`        | `{w, h}`                         | Width and height in world units, >= 0. Not on groups.                                                             |
 | `rot`         | number                           | Rotation in radians about the box centre, clockwise on screen. Only on extension elements (not frames or groups). |
 | `name`        | string                           | User-visible name; empty when unnamed.                                                                            |
@@ -206,25 +207,32 @@ An editor MAY write a repair later (for example, set the stored parent of a cycl
 
 A frame (`core/frame`) is a named, visible rectangle that contains elements. It has `pos` and `size` but no rotation, because a frame can be a stop and the camera does not rotate. Its `data` has `clip` (draw children only inside the frame), `fill` and `stroke` (CSS colors or null); more appearance keys can be added by core later. Elements inside a frame follow it when it moves, and z-order applies within it.
 
-### 5.3 Local coordinates and tagged positions
+### 5.3 Local coordinates, tagged positions and rebases
 
-Containers have a translation-only local space: the world position of a child is the container's world origin plus the child's local position. There is no scale and no rotation in a container's space, so conversions are additions only and exact enough to be done anywhere.
+Containers have a translation-only local space: the world position of a child is the container's world origin plus the child's local position. There is no scale and no rotation in a container's space, so conversions are additions only.
 
-Each position is stored as `{x, y, space}`, where `space` is the container the position is relative to. Writers set `space` to the element's parent at the time of writing. Normally `space` equals `parent`. It differs only after a merge in which one user moved the element (writing `pos`) while another moved it to a different container (writing `parent`, `pos` and `order`). Without the tag, the moved position would be read in the wrong space and the element would jump by the offset between the two containers.
+**The problem.** Moving an element within its container writes `pos`. Moving it into another container must change `parent` and, if positions are local, its local position too. If both wrote `pos`, a user moving the element and another user moving it into a frame at the same time would write the same key, and one of the two changes would be lost (which one depends on Yjs's client ids). Without care, the surviving `pos` could also be read in the wrong space, so the element would jump by the offset between the containers.
 
-Resolution (`Resolver.localPosition`):
+**The solution.** Two keys, written by different operations:
 
-- If `space` equals the effective parent, `x, y` are the local position.
-- Otherwise, if `space` is a container that exists and is not the element itself or inside it, the position is converted through world coordinates: `world = rawOrigin(space) + (x, y)`, `local = world - rawOrigin(parent)`. `rawOrigin` adds up the stored `x, y` of a container and its effective ancestors without looking at their tags. Using raw origins keeps the computation free of cycles and independent of evaluation order; it is exact unless an ancestor's position is itself stale, which needs two overlapping concurrent conflicts.
-- Otherwise `x, y` are used as local coordinates.
+- `pos` is `{x, y, space}`, where `space` is the container the numbers are relative to. Writers set `space` to the element's effective parent at the time of writing. Only moving the element (and creating it) writes `pos`; a move also clears `rebase`.
+- `rebase` is `{from, to, dx, dy}` or null. Changing an element's container (reparenting, grouping) does not touch `pos`. It writes `parent` and records the translation that keeps the element where it is on the canvas: a position in `from` (the `space` of the current `pos`) plus `(dx, dy)` is the position in `to` (the new parent). The one exception: when an element returns to the very space its `pos` was written in, the operation rewrites `pos` and clears `rebase`.
 
-The next local move of the element writes a fresh position with the current parent, which removes the stale tag.
+So a concurrent move and reparent write different keys and both survive: the element ends in the new container, at the moved position, whichever replica's change Yjs orders first.
+
+**Resolution** (`Resolver.localPosition`), in order:
+
+1. If `space` equals the effective parent, `x, y` are the local position.
+2. If `rebase` is set, `rebase.from` equals `space` and `rebase.to` equals the effective parent, the local position is `(x + dx, y + dy)`.
+3. Otherwise (only after conflicting concurrent writes, for example two reparents of the same element, or a parent cycle that was broken), the position is converted through world coordinates: if `space` is a container that exists and is neither the element itself nor inside it, `local = simpleOrigin(space) + (x, y) - simpleOrigin(parent)`, where `simpleOrigin` adds up the local positions of a container and its effective ancestors computed by rules 1 and 2 only (an ancestor that needs rule 3 contributes its raw `x, y`). This keeps the computation free of cycles and independent of evaluation order. It is exact unless an ancestor is itself in a rule-3 state, which needs two overlapping conflicts. If `space` is missing, not a container, or inside the element, `x, y` are used as they are.
+
+Because the rebase is a fixed translation recorded at the time of the reparent, the element follows its new parent and is not affected when its old container moves later. The next move of the element writes a fresh `pos` in the current parent's space and clears the rebase. Editors MAY normalize earlier, but writing `pos` from a non-move operation reintroduces the conflict described above, so the reference operations do not.
 
 ### 5.4 Groups
 
 A group (`core/group`) is an invisible container. It has a position (the origin of its local space) but no size: its bounds are the union of its live children's bounds (`Resolver.bounds`). An empty group is not drawn and has no bounds. Groups can be nested and can contain frames, and frames can contain groups.
 
-Grouping (`ops.group`) requires the elements to share a parent. It creates the group in that parent with the frontmost member's order key (so the group takes that member's slot), puts the group's origin at the top-left of the members' bounds, and rewrites each member's `parent` and `pos` (now relative to the group). Members keep their order keys, so their stacking among each other is unchanged.
+Grouping (`ops.group`) requires the elements to share a parent. It creates the group in that parent with the frontmost member's order key (so the group takes that member's slot), puts the group's origin at the top-left of the members' bounds, and gives each member the group as `parent` and a `rebase` into the group's space (section 5.3); members' `pos` is not touched, so a concurrent move of a member survives. Members keep their order keys, so their stacking among each other is unchanged.
 
 Moving a group writes only the group's `pos`. Scaling or rotating a group is a command that rewrites the members' positions, sizes and rotations; groups themselves have no scale or rotation.
 
@@ -249,11 +257,12 @@ These are the intended outcomes. Each has a test (section 15).
 
 | A does                             | B does, concurrently            | Outcome after merge                                                                                                                  |
 | ---------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| moves X into frame F               | moves X (within its old parent) | X is in F, at B's position on the canvas (converted through the tag).                                                                |
+| moves X into frame F               | moves X (within its old parent) | X is in F, at B's position on the canvas (rule 2 of section 5.3).                                                                    |
 | moves X out of frame F to the root | moves F                         | X is at the root where A put it; F moves without X.                                                                                  |
 | moves frame F into frame G         | moves G into F                  | Cycle: broken at the smaller id, which goes to the root; the other stays inside it. Nothing disappears. Both replicas show the same. |
-| moves X into F1                    | moves X into F2                 | X ends in one of them, the same on both replicas; its position is consistent with that parent (a stale tag is converted).            |
+| moves X into F1                    | moves X into F2                 | X ends in one of them, the same on both replicas, and stays where it was on the canvas (rule 2, or rule 3 if the keys are mixed).    |
 | groups X and Y                     | groups Y and Z                  | Two groups; Y is in exactly one of them. Nothing is lost or duplicated.                                                              |
+| groups X and Y                     | moves X                         | X is in the group, at B's position.                                                                                                  |
 | ungroups G                         | adds Z to G                     | All of G's children, Z included, stay visible and in place.                                                                          |
 | ungroups G                         | moves G                         | The children end where B's move put them.                                                                                            |
 | deletes frame F                    | moves X out of F                | X survives at the root (or wherever B put it).                                                                                       |
@@ -411,7 +420,7 @@ thumbnail.png                  optional: preview image, longest side at most 512
 
 ### 9.3 document.json and ydoc.bin
 
-`document.json` is the canonical content: a `DocumentSnapshot` as UTF-8 JSON, keys sorted, including removed records (section 5.5). It is enough to open the file. The player reads only this, so it does not need Yjs.
+`document.json` is the canonical content: a `DocumentSnapshot` as UTF-8 JSON, including removed records (section 5.5). It is enough to open the file. Writers SHOULD write object keys in a deterministic order (the reference writer sorts them), so the same document gives the same bytes; readers MUST NOT depend on key order. Text deltas MUST be normalized as Yjs produces them (adjacent runs with equal attributes merged, no `null` attributes), because a delta read into Yjs and back comes out normalized. `readGalatsaSnapshot` (entry `@galatsa/format/read`) reads only this, so the player does not need Yjs.
 
 `ydoc.bin` is optional and only preserves CRDT identity: a document reopened from it can still merge with other copies of the same document (another user's offline edits, or the sync server's state) without duplicating everything. A document rebuilt from `document.json` alone has fresh identity and merges only with copies made after that.
 
@@ -442,7 +451,7 @@ The reader validates `document.json` structurally (`validateSnapshot` in `model/
 
 ### 9.7 Limits
 
-Readers SHOULD refuse archives whose entries declare more than a configured total uncompressed size (default 4 GiB) or a compression ratio that suggests a zip bomb, before decompressing them. Entry sizes are checked against the archive's central directory and the actual inflated size.
+Readers SHOULD refuse archives whose central directory declares more than a configured total uncompressed size (default 4 GiB) or number of entries (default 100 000), before decompressing anything. Each entry is inflated into a buffer of exactly its declared size, so an entry that lies about its size cannot grow past it; the result must then match the declared size and CRC-32. Together these bound memory use without a separate compression-ratio rule.
 
 ### 9.8 The zip library
 
@@ -459,6 +468,17 @@ Licenses and sizes are from the npm registry (`npm view <name> license dist.unpa
 
 Choice: **fflate for compression, own code for the archive structure.** The writer uses fflate's `zipSync`. The reader parses the zip directory itself (about 150 lines) and uses fflate's `inflateSync` only, because fflate's unzip does not verify CRC-32 checksums or let the reader check declared sizes before inflating, both of which a damaged-file message and the limits in 9.7 need. A player that only reads needs our parser plus fflate's inflate, which keeps it small.
 
+Measured bundle sizes (Vite 8 production build, minified, then gzip; measured 2026-11-26 with a throwaway script, not part of the repository):
+
+| What                                                                 | Minified | Gzip   |
+| -------------------------------------------------------------------- | -------- | ------ |
+| zip reader (`readZip`: our parser + fflate inflate)                  | 9.2 kB   | 3.7 kB |
+| zip writer (`writeZip`: fflate zipSync)                              | 13.2 kB  | 5.3 kB |
+| `@galatsa/core` model (no Yjs, includes fractional-indexing)         | 22.0 kB  | 6.3 kB |
+| `@galatsa/format/read` + resolution and routes (what a player needs) | 28.8 kB  | 9.2 kB |
+| `@galatsa/core/ydoc` (includes Yjs and lib0)                         | 135 kB   | 35 kB  |
+| `readGalatsaFile` (reads into a Y.Doc)                               | 137 kB   | 36 kB  |
+
 ## 10. Undo
 
 Undo and redo are built (in the command layer) on Yjs's `UndoManager`, tracking only transactions whose origin is the local user (`ORIGIN.local` in `ydoc/schema.ts`). Loading, migrations and remote changes use other origins and are never undone. Soft removal (section 5.5) is what makes undo of a delete restore concurrent edits: undo flips `removed` back instead of re-creating a deleted map.
@@ -467,7 +487,7 @@ Undo and redo are built (in the command layer) on Yjs's `UndoManager`, tracking 
 
 - `packages/core/src/model`: everything that does not need Yjs: the JSON-form types, order keys, resolution, stops and routes, validation, zoom range. Exported from `@galatsa/core`.
 - `packages/core/src/ydoc`: the Yjs binding: root layout, the generic data encoding, `toSnapshot`/`fromSnapshot`, and reference operations. Exported from `@galatsa/core/ydoc`.
-- `packages/format`: reading and writing files, asset hashing, migrations.
+- `packages/format`: reading and writing files, asset hashing, migrations. `@galatsa/format` has everything; `@galatsa/format/read` only reads into the JSON form and does not load Yjs.
 
 The Yjs binding is in core, not a separate package, because the document model _is_ a Y.Doc: the editor, renderer, command layer and file format all work on it, and a separate package would only add a hop. It is a separate entry point so that the player can import the types and resolution from `@galatsa/core` without loading Yjs. Core stays environment-agnostic: no DOM or Node types; it uses only `globalThis.crypto.getRandomValues`, which browsers and Node both provide.
 
@@ -499,14 +519,17 @@ New production dependencies (all licenses compatible with GPL-3.0-or-later; vers
 4. **Text model.** The text layout here (Y.Text with Quill-style attributes) is provisional; the text editing work may prefer a tree (Y.XmlFragment). The generic encoding supports both, so this does not affect the file format, only the text extension's `typeVersion`.
 5. **Media type.** `application/vnd.galatsa.presentation+zip` is not registered with IANA. Registering is optional and can wait until the format is stable.
 6. **Visibility effects.** `VisibilityChange` has only `action` now. Fade or other effects would be added as optional keys; whether they belong there or to the transition extension is for the extension interface work.
-7. **Repair writes.** Resolution never writes. Should the editor normalize stale state (cycle breakers, stale position tags, dissolved containers with children) on load or after a merge, to keep the stored state simple? Writing is safe (values converge) but makes undo and sync noisier.
+7. **Repair writes.** Resolution never writes. Should the editor normalize stale state (cycle breakers, rebases, positions in another space, dissolved containers with children) on load or after a merge, to keep the stored state simple? Values converge, but rewriting `pos` outside a move can overwrite a concurrent move (section 5.3), and repairs make undo and sync noisier. The reference operations leave it all to the next move.
+8. **Who may resize an unknown element.** Section 9.5 forbids resizing elements of missing extensions. If users need it (for example to make room), the extension interface could declare whether a type tolerates envelope-only resizing.
 
 ## 14. Rejected alternatives
 
 - **A `Y.Array` of child ids per container, for z-order and membership.** Moving is delete plus insert, so two users moving the same element produce two copies; moving between containers concurrently can put the element in two containers or none. Fractional keys on the element give one value per element.
 - **Absolute (world) positions for all elements.** Moving a frame would rewrite every child, so a child added concurrently would be left behind, and two users moving a frame and a child would overwrite each other. It also wastes precision deep inside frames.
 - **Untagged local positions.** A concurrent move and reparent would make the element jump by the offset between the old and new container.
-- **One atomic "placement" value (parent, order and position together).** Simpler, but a concurrent move and reparent would lose one of the two changes entirely; the tag keeps both.
+- **Reparent rewrites `pos` (tagged with the new space).** The first version of this design. Both a move and a reparent then write `pos`, so one of the two concurrent changes is lost, and which one depends on client ids. The rebase keeps both.
+- **One atomic "placement" value (parent, order and position together).** Simpler, but a concurrent move and reparent would lose one of the two changes entirely.
+- **Converting stale positions with current geometry only (no recorded rebase).** Works for the merge itself, but the element would then move whenever its old container moves, until its next move. A recorded translation does not drift.
 - **Hard delete (removing map entries).** Loses concurrent edits of the deleted element, which Yjs's undo cannot restore.
 - **Ungroup by moving the children out.** Loses children added to the group concurrently and a concurrent move of the group.
 - **Absolute per-stop visibility (each stop lists the full visible set).** Tedious to author and hard to keep consistent; builds across several stops need the same element marked at every stop.
@@ -526,5 +549,6 @@ All tests run with `pnpm check` (Vitest). Concurrency tests use two Y.Docs that 
 - `packages/core/src/ydoc/merge-elements.test.ts`: for each element type (frame, group, text, shape, image, freehand, table, chart, map, media), two concurrent edits that touch different parts both survive, and a same-key conflict converges.
 - `packages/core/src/ydoc/merge-structure.test.ts`: every row of the tables in sections 4.3, 5.7 and 6.5.
 - `packages/core/src/ydoc/encode.test.ts`: the generic data encoding round-trips every shared type and the `"$y"` escape.
-- `packages/core/src/model/*.test.ts`: order keys, resolution (orphans, cycles, tags, dissolve, deletion), route steps and show/hide, validation, zoom clamp.
-- `packages/format/src/*.test.ts`: write and read back an equal document; an unknown extension's element survives unchanged; an older format version is migrated; a newer one is refused; damaged archives, bad checksums and wrong asset hashes are reported; `ydoc.bin` keeps merge identity and is dropped when it disagrees with `document.json`.
+- `packages/core/src/model/model.test.ts`: order keys, ids, zoom clamp and precision budget, resolution (orphans, cycles in any iteration order, the three position rules, dissolve, deletion, group bounds), route steps and show/hide, stop regions, validation.
+- `packages/format/src/zip.test.ts`: CRC-32, entry order, deterministic output, unsafe and duplicate names, truncation, corruption, size limits, zip64 refusal.
+- `packages/format/src/file.test.ts`: write and read back an equal document (and the same bytes when written again); the archive layout; an unknown extension's element survives unchanged with and without `ydoc.bin`; a reopened file still merges with a peer; assets of deleted elements are left out; an older format version is migrated (with a test registry, since version 1 is the first); a newer one is refused; element data migrations; each kind of damage gets its own error code; wrong asset hashes are ignored with a warning; `ydoc.bin` is dropped when it disagrees with `document.json` or is unreadable.

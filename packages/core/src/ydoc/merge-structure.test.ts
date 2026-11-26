@@ -253,6 +253,17 @@ describe("frames and reparenting (section 5.7)", () => {
     close(new Resolver(yLookup(a)).worldOrigin("X"), { x: 700, y: 200 });
   });
 
+  it("an element moved out of a frame does not drift when the frame moves later", () => {
+    const a = base();
+    reparent(a, "T", "G");
+    moveElement(a, "F", 0, 0);
+    const r = new Resolver(yLookup(a));
+    expect(r.get("T")!.rebase).not.toBe(null);
+    close(r.worldOrigin("T"), { x: 1010, y: 1010 });
+    moveElement(a, "G", 6000, 0);
+    close(new Resolver(yLookup(a)).worldOrigin("T"), { x: 2010, y: 1010 });
+  });
+
   it("frames moved into each other (a cycle): nothing disappears", () => {
     scenario(
       (a, b) => {
