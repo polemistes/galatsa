@@ -16,11 +16,14 @@ export interface RawFile {
 
 /**
  * One step: upgrades a file from version `from` to `from + 1`. Only steps that
- * change something have a migration; a version that only added optional content
- * (in ext slots, settings or new optional entries) needs none. A migration must
- * be pure and deterministic and must not assume anything about element data it
- * does not own (elements of unknown types pass through). It need not update the
- * version numbers; the caller does.
+ * change something have a migration; a version that only added content in open
+ * slots (ext slots, settings) needs none. New archive entries and manifest
+ * fields are not such a slot: older versions do not write them back, so anything
+ * that must survive being saved by an older version raises the minimum reader
+ * version instead (section 9.4). A migration must be pure and deterministic and
+ * must not assume anything about element data it does not own (elements of
+ * unknown types pass through). It need not update the version numbers; the
+ * caller does.
  */
 export interface Migration {
   from: number;

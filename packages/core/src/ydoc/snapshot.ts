@@ -13,24 +13,29 @@ import {
   ID_PATTERN,
   InvalidDocumentError,
   Problems,
+  envelopeField,
   readDeleteMarks,
-  readEnvelope,
   readRevision,
   readSnapshot,
 } from "../model/grammar.ts";
 import { newId, type RandomBytes } from "../model/ids.ts";
 import type { ElementEnvelope, ElementLookup } from "../model/resolve.ts";
 import {
+  FRAME_TYPE,
+  GROUP_TYPE,
   type AssetId,
   type DeleteMarks,
   type DocumentSnapshot,
   type Element,
   type ElementData,
+  type Rebase,
   type Revision,
   type Route,
+  type Size,
   type Stop,
 } from "../model/types.ts";
 import { cloneJson, jsonFromY, rawFromY, textToY, valueToY } from "./encode.ts";
+import { trackWork } from "./track.ts";
 import {
   ELEMENT_KEYS,
   META_KEYS,
@@ -163,23 +168,121 @@ const ROUTE_SPECIAL: { [key: string]: (value: unknown) => unknown } = {
 function rawRecord(
   record: unknown,
   special: { [key: string]: (value: unknown) => unknown },
-  skip?: ReadonlySet<string>,
 ): unknown {
   if (!(record instanceof Y.Map)) return jsonFromY(record);
   const out: Raw = {};
   for (const [key, value] of (record as Y.Map<unknown>).entries()) {
-    if (skip?.has(key)) continue;
     const convert = Object.hasOwn(special, key) ? special[key]! : jsonFromY;
     put(out, key, convert(value));
   }
   return out;
 }
 
-const NOT_ENVELOPE: ReadonlySet<string> = new Set(["ext", "data"]);
+const UNREAD = Symbol("unread");
+type Unread = typeof UNREAD;
 
-/** Reads the envelope of one element map (everything except data and ext). */
+/**
+ * The envelope of one element map (everything except data and ext). Each key is
+ * read, by the grammar's reader for it, when it is first asked for: resolving a
+ * large document for one question reads only the keys that question needs.
+ */
+class LiveEnvelope implements ElementEnvelope {
+  readonly type: string;
+  private readonly map: Y.Map<unknown>;
+  private _parent: string | null | Unread = UNREAD;
+  private _order: string | Unread = UNREAD;
+  private _pos: ElementEnvelope["pos"] | Unread = UNREAD;
+  private _rebase: Rebase | null | Unread = UNREAD;
+  private _locked: boolean | Unread = UNREAD;
+  private _rev: Revision | Unread = UNREAD;
+  private _deleted: DeleteMarks | Unread = UNREAD;
+  private _dissolved: boolean | Unread = UNREAD;
+  private _size: Size | undefined | Unread = UNREAD;
+  private _rot: number | undefined | Unread = UNREAD;
+
+  constructor(map: Y.Map<unknown>, type: string) {
+    this.map = map;
+    this.type = type;
+  }
+
+  get parent(): string | null {
+    if (this._parent === UNREAD)
+      this._parent = envelopeField.parent(this.map.get("parent"), QUIET);
+    return this._parent;
+  }
+
+  get order(): string {
+    if (this._order === UNREAD)
+      this._order = envelopeField.order(this.map.get("order"), QUIET);
+    return this._order;
+  }
+
+  get pos(): ElementEnvelope["pos"] {
+    if (this._pos === UNREAD)
+      this._pos = envelopeField.pos(jsonFromY(this.map.get("pos")), QUIET);
+    return this._pos;
+  }
+
+  get rebase(): Rebase | null {
+    if (this._rebase === UNREAD)
+      this._rebase = envelopeField.rebase(jsonFromY(this.map.get("rebase")), QUIET);
+    return this._rebase;
+  }
+
+  get locked(): boolean {
+    if (this._locked === UNREAD)
+      this._locked = envelopeField.locked(this.map.get("locked"), QUIET);
+    return this._locked;
+  }
+
+  get rev(): Revision {
+    if (this._rev === UNREAD)
+      this._rev = envelopeField.rev(rawRevision(this.map.get("rev")), QUIET);
+    return this._rev;
+  }
+
+  get deleted(): DeleteMarks {
+    if (this._deleted === UNREAD)
+      this._deleted = envelopeField.deleted(rawMarks(this.map.get("deleted")), QUIET);
+    return this._deleted;
+  }
+
+  get dissolved(): boolean {
+    if (this._dissolved === UNREAD) {
+      this._dissolved = envelopeField.dissolved(
+        this.map.get("dissolved"),
+        this.type,
+        QUIET,
+      );
+    }
+    return this._dissolved;
+  }
+
+  get size(): Size | undefined {
+    if (this._size === UNREAD) {
+      this._size =
+        this.type === GROUP_TYPE
+          ? undefined
+          : envelopeField.size(jsonFromY(this.map.get("size")), QUIET);
+    }
+    return this._size;
+  }
+
+  get rot(): number | undefined {
+    if (this._rot === UNREAD) {
+      this._rot =
+        this.type === GROUP_TYPE || this.type === FRAME_TYPE
+          ? undefined
+          : envelopeField.rot(this.map.get("rot"), QUIET);
+    }
+    return this._rot;
+  }
+}
+
+/** The envelope of one element map, or undefined if the record is not an element. */
 export function envelopeFromY(map: Y.Map<unknown>): ElementEnvelope | undefined {
-  return readEnvelope(rawRecord(map, ELEMENT_SPECIAL, NOT_ENVELOPE), QUIET) ?? undefined;
+  const type = envelopeField.type(map.get("type"));
+  return type === null ? undefined : new LiveEnvelope(map, type);
 }
 
 /**
@@ -391,6 +494,7 @@ export function fromSnapshot(
       r.assets.set(id, cloneJson(snapshot.assets[id as AssetId]));
     }
   }, ORIGIN.load);
+  trackWork(doc, randomBytes);
   return doc;
 }
 

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Purging removed content ("tidy up", and every export for sharing): the pure
-// function from a snapshot to an equivalent one without deleted or dissolved
-// elements, removed stops and routes, and anything only they referred to.
+// Purging for exports for sharing: the pure function from a snapshot to an
+// equivalent one without deleted or dissolved elements, removed stops and
+// routes, and anything only they referred to. The result is for a file without
+// merge identity. (Tidy up of a live document is a different operation: it
+// leaves place markers and rewrites nothing; see ydoc/document-ops.ts.)
 // Section 5.8 of docs/adr/0001-document-model-and-file-format.md.
 
 import { compareCodeUnits, keysBetween } from "./order.ts";

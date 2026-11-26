@@ -818,6 +818,73 @@ const ENVELOPE_KEYS = [
   "refs",
 ];
 
+function fail<T>(p: Problems, message: string, fallback: T): T {
+  p.add(message);
+  return fallback;
+}
+
+/** True for the two container types. */
+function isContainerType(type: string): boolean {
+  return type === GROUP_TYPE || type === FRAME_TYPE;
+}
+
+/**
+ * Readers for the single keys of an element's envelope, each from the stored
+ * value of that key. `readEnvelope` uses all of them; code that needs only a few
+ * keys of many elements (resolution on a live document) uses them one by one,
+ * and so reads exactly what a snapshot would hold.
+ */
+export const envelopeField = {
+  /** The element type, or null if the record cannot be an element. */
+  type: (value: unknown): string | null =>
+    typeof value === "string" && ELEMENT_TYPE_PATTERN.test(value) ? value : null,
+  typeVersion: (value: unknown, p: Problems): number =>
+    Number.isInteger(value) && (value as number) >= 1
+      ? (value as number)
+      : fail(p, "must be an integer >= 1, read as 1", 1),
+  parent: (value: unknown, p: Problems): string | null =>
+    value === null || isId(value)
+      ? value
+      : fail(p, "must be an id or null, read as null", null),
+  order: (value: unknown, p: Problems): string =>
+    typeof value === "string" && isValidOrderKey(value)
+      ? value
+      : fail(
+          p,
+          `not a valid order key, read as "${DEFAULT_ORDER_KEY}"`,
+          DEFAULT_ORDER_KEY,
+        ),
+  pos: readPosition,
+  rebase: readRebase,
+  name: (value: unknown, p: Problems): string => {
+    if (typeof value !== "string") return fail(p, 'must be a string, read as ""', "");
+    const text = wellFormed(value);
+    if (text !== value) p.add("not well-formed Unicode");
+    return text;
+  },
+  locked: (value: unknown, p: Problems): boolean =>
+    typeof value === "boolean"
+      ? value
+      : fail(p, "must be a boolean, read as false", false),
+  rev: readRevision,
+  deleted: readDeleteMarks,
+  dissolved: (value: unknown, type: string, p: Problems): boolean => {
+    if (typeof value !== "boolean")
+      return fail(p, "must be a boolean, read as false", false);
+    if (value && !isContainerType(type))
+      return fail(p, "only frames and groups can be dissolved", false);
+    return value;
+  },
+  refs: readRefs,
+  size: readSize,
+  rot: (value: unknown, p: Problems): number =>
+    finite(value)
+      ? value === 0
+        ? 0
+        : value
+      : fail(p, "must be a finite number, read as 0", 0),
+};
+
 /**
  * Reads the envelope of an element, or returns null if the record cannot be an
  * element at all (it is not an object, or has no valid type).
@@ -827,47 +894,31 @@ export function readEnvelope(raw: unknown, p: Problems): ElementFields | null {
     p.add("not an object, left out");
     return null;
   }
-  const type = own(raw, "type");
-  if (typeof type !== "string" || !ELEMENT_TYPE_PATTERN.test(type)) {
+  const type = envelopeField.type(own(raw, "type"));
+  if (type === null) {
     p.add("no valid element type, left out");
     return null;
   }
-  const isGroup = type === GROUP_TYPE;
-  const container = isGroup || type === FRAME_TYPE;
-  const typeVersion = own(raw, "typeVersion");
-  if (!Number.isInteger(typeVersion) || (typeVersion as number) < 1) {
-    p.at("typeVersion", () => p.add("must be an integer >= 1, read as 1"));
-  }
-  const locked = own(raw, "locked");
-  if (typeof locked !== "boolean") p.at("locked", () => p.add("must be a boolean"));
-  let dissolved = own(raw, "dissolved");
-  if (typeof dissolved !== "boolean") {
-    p.at("dissolved", () => p.add("must be a boolean"));
-    dissolved = false;
-  } else if (dissolved && !container) {
-    p.at("dissolved", () => p.add("only frames and groups can be dissolved"));
-    dissolved = false;
-  }
+  const f = envelopeField;
+  const at = <T>(key: string, read: (value: unknown, p: Problems) => T): T =>
+    p.at(key, () => read(own(raw, key), p));
   const fields: ElementFields = {
     type,
-    typeVersion:
-      Number.isInteger(typeVersion) && (typeVersion as number) >= 1
-        ? (typeVersion as number)
-        : 1,
-    parent: readIdOrNull(raw, "parent", p),
-    order: readOrder(raw, "order", p),
-    pos: p.at("pos", () => readPosition(own(raw, "pos"), p)),
-    rebase: p.at("rebase", () => readRebase(own(raw, "rebase"), p)),
-    name: readString(raw, "name", "", p),
-    locked: locked === true,
-    rev: p.at("rev", () => readRevision(own(raw, "rev"), p)),
-    deleted: p.at("deleted", () => readDeleteMarks(own(raw, "deleted"), p)),
-    dissolved: dissolved === true,
-    refs: p.at("refs", () => readRefs(own(raw, "refs"), p)),
+    typeVersion: at("typeVersion", f.typeVersion),
+    parent: at("parent", f.parent),
+    order: at("order", f.order),
+    pos: at("pos", f.pos),
+    rebase: at("rebase", f.rebase),
+    name: at("name", f.name),
+    locked: at("locked", f.locked),
+    rev: at("rev", f.rev),
+    deleted: at("deleted", f.deleted),
+    dissolved: at("dissolved", (value) => f.dissolved(value, type, p)),
+    refs: at("refs", f.refs),
   };
-  if (!isGroup) fields.size = p.at("size", () => readSize(own(raw, "size"), p));
+  if (type !== GROUP_TYPE) fields.size = at("size", f.size);
   else if (Object.hasOwn(raw, "size")) p.at("size", () => p.add("groups have no size"));
-  if (!container) fields.rot = readNumber(raw, "rot", 0, p);
+  if (!isContainerType(type)) fields.rot = at("rot", f.rot);
   else if (Object.hasOwn(raw, "rot"))
     p.at("rot", () => p.add("containers do not rotate"));
   return fields;

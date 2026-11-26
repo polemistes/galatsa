@@ -186,8 +186,10 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
 
 /**
  * Starts recording work on a document. Every Y.Doc that a user edits must have
- * this; the reference operations, `fromSnapshot`, `forkDoc`, the undo manager
- * and the file reader all call it. Calling it again does nothing.
+ * this before the first edit. The reference operations, `fromSnapshot`,
+ * `forkDoc`, the undo manager and the file reader call it; code that gets a
+ * Y.Doc in another way (from a sync provider, for example) calls it itself.
+ * Calling it again does nothing.
  */
 export function trackWork(
   doc: Y.Doc,

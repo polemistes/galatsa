@@ -35,8 +35,8 @@ export interface ElementEnvelope {
   readonly rev?: Revision;
   readonly deleted?: DeleteMarks;
   readonly dissolved?: boolean;
-  readonly size?: Size;
-  readonly rot?: number;
+  readonly size?: Size | undefined;
+  readonly rot?: number | undefined;
 }
 
 /** Read access to elements, implemented over snapshots and over a Y.Doc. */
@@ -71,6 +71,7 @@ export interface Deleter {
 }
 
 const NO_DELETERS: readonly Deleter[] = [];
+const NO_CHILDREN: readonly ElementId[] = [];
 const NO_REVISION: Revision = {};
 
 /** A lookup that does not see the given delete marks ("root action" keys). */
@@ -90,7 +91,20 @@ export function withoutMarks(
       for (const action of actions) {
         if (!ignored.has(`${id} ${action}`)) deleted[action] = element.deleted[action]!;
       }
-      return { ...element, deleted };
+      // Copied key by key: an envelope may compute its keys when asked.
+      return {
+        type: element.type,
+        parent: element.parent,
+        order: element.order,
+        pos: element.pos,
+        rebase: element.rebase ?? null,
+        locked: element.locked,
+        rev: element.rev ?? NO_REVISION,
+        deleted,
+        dissolved: element.dissolved === true,
+        size: element.size,
+        rot: element.rot,
+      };
     },
   };
 }
@@ -105,7 +119,10 @@ export class Resolver {
   readonly #lookup: ElementLookup;
   readonly #envelope = new Map<ElementId, ElementEnvelope | undefined>();
   readonly #parent = new Map<ElementId, ElementId | null>();
-  #children: Map<ElementId | null, ElementId[]> | null = null;
+  readonly #children = new Map<ElementId | null, ElementId[]>();
+  /** True once every container's children are in `#children`. */
+  #indexed = false;
+  #asked = 0;
   readonly #local = new Map<ElementId, Point>();
   readonly #simpleLocal = new Map<ElementId, Point>();
   readonly #deleters = new Map<ElementId, readonly Deleter[]>();
@@ -184,28 +201,43 @@ export class Resolver {
     return false;
   }
 
+  #sortSiblings(list: ElementId[]): ElementId[] {
+    return list.sort((a, b) =>
+      compareOrdered(
+        { id: a, order: this.get(a)?.order ?? "" },
+        { id: b, order: this.get(b)?.order ?? "" },
+      ),
+    );
+  }
+
   /** Children in the effective tree, back to front, removed ones included. */
   children(parent: ElementId | null): readonly ElementId[] {
-    if (!this.#children) {
-      const index = new Map<ElementId | null, ElementId[]>();
+    const known = this.#children.get(parent);
+    if (known) return known;
+    if (this.#indexed) return NO_CHILDREN;
+    if (this.#asked++ < 2) {
+      // One or two containers: look only for their children. An element is in
+      // a container only if its stored parent says so.
+      const list: ElementId[] = [];
       for (const id of this.#lookup.ids()) {
-        if (!this.get(id)) continue;
-        const key = this.parentOf(id);
-        let list = index.get(key);
-        if (!list) index.set(key, (list = []));
-        list.push(id);
+        const element = this.get(id);
+        if (!element || (parent !== null && element.parent !== parent)) continue;
+        if (this.parentOf(id) === parent) list.push(id);
       }
-      for (const list of index.values()) {
-        list.sort((a, b) =>
-          compareOrdered(
-            { id: a, order: this.get(a)?.order ?? "" },
-            { id: b, order: this.get(b)?.order ?? "" },
-          ),
-        );
-      }
-      this.#children = index;
+      this.#children.set(parent, this.#sortSiblings(list));
+      return list;
     }
-    return this.#children.get(parent) ?? [];
+    const index = new Map<ElementId | null, ElementId[]>();
+    for (const id of this.#lookup.ids()) {
+      if (!this.get(id)) continue;
+      const key = this.parentOf(id);
+      let list = index.get(key);
+      if (!list) index.set(key, (list = []));
+      list.push(id);
+    }
+    for (const [key, list] of index) this.#children.set(key, this.#sortSiblings(list));
+    this.#indexed = true;
+    return this.#children.get(parent) ?? NO_CHILDREN;
   }
 
   /**

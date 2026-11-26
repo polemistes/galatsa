@@ -48,7 +48,7 @@ import {
   watchVersion,
 } from "./sync.ts";
 import { seededOptions } from "./testing.ts";
-import { createUndoManager } from "./track.ts";
+import { createUndoManager, noteWork } from "./track.ts";
 
 const SHAPE = "galatsa.shapes/shape";
 const TEXT = "galatsa.text/text";
@@ -390,6 +390,37 @@ describe("review 2: undo and delete", () => {
     undo.redo();
     undo.redo();
     expect(toSnapshot(d).elements.N!.name).toBe("n");
+  });
+
+  it("a move and a delete undone and redone as one step", () => {
+    const d = base();
+    // A long capture time merges the two operations into one undo step.
+    const undo = createUndoManager(d, { captureTimeout: 60_000 });
+    moveElement(d, "X", 20, 20);
+    deleteElements(d, ["X"]);
+    undo.undo();
+    expect(visible(d, "X")).toBe(true);
+    expect(R(d).localPosition("X")).toEqual({ x: 10, y: 10 });
+    undo.redo();
+    expect(visible(d, "X")).toBe(false);
+    expect(R(d).localPosition("X")).toEqual({ x: 20, y: 20 });
+    undo.undo();
+    expect(visible(d, "X")).toBe(true);
+    expect(inspectDocument(d).problems).toEqual([]);
+  });
+
+  it("one element can be brought back out of a deleted container by declaring work on it", () => {
+    const d = base();
+    group(d, ["X", "Y"], { id: "G" });
+    deleteElements(d, ["F"]);
+    expect(R(d).deleters("X")).toEqual([{ root: "F", action: expect.any(String) }]);
+    d.transact(() => noteWork(d, d.getMap("elements").get("G") as Y.Map<unknown>, true));
+    // The group and what is in it are back, where they were; the rest is not.
+    expect(R(d).drawOrder()).toEqual(["G", "X", "Y"]);
+    expect(R(d).worldOrigin("X")).toEqual({ x: 1010, y: 1010 });
+    // Without the flag, work on a deleted thing leaves it deleted.
+    renameElement(d, "T", "still deleted");
+    expect(visible(d, "T")).toBe(false);
   });
 
   it("undo covers the origins of editor bindings", () => {
