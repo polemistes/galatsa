@@ -1,9 +1,9 @@
-engine konva, 2775 frames, run 58866.84 ms, load 10096.76 ms
-frame interval mean 21.21 ms, p50 17.10 ms, p95 66.44 ms, p99 83.68 ms, max 132.88 ms
-frames over 33 ms: 278, over 100 ms: 7, over 16.7 ms: 1647
-callback interval (wall clock) p95 65.44 ms, max 127.58 ms, over 33 ms: 258, over 100 ms: 6, over 16.7 ms: 1522
-render() mean 7.70 ms, p95 16.64 ms
-text sharp after stop: 13 reported, 0 missing, p50 16.70 ms, max 37.06 ms
+engine konva, 2775 frames, run 59900.04 ms, load 10774.44 ms
+frame interval mean 21.59 ms, p50 17.08 ms, p95 66.42 ms, p99 99.68 ms, max 183.28 ms
+frames over 33 ms: 280, over 100 ms: 18, over 16.7 ms: 1624
+callback interval (wall clock) p95 67.40 ms, max 195.28 ms, over 33 ms: 255, over 100 ms: 23, over 16.7 ms: 1501
+render() mean 7.30 ms, p95 15.88 ms
+text sharp after stop: 13 reported, 0 missing, p50 10.42 ms, max 32.54 ms
 memory (measureUserAgentSpecificMemory): unavailable (performance.measureUserAgentSpecificMemory is not supported by this browser)
 memory (JavaScript heap): unavailable in this browser
 viewport 1280x720 CSS px at 1x, timer step 0.02 ms
@@ -18,7 +18,7 @@ Engine counters:
   "images": {
     "decodedBytes": 311513456,
     "decodes": 485,
-    "decodeMs": 87368,
+    "decodeMs": 93104,
     "evictions": 0,
     "fallbackResizes": 0,
     "levelsReady": 485
