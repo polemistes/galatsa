@@ -1,7 +1,7 @@
 # 0001 Document model and file format
 
-- Status: proposed, revised after the second review
-- Date: 2026-11-26
+- Status: proposed, revised after the third review
+- Date: 2026-11-27
 - Code: `packages/core/src/model` (types, the grammar, order keys, resolution, stops and routes, purging, fragments, zoom range), `packages/core/src/ydoc` (the Yjs binding, exported as `@galatsa/core/ydoc`), `packages/format` (the file format; `@galatsa/format/read` reads without Yjs)
 
 ## Contents
@@ -32,25 +32,25 @@ Element types (text, shapes, images, freehand drawing, tables, charts, maps, med
 
 The decisions, in short:
 
-| Topic                    | Decision                                                                                                                                                                                                                                                                                | Section  |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| Storage                  | One Yjs `Y.Doc` per document. Flat maps of elements, stops, routes and assets keyed by random ids.                                                                                                                                                                                      | 2        |
-| Reading                  | One grammar, as one total reading function. The conversion from Yjs, the file reader, the file writer, validation and the operations all use it. Anything reads as a valid document; what does not fit is read as a default, left out, or kept verbatim as "unsupported", and reported. | 2.1, 9.6 |
-| Element structure        | A fixed envelope that core understands (type, parent, order, position, size, rotation, name, lock, revision, deletes, references, open `ext` slots) plus type-specific `data` that only the extension understands.                                                                      | 3        |
-| Z-order                  | A fractional order key per element, among its siblings, in a fixed syntax. No arrays of children.                                                                                                                                                                                       | 4        |
-| Frames and groups        | Containers with a translation-only local coordinate space. Moving an element writes only its position; changing its container writes only its parent and a recorded translation, so a concurrent move and reparent both survive.                                                        | 5        |
-| Concurrency of structure | Every replica resolves the merged state with the same pure function: orphans go to the root, parent cycles are broken deterministically, positions written in another space are converted.                                                                                              | 5        |
-| Deletion                 | Soft. A delete lists what its user saw and hides only that: anything worked on or added without knowledge of the delete survives, whether the work was on the thing itself or on a container between it and the deleted one. Work is recorded automatically for every local change.     | 5.5      |
-| Tidy up                  | Removed records are purged only by an explicit "tidy up" command and in exports for sharing, never by age. Tidy up rewrites nothing it keeps and leaves empty place markers for removed frames and groups, so offline work still lands where it was.                                    | 5.8      |
-| Stops                    | A stop shows a region (a frame, or a rectangle in some container's space), not a camera pose. It holds notes, a transition, and show/hide changes.                                                                                                                                      | 6        |
-| Routes                   | A route is a set of entries, each pointing at a stop, ordered by fractional keys. Shared stops are stops that more than one route points at.                                                                                                                                            | 6.3      |
-| Visibility               | Show/hide changes add up along the route. An element first shown at a stop is hidden before it; in a route that skips that stop, it is visible from the start.                                                                                                                          | 6.4      |
-| Precision                | float64 throughout; parent-local coordinates; every conversion goes through the lowest common ancestor; the camera and stop regions are anchored in a container's space; rendering is camera-relative. Zoom 2^-32 to 2^32, clamped further where precision would run out.               | 7        |
-| Assets                   | Identified by the SHA-256 of their bytes. The document holds descriptions; bytes are stored beside it, embedded in the file by default or, for very large media, in a file next to it.                                                                                                  | 8        |
-| File                     | A zip archive: `mimetype`, `manifest.json` (format version, minimum reader version, merge identity), `document.json` (canonical, plain JSON), optional `ydoc.bin` (Yjs state, to keep merge identity), `assets/`, `thumbnail.png`.                                                      | 9        |
-| Versions                 | Additive changes go into open slots and need no new reader. Incompatible changes raise the minimum reader version; older readers refuse to open, to sync with, to edit and to save such a document. Old files are upgraded by JSON migrations.                                          | 9.4      |
-| Merge identity           | A lineage id in the document and the manifest changes whenever identity is reset; copies with different lineages refuse to merge instead of silently losing edits, and can be brought together by importing one into the other as new content.                                          | 9.3      |
-| Missing extensions       | The element's envelope is used (position, z-order, grouping), its data is kept losslessly and written back unchanged, and a placeholder is drawn. It can be moved, not resized.                                                                                                         | 9.5      |
+| Topic                    | Decision                                                                                                                                                                                                                                                                                                   | Section  |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Storage                  | One Yjs `Y.Doc` per document. Flat maps of elements, stops, routes and assets keyed by random ids.                                                                                                                                                                                                         | 2        |
+| Reading                  | One grammar, as one total reading function. The conversion from Yjs, the file reader, the file writer, validation and the operations all use it. Anything reads as a valid document; what does not fit is read as a default, left out, or kept verbatim as "unsupported", and reported.                    | 2.1, 9.6 |
+| Element structure        | A fixed envelope that core understands (type, parent, order, position, size, rotation, name, lock, revision, deletes, references, open `ext` slots) plus type-specific `data` that only the extension understands.                                                                                         | 3        |
+| Z-order                  | A fractional order key per element, among its siblings, in a fixed syntax. No arrays of children.                                                                                                                                                                                                          | 4        |
+| Frames and groups        | Containers with a translation-only local coordinate space. Moving an element writes only its position; changing its container writes only its parent and a recorded translation, so a concurrent move and reparent both survive.                                                                           | 5        |
+| Concurrency of structure | Every replica resolves the merged state with the same pure function: orphans go to the root, parent cycles are broken deterministically, positions written in another space are converted.                                                                                                                 | 5        |
+| Deletion                 | Soft. A delete lists what its user saw and hides only that: anything worked on or added without knowledge of the delete survives, whether the work was on the thing itself or on a container between it and the deleted one. Restoring is work too. Work is recorded automatically for every local change. | 5.5      |
+| Tidy up                  | Removed records are purged only by an explicit "tidy up" command and in exports for sharing, never by age. Tidy up rewrites nothing it keeps and turns removed frames and groups into empty place markers that are gone for good, so offline work still lands where it was.                                | 5.8      |
+| Stops                    | A stop shows a region (a frame, or a rectangle in some container's space), not a camera pose. It holds notes, a transition, and show/hide changes.                                                                                                                                                         | 6        |
+| Routes                   | A route is a set of entries, each pointing at a stop, ordered by fractional keys. Shared stops are stops that more than one route points at.                                                                                                                                                               | 6.3      |
+| Visibility               | Show/hide changes add up along the route. An element first shown at a stop is hidden before it; in a route that skips that stop, it is visible from the start.                                                                                                                                             | 6.4      |
+| Precision                | float64 throughout; parent-local coordinates; every conversion goes through the lowest common ancestor; the camera and stop regions are anchored in a container's space; rendering is camera-relative. Zoom 2^-32 to 2^32, clamped further where precision would run out.                                  | 7        |
+| Assets                   | Identified by the SHA-256 of their bytes. The document holds descriptions; bytes are stored beside it, embedded in the file by default or, for very large media, in a file next to it.                                                                                                                     | 8        |
+| File                     | A zip archive: `mimetype`, `manifest.json` (format version, minimum reader version, merge identity), `document.json` (canonical, plain JSON), optional `ydoc.bin` (Yjs state, to keep merge identity), `assets/`, `thumbnail.png`.                                                                         | 9        |
+| Versions                 | Additive changes go into open slots and need no new reader. Incompatible changes raise the minimum reader version, which can only rise; older readers refuse to open, to sync with, to edit and to save such a document. Old files are upgraded by JSON migrations.                                        | 9.4      |
+| Merge identity           | A lineage id in the document and the manifest changes whenever identity is reset; copies with different lineages refuse to merge instead of silently losing edits, and can be brought together by importing one into the other as new content.                                                             | 9.3      |
+| Missing extensions       | The element's envelope is used (position, z-order, grouping), its data is kept losslessly and written back unchanged, and a placeholder is drawn. It can be moved, not resized.                                                                                                                            | 9.5      |
 
 ## 2. The document and its layout in Yjs
 
@@ -67,7 +67,8 @@ Y.Doc
 
 element Y.Map
   type, typeVersion, parent, order, pos, rebase, size, rot, name, locked,
-  dissolved, refs                     JSON values; last writer wins per key
+  dissolved, purged                   JSON values; last writer wins per key
+  refs                                Y.Map: id -> true (a set)
   ext, data                           Y.Map: per key, a JSON value or a nested
                                       shared type (Y.Text, Y.Map, Y.Array, Y.XmlFragment)
   rev, deleted                        bookkeeping for deletes (below, section 5.5)
@@ -86,7 +87,8 @@ route Y.Map
   rev, deleted
 
 rev      Y.Map: writer key -> Y.Array; the array's length is that writer's counter
-deleted  Y.Map: action id -> Y.Map { seen: JSON object, id -> revision }
+deleted  Y.Map: action id -> Y.Map { seen: JSON object, id -> revision digest }
+meta     also: "minReaderVersion:<n>" and "schemaVersion:<n>" -> true (section 9.4)
 ```
 
 Rules that follow from the layout:
@@ -95,7 +97,7 @@ Rules that follow from the layout:
 - **No arrays of ids for structure.** Membership is the element's own `parent` key and order is its own `order` key. A container does not list its children (section 14).
 - **`meta`.** `schemaVersion` and `minReaderVersion` are the versions of section 9.4. `id` is the document's id: copies of one presentation share it. `lineage` is the merge identity (section 9.3).
 - **Settings.** Document-wide settings (background, default transition) are plain JSON under keys named `<owner>.<name>`, such as `core.background`.
-- **The JSON form.** `DocumentSnapshot` in `packages/core/src/model/types.ts` is the same structure as plain JSON, without `lineage`: `rev` is an object from writer key to counter, and `deleted` an object from action id to `{seen}`. `toSnapshot` and `fromSnapshot` in `@galatsa/core/ydoc` convert both ways. The JSON form is what files store (section 9.3) and what viewers receive.
+- **The JSON form.** `DocumentSnapshot` in `packages/core/src/model/types.ts` is the same structure as plain JSON, without `lineage`: `rev` is an object from writer key to counter, `deleted` an object from action id to `{seen}`, and `refs` a sorted array of ids. `toSnapshot` and `fromSnapshot` in `@galatsa/core/ydoc` convert both ways. The JSON form is what files store (section 9.3) and what viewers receive.
 - **Update format.** Galatsa uses Yjs's update format 1 everywhere: in files and, later, on the wire. Section 3.4 depends on it.
 
 ### 2.1 One grammar
@@ -152,8 +154,9 @@ Every element has these keys. Core and every extension understand them; they are
 | `locked`      | boolean             | Locked elements cannot be selected or changed in the editor (section 5.6).                       |
 | `rev`         | `{writer: counter}` | Revision: changes with every unit of work on the element (section 5.5).                          |
 | `deleted`     | `{action: {seen}}`  | The deletes of this element; empty when there are none (section 5.5).                            |
-| `dissolved`   | boolean             | Containers only: ungrouped, or emptied by tidy up (sections 5.5 and 5.8).                        |
-| `refs`        | ids                 | Elements and stops that `data` or `ext` refer to (section 3.5).                                  |
+| `dissolved`   | boolean             | Containers only: ungrouped, or removed with "keep contents" (section 5.5).                       |
+| `purged`      | boolean             | Containers only: a place marker left by tidy up, gone for good (section 5.8).                    |
+| `refs`        | set of ids          | Elements and stops that `data` or `ext` refer to (section 3.5).                                  |
 | `ext`         | map                 | Open slots for additive envelope-level features, `"<owner>.<name>"` -> value (section 9.4).      |
 | `data`        | map                 | Type-specific data (section 3.4).                                                                |
 
@@ -220,18 +223,19 @@ This encoding needs no knowledge of the element type, so `toSnapshot` and `fromS
 
 ### 3.5 References, copy and paste
 
-An element whose `data` or `ext` refers to other elements or stops (a connector, a link, a map label pointing at a frame) stores each reference as a complete string value equal to the id and lists the id in `refs`. Core never interprets references; it uses `refs` to remap them.
+An element whose `data` or `ext` refers to other elements or stops (a connector, a link, a map label pointing at a frame) stores each reference as a complete string value equal to the id and lists the id in `refs`. Core never interprets references; it uses `refs` to remap them. `refs` is a set (a `Y.Map` from id to true; a sorted array in the JSON form), and `setRefs` writes only what differs, so two users who add different references at the same time both keep theirs.
 
-Copy, duplicate and paste go through a _fragment_ (`copyFragment` in `model/fragment.ts`): normalized copies of the selected elements and everything visible inside them (positions resolved, no rebases, revisions or delete marks, children of gone containers lifted, order keys regenerated), optionally stops and routes, and the descriptions of the assets they refer to. A rectangle stop whose space is not among the copied elements is expressed in the space of the copied roots. `pasteFragment` (`ydoc/document-ops.ts`) writes a fragment with new ids:
+Copy, duplicate and paste go through a _fragment_ (`copyFragment` in `model/fragment.ts`): normalized copies of the selected elements and everything visible inside them (positions resolved, no rebases, revisions or delete marks, children of gone containers lifted, order keys regenerated), optionally stops and routes, and the descriptions of the assets they refer to. A rectangle stop whose space is not among the copied elements is expressed in the space of the copied roots. For a frame stop whose frame is not copied and was gone where the fragment was made, the fragment also holds the rectangle the stop showed there (such a stop still works, section 6.2, and a copy of it must too). The entries of a copied route get fresh order keys in playing order. `pasteFragment` (`ydoc/document-ops.ts`) writes a fragment with new ids:
 
 - every element, stop, route and route entry gets a new id; the old-to-new map is returned;
 - parents, position spaces, frame stops, rectangle-stop spaces and visibility entries that point into the fragment are remapped; visibility entries for elements outside the fragment are dropped; a route entry is kept if its stop is pasted too or exists in the target document;
 - in `data` and `ext`, every string value and map key equal to an id that the element lists in `refs` and that was pasted is replaced; `refs` is remapped the same way; references to things not pasted stay as they were; text of rich text runs is never changed;
 - roots go into the target container, moved by an offset, in front of everything the user sees there (also in front of former members of a dissolved group), keeping their relative order; routes go after the existing routes;
-- records are created like all records (removed, then restored in the local transaction, section 10), so undoing a paste removes softly;
+- a frame stop whose frame is not pasted becomes a rectangle stop if the fragment holds its rectangle;
+- records are created like all records (removed, then restored in the local transaction, section 10), so undoing a paste removes softly; like every operation that creates records, paste refuses to run inside another transaction;
 - asset descriptions are added to the target document; the caller copies the bytes from the source store into the target store, for every asset id the result lists.
 
-`importCopy` pastes everything visible in another copy of a document (section 9.3).
+`importCopy` pastes everything visible in another copy of a document (section 9.3), and `independentCopy` makes a new document from one ("save as a copy": a new document id and a new lineage).
 
 ## 4. Z-order
 
@@ -239,9 +243,9 @@ Copy, duplicate and paste go through a _fragment_ (`copyFragment` in `model/frag
 
 Each element has an `order` key that sorts siblings (elements with the same effective parent, section 5.1) from back to front. Keys are compared as plain strings by UTF-16 code unit (never by locale); ties are broken by id, compared the same way. Higher sorts in front.
 
-The key syntax is fixed by the format (`isValidOrderKey` in `model/order.ts`): a head letter giving the length of the integer part (`a`-`z`: 2 to 27 characters, `A`-`Z`: 27 down to 2), the remaining integer digits, then optional fraction digits not ending in `0`, all digits from `0-9A-Za-z`, at most 1024 characters, and never `A` followed by 26 zeros. This is the syntax of the `fractional-indexing` library, which generates the keys. A key that is missing or outside the syntax reads as `"a0"` everywhere (section 2.1), and key generation treats invalid neighbours as open ends, so it never fails.
+The key syntax is fixed by the format (`isValidOrderKey` in `model/order.ts`): a head letter giving the length of the integer part (`a`-`z`: 2 to 27 characters, `A`-`Z`: 27 down to 2), the remaining integer digits, then optional fraction digits not ending in `0`, all digits from `0-9A-Za-z`, at most 1024 characters, and never `A` followed by 26 zeros. This is the syntax of the `fractional-indexing` library, which generates the keys. A key that is missing or outside the syntax reads as `"a0"` everywhere (section 2.1), and key generation treats invalid neighbours as open ends.
 
-Generated keys get three random digits appended (when the result still sorts strictly between its neighbours), so two replicas that insert at the same place almost never produce equal keys. Keys grow by about one character per six insertions at the same spot; there is no rebalancing (section 13).
+Generated keys get three random digits appended (when the result still sorts strictly between its neighbours), so two replicas that insert at the same place almost never produce equal keys. Keys grow by about one character per six insertions at the same spot. A writer MUST NOT write a key outside the syntax, so keys are kept short: before an operation generates a key in a list (the children of a container, the visits of a route, the routes) in which some key has 128 characters or more, it re-keys the whole list, keeping its order (`makeRoom` in `ydoc/ops.ts`). The re-keying is a transaction of its own that is neither work (section 5.5) nor undoable; two users who re-key the same list at the same time write the same keys to the items they both see. The generator itself (`keyBetween`) throws rather than return a key that is too long.
 
 The same mechanism orders route entries and routes.
 
@@ -314,16 +318,27 @@ Elements, stops and routes are never removed from their maps by normal editing. 
 
 **Revisions.** Every record has a revision, `rev`: one counter per _writer_ (one editing session of one replica) that has worked on the record. A unit of work changes the worker's own counter. Revisions are opaque and only compared for equality: two revisions of a record are equal exactly when no work happened between them. Because each writer changes only its own entry, work by two users at the same time can never collapse into one value, whichever of them a third user had seen.
 
-In the `Y.Doc`, a writer's counter is the length of a shared array that only that writer shortens, stored under a key made of a random session key and a sequence number. A writer's first array in a record has 8 items; when an array is down to one item, the writer replaces the entry by a new one of 64 items under a new key, so a key and counter never repeat. Shortening an array creates no new CRDT items, so recording work does not interleave with the items of the work itself: text typed one character per transaction still merges into runs (measured at 1.8 bytes per typed character, recording included).
+In the `Y.Doc`, a writer's counter is the length of a shared array that only that writer shortens, stored under a key made of a random session key and a sequence number. A writer's first array in a record has 8 items; when an array is down to one item, the writer replaces the entry by a new one of 64 items under a new key, so a key and counter never repeat, and neither does a revision. Shortening an array creates no new CRDT items, so recording work does not interleave with the items of the work itself: text typed one character per transaction still merges into runs (measured at 1.8 bytes per typed character, recording included).
 
-**Recording work.** Work is recorded by the work tracker (`ydoc/track.ts`), not by the code that makes a change. After every local transaction, whatever its origin (a reference operation, an editor binding typing into a shared text, an undo or a redo), the tracker finds the record each changed shared type belongs to. A record was _worked on_ if any of its keys other than `rev` and `deleted` changed, or anything nested inside it (data, ext, notes, visibility, route entries). An operation can also declare work on a record it does not change (`noteWork`): adding a visit to a stop is work on the stop. Then, in a follow-up transaction with its own origin, which undo never touches, the tracker
+**Digests.** Where a revision has to be remembered, its _digest_ is stored, not a copy: the empty string for the empty revision, otherwise the first 12 bytes of the SHA-256 of the revision's canonical text, written as 16 URL-safe base64 characters. The canonical text has one line per writer, `<writer key>=<counter>`, the lines sorted by writer key (UTF-16 code units) and joined by a line feed. Equal revisions have equal digests, and every implementation of the format MUST compute this same value (`model/digest.ts`; the tests pin SHA-256 to its published test vectors).
 
-1. changes the revision of every record worked on, unless the record is deleted as the local user sees it at that moment: work done knowingly on a deleted thing (undoing an old edit of something that another user has deleted since) does not bring it back;
-2. rewrites every delete mark the transaction wrote, so that it lists what its user sees now (below).
+**What work is.** Three things are work on a record:
 
-Transactions that load a document, create records, tidy up, record work, or apply another replica's updates are not work. Every `Y.Doc` a user edits MUST have the tracker attached before the first edit (`trackWork`); the reference operations, `fromSnapshot`, `forkDoc`, `createUndoManager` and the file reader attach it.
+1. A change of its content: of any of its keys other than `rev` and `deleted`, or of anything nested inside it (data, ext, notes, visibility, route entries). Writing a value into a map that equals the value already there is not a change.
+2. Taking back a delete that applied to it: a restore, or the undo of a delete (decided with the users: restoring is work).
+3. For a stop: a new visit to it, however it comes about. That is a new entry in a route, an entry pointed at this stop instead of another, and every entry of a route that is restored or pasted. Reordering or removing visits is work on the route only.
 
-**Deletes.** Deleting element R adds one _delete mark_ to R's `deleted` map, under a new random action id: `{seen}`, where `seen` lists R and everything inside R as the deleting replica sees it, each with its revision at that moment (`Resolver.coverage`). A mark on R _hides_ an element E while E, and every container between E and R (R included), still have exactly the revision the mark lists for them; the path from E to R is taken in the effective tree. An element is _deleted_ when at least one mark hides it (`Resolver.deleters`, `isDeleted`).
+**Recording work.** Work is recorded by the work tracker (`ydoc/track.ts`), not by the code that makes a change. After every local transaction, whatever its origin (a reference operation, an editor binding typing into a shared text, an undo or a redo), the tracker finds the record each changed shared type belongs to and decides from the list above what was worked on. (An operation can also declare work on a record, `noteWork`.) Then, in a follow-up transaction with its own origin, which undo never touches, the tracker
+
+1. changes the revision of every record worked on, unless the record is hidden by a delete as the local user sees it at that moment, the deletes this very transaction writes aside: work done knowingly on a deleted thing (undoing an old edit of something that another user has deleted since) does not bring it back;
+2. removes from every record whose revision it changed the delete marks stored on it, other than those the transaction wrote: none of them applied to the record, and after this work none ever can;
+3. rewrites every delete mark the transaction wrote, so that it lists what its user sees now (below).
+
+Transactions that load a document, create records, tidy up, re-key a list, record work, or apply another replica's updates are not work. Every `Y.Doc` a user edits MUST have the tracker attached before the first edit (`trackWork`); the reference operations, `fromSnapshot`, `forkDoc`, `createUndoManager` and the file reader attach it.
+
+**Deletes.** Deleting element R adds one _delete mark_ to R's `deleted` map, under a new random action id: `{seen}`, where `seen` lists R and everything inside R as the deleting replica sees it, each with the digest of its revision at that moment (`Resolver.coverage`). A mark on R _hides_ an element E while E, and every container between E and R (R included), still have exactly the revision the mark lists for them; the path from E to R is taken in the effective tree. An element is _deleted_ when at least one mark hides it (`Resolver.deleters`, `isDeleted`).
+
+A mark takes about 25 bytes for each record it lists, whatever the history of those records, and what a mark lists is read once and kept with the stored value, so the marks in a document cost nothing per transaction.
 
 Consequences:
 
@@ -332,15 +347,17 @@ Consequences:
 - A container inside that someone worked on (a moved group, a resized subframe, an ungrouped group) survives **together with everything in it**, because the path from its contents to R leads through it.
 - If someone worked on R itself, the mark hides nothing. This is "delete against an edit of the same thing: the edit wins", and "delete against ungroup of the same group: the ungroup wins" (dissolving is work on the group).
 - Marks are a set. Two users who delete the same thing at the same time leave two marks, and an element is deleted if either hides it, so nothing depends on whose write wins. A user who deletes an element inside a container that another user deletes at the same time leaves a mark of their own on that element: restoring the container does not restore it.
-- Restoring R (`restoreElement`, or undoing the delete) removes R's own marks. Everything they hid comes back, unless another mark hides it.
+- Restoring R (`restoreElement`, which removes all of R's own marks, or undoing a delete, which removes that user's mark) brings back everything those marks hid, unless another mark still hides it. Because restoring is work on R, an older delete of R that arrives later from a copy that was offline no longer applies, neither to R nor to what is inside it: the restore wins. If another delete that the user has received still hides R, R stays deleted and nothing is recorded: an undo takes back the user's own delete, not somebody else's.
 
 **Marks written by undo and redo.** Undo and redo put old marks back: redoing a delete, and undoing a creation (section 10). A mark from the past lists revisions from the past and would hide nothing if anything was worked on since. So the tracker rewrites every mark a local transaction wrote to list what a delete made now would list: the element and everything in it, with current revisions. If the element is already gone (someone else deleted or dissolved it meanwhile), the visible elements inside it are not part of it for the user, since they survived an earlier removal, and are not listed.
 
 **Dissolve.** Ungroup and "remove frame, keep contents" set `dissolved` on the container. Its children are not touched.
 
-**Gone containers are transparent.** Deleted and dissolved elements are _gone_ (`Resolver.isGone`): not drawn, not selectable. A gone container keeps its position and its slot, so its visible children stay exactly where they are on the canvas and in the stacking order; the user sees them in the nearest container that is not gone (`Resolver.logicalParentOf`). So a survivor of a deleted frame stays where it was, now in the frame's parent.
+**Gone containers are transparent.** Deleted and dissolved elements, and place markers (section 5.8), are _gone_ (`Resolver.isGone`): not drawn, not selectable. A gone container keeps its position and its slot, so its visible children stay exactly where they are on the canvas and in the stacking order; the user sees them in the nearest container that is not gone (`Resolver.logicalParentOf`). So a survivor of a deleted frame stays where it was, now in the frame's parent.
 
-**Stops and routes** have the same two keys. A mark on a stop or route lists only the record itself; the record is removed while some mark lists its current revision (`isRemoved` in `model/route.ts`). Adding a visit to a stop is work on the route and on the stop; reordering or removing visits is work on the route only.
+**Stops and routes** have the same two keys. A mark on a stop or route lists only the record itself; the record is removed while some mark lists its current revision (`isRemoved` in `model/route.ts`).
+
+**Delivery order.** The changes of different users travel separately, so a mark can arrive before work that it lists. Until that work arrives, the mark does not hide the record concerned, whose revision is not yet the one listed; when it arrives, it does. A mark that hides nothing is therefore never removed for that reason alone. Marks are removed only by a restore, and by step 2 above, which is safe: work that a replica does on a record while it holds a mark on that record cannot have been seen by the mark's writer.
 
 **Two transactions.** The work and its recording are two transactions, sent one right after the other. A replica that has received the first but not yet the second sees the change without its new revision; a delete made in that instant lists the old revision and stops applying when the second arrives. Nothing is lost by this, but such a delete has to be repeated (section 13).
 
@@ -352,49 +369,56 @@ Consequences:
 
 These are the intended outcomes; each row has a test that runs it with the client ids in both orders (section 15). "Without knowing" means: before receiving the other user's change.
 
-| A does                                                    | B does, without knowing                | Outcome after merge                                                                                     |
-| --------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| moves X into frame F                                      | moves X (within its old parent)        | X is in F, at B's position on the canvas.                                                               |
-| moves X back into the frame its position was written in   | moves X                                | X is in the frame, at B's position.                                                                     |
-| groups Y, then moves Y in the group                       | moves Y into frame G                   | Y is in G at A's position, and does not follow the old group later.                                     |
-| moves X into G, then out again                            | moves X                                | X is where B put it, and follows neither G nor its first frame later.                                   |
-| moves X out of frame F to the root                        | moves F                                | X is at the root where A put it; F moves without X.                                                     |
-| moves frame F into frame G                                | moves G into F                         | Cycle: broken at the smaller id, which goes to the root; the other stays inside it. Nothing disappears. |
-| moves X into F1                                           | moves X into F2                        | X ends in one of them, the same on both replicas, at its place on the canvas.                           |
-| three users move X into F1, F2 and F3                     | a fourth moves X                       | X ends in one frame, at the fourth user's position on the canvas, in every delivery order.              |
-| groups X and Y                                            | groups Y and Z                         | Two groups; Y is in exactly one. Nothing lost or duplicated.                                            |
-| groups X and Y                                            | moves X                                | X is in the group, at B's position.                                                                     |
-| ungroups G                                                | adds Z to G                            | G's children, Z included, stay visible and in place.                                                    |
-| ungroups G                                                | moves G                                | The children end where B's move put them.                                                               |
-| ungroups G                                                | deletes G                              | The ungroup wins: the children stay.                                                                    |
-| deletes frame F                                           | moves X out of F                       | X survives where B put it.                                                                              |
-| deletes frame F                                           | moves X into F, or adds X to F         | X survives where it is, shown in F's parent. Restoring F puts X back in F.                              |
-| deletes frame F                                           | edits X inside F                       | X survives, shown in F's parent; F and the rest of its contents are deleted.                            |
-| deletes frame F                                           | types into a text inside F (an editor) | The text element survives, with the typing.                                                             |
-| deletes frame F                                           | moves group G that is inside F         | G and its members survive, at B's place; F and the rest are deleted.                                    |
-| deletes frame F                                           | ungroups G inside F                    | G's members survive, in place.                                                                          |
-| deletes frame F                                           | edits X inside group G inside F        | X alone survives, in place.                                                                             |
-| deletes frame F                                           | (nobody touches it)                    | F and everything in it are deleted; restoring F restores them.                                          |
-| deletes frame F                                           | deletes frame F                        | Deleted. What either of them saw in F is deleted, also what the other had just added.                   |
-| deletes frame F, then undoes                              | deletes X inside F                     | F is back; X stays deleted.                                                                             |
-| deletes X                                                 | edits X, or locks it                   | The edit wins: X stays, with B's edit.                                                                  |
-| deletes X, having seen C's edit of X                      | edits X without having seen C's edit   | X stays, with B's edit (and C's, where they do not conflict).                                           |
-| undoes an earlier move of X                               | deletes X                              | X stays: an undo is an edit.                                                                            |
-| undoes an earlier move of X after receiving B's delete    | (deleted X before)                     | X stays deleted. If it is restored later, it is at the position the undo gave it.                       |
-| A moves X into G; B deletes G; C moves X (three replicas) |                                        | X survives at C's position, in every delivery order.                                                    |
-| locks X                                                   | moves X                                | X is locked and moved.                                                                                  |
+| A does                                                     | B does, without knowing                | Outcome after merge                                                                                     |
+| ---------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| moves X into frame F                                       | moves X (within its old parent)        | X is in F, at B's position on the canvas.                                                               |
+| moves X back into the frame its position was written in    | moves X                                | X is in the frame, at B's position.                                                                     |
+| groups Y, then moves Y in the group                        | moves Y into frame G                   | Y is in G at A's position, and does not follow the old group later.                                     |
+| moves X into G, then out again                             | moves X                                | X is where B put it, and follows neither G nor its first frame later.                                   |
+| moves X out of frame F to the root                         | moves F                                | X is at the root where A put it; F moves without X.                                                     |
+| moves frame F into frame G                                 | moves G into F                         | Cycle: broken at the smaller id, which goes to the root; the other stays inside it. Nothing disappears. |
+| moves X into F1                                            | moves X into F2                        | X ends in one of them, the same on both replicas, at its place on the canvas.                           |
+| three users move X into F1, F2 and F3                      | a fourth moves X                       | X ends in one frame, at the fourth user's position on the canvas, in every delivery order.              |
+| groups X and Y                                             | groups Y and Z                         | Two groups; Y is in exactly one. Nothing lost or duplicated.                                            |
+| groups X and Y                                             | moves X                                | X is in the group, at B's position.                                                                     |
+| ungroups G                                                 | adds Z to G                            | G's children, Z included, stay visible and in place.                                                    |
+| ungroups G                                                 | moves G                                | The children end where B's move put them.                                                               |
+| ungroups G                                                 | deletes G                              | The ungroup wins: the children stay.                                                                    |
+| deletes frame F                                            | moves X out of F                       | X survives where B put it.                                                                              |
+| deletes frame F                                            | moves X into F, or adds X to F         | X survives where it is, shown in F's parent. Restoring F puts X back in F.                              |
+| deletes frame F                                            | edits X inside F                       | X survives, shown in F's parent; F and the rest of its contents are deleted.                            |
+| deletes frame F                                            | types into a text inside F (an editor) | The text element survives, with the typing.                                                             |
+| deletes frame F                                            | moves group G that is inside F         | G and its members survive, at B's place; F and the rest are deleted.                                    |
+| deletes frame F                                            | ungroups G inside F                    | G's members survive, in place.                                                                          |
+| deletes frame F                                            | edits X inside group G inside F        | X alone survives, in place.                                                                             |
+| deletes frame F                                            | (nobody touches it)                    | F and everything in it are deleted; restoring F restores them.                                          |
+| deletes frame F                                            | deletes frame F                        | Deleted. What either of them saw in F is deleted, also what the other had just added.                   |
+| deletes frame F, then undoes                               | deletes X inside F                     | F is back; X stays deleted.                                                                             |
+| deletes X                                                  | edits X, or locks it                   | The edit wins: X stays, with B's edit.                                                                  |
+| deletes X, having seen C's edit of X                       | edits X without having seen C's edit   | X stays, with B's edit (and C's, where they do not conflict).                                           |
+| restores F, which C had deleted (or undoes its own delete) | deleted F earlier, offline             | F stays restored, with its contents: the restore wins over the older delete.                            |
+| undoes its own delete of F, having received B's delete     | (deleted F at the same time)           | F stays deleted: B's delete was not taken back.                                                         |
+| deletes X, B restores X and undoes the restore             | A then undoes its delete               | X is back: the undo finds the mark although another user put it back.                                   |
+| undoes an earlier move of X                                | deletes X                              | X stays: an undo is an edit.                                                                            |
+| undoes an earlier move of X after receiving B's delete     | (deleted X before)                     | X stays deleted. If it is restored later, it is at the position the undo gave it.                       |
+| A moves X into G; B deletes G; C moves X (three replicas)  |                                        | X survives at C's position, in every delivery order.                                                    |
+| locks X                                                    | moves X                                | X is locked and moved.                                                                                  |
 
 ### 5.8 Tidy up and exports for sharing
 
 Removed records stay in the document so that offline copies, however old, can still merge (no purge by age). They are purged only by the explicit **tidy up** command, and in every **export for sharing**. The two differ, because a tidied document goes on merging and a shared export does not.
 
-**Tidy up** (`tidyUp` in `ydoc/document-ops.ts`) permanently removes what the user no longer sees, changes nothing the user sees, and rewrites nothing that it keeps, so it conflicts with no edit made elsewhere:
+**Tidy up** (`tidyUp` in `ydoc/document-ops.ts`) permanently removes what the user no longer sees, changes nothing the user sees, and rewrites no value that it keeps (positions, parents, order keys, sizes, content), so it conflicts with no edit made elsewhere:
 
-- Removed elements are deleted from the `Y.Doc`, except frames and groups: those are emptied (name, data, ext, references, lock and marks cleared) and stay as dissolved _place markers_ with their position, size and slot. Work that an offline copy did inside a container that was meanwhile deleted and tidied therefore still lands where its author put it: an element added to the frame offline appears at the same place on the canvas (the rule of section 5.5: survivors stay where the container was), and a frame stop still shows where the frame was.
+- Removed elements are deleted from the `Y.Doc`, except frames and groups: those are emptied (name, data, ext, references and lock cleared) and become _place markers_ (`purged`), with their position, size and slot (decided with the users). Work that an offline copy did inside a container that was meanwhile deleted and tidied therefore still lands where its author put it: an element added to the frame offline appears at the same place on the canvas, and a frame stop still shows where the frame was. A place marker is gone for good: nothing brings it back, neither an undo of "remove frame, keep contents" nor a restore made by a copy that did not know of the tidy up, so an emptied frame never reappears.
 - Removed stops and routes are deleted, with the route entries and visibility entries that point at deleted records.
-- Delete marks that no longer hide anything, asset descriptions nothing refers to, and records and keys that this version of the format does not define (section 2.1) are deleted.
+- Asset descriptions nothing refers to are deleted. A user who at the same time duplicates or adds something that uses such an asset keeps the description, because every use of an asset writes its description again (`addAsset`), and a concurrent write beats a delete of the same key.
+- Everything this version of the format does not define (section 2.1) is deleted: records and keys, and the content of unknown root types (the root types themselves cannot be removed from a `Y.Doc`; emptied, they are no longer reported).
+- Delete marks stay, without their entries for the records deleted here. A mark that hides nothing at the moment may be waiting for work that it lists and that has not arrived yet (section 5.5), so tidy up cannot know that it is dead.
 
 Tidy up cannot be undone. Edits that an offline copy made _to a purged record_ (typing into a deleted text, restoring a deleted frame) are lost when it merges; that is why tidy up only runs on request. Place markers hold no content, only geometry; they stay until the document loses its merge identity (section 13).
+
+**What a save holds.** Yjs keeps the content of what was deleted inside a session for as long as its undo history needs it: text that was typed and removed, values that were overwritten. A save does not write it: `ydoc.bin` is written from the state as another replica would hold it (`savedState`), in which deleted content is gone. So text that was typed and deleted is in no saved file, with or without tidy up.
 
 **An export for sharing** (`writeGalatsaFile(..., { forSharing: true })`) writes no `ydoc.bin` and so has no merge identity; nothing will ever merge into it. Its document is purged completely (`purgeSnapshot` in `model/purge.ts`): gone elements (place markers included), removed stops and routes, entries pointing at them, unknown references in `refs`, unused asset descriptions, all revisions and marks. Surviving children of gone containers are moved into the container the user sees them in, at the same place on the canvas and in the same stacking order, and frame stops whose frame is gone become rectangle stops showing the same region. Nothing that was deleted, and nothing the format has no place for, travels with a shared file.
 
@@ -447,20 +471,23 @@ A visibility change is `{action, ext?}`. The two actions are the whole vocabular
 
 ### 6.5 Outcomes of concurrent stop and route edits
 
-| A does                                   | B does, without knowing             | Outcome                                                                |
-| ---------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------- |
-| edits shared stop S's name (via route 1) | edits S's notes (via route 2)       | Both kept; both routes show both.                                      |
-| sets S to show X                         | sets S to hide Y                    | Both kept.                                                             |
-| sets S to show X                         | sets S to hide X                    | One wins, the same on both replicas.                                   |
-| changes S's view                         | changes S's view                    | One wins whole.                                                        |
-| removes S                                | edits S, or types into its notes    | The edit wins: S stays.                                                |
-| removes S                                | adds S to a route                   | S stays (it was used).                                                 |
-| removes S                                | reorders a route that visits S      | S is removed (reordering is work on the route, not on the stop).       |
-| removes S                                | (nobody touches it)                 | S is skipped in every route until restored.                            |
-| removes route R                          | adds a visit to R, or renames R     | R stays.                                                               |
-| inserts S1 into route R                  | inserts S2 into R at the same place | Both entries kept, in a deterministic order.                           |
-| moves entry E                            | moves entry E elsewhere             | E ends at one place; no duplicate.                                     |
-| removes entry E                          | moves entry E                       | E stays (a concurrent write beats a delete of the same key). Accepted. |
+| A does                                   | B does, without knowing                                      | Outcome                                                                |
+| ---------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| edits shared stop S's name (via route 1) | edits S's notes (via route 2)                                | Both kept; both routes show both.                                      |
+| sets S to show X                         | sets S to hide Y                                             | Both kept.                                                             |
+| sets S to show X                         | sets S to hide X                                             | One wins, the same on both replicas.                                   |
+| changes S's view                         | changes S's view                                             | One wins whole.                                                        |
+| removes S                                | edits S, or types into its notes                             | The edit wins: S stays.                                                |
+| removes S                                | adds S to a route                                            | S stays (it was used).                                                 |
+| removes S                                | redoes "add S to a route", or undoes "remove the visit to S" | S stays: every new visit counts, not only the operation's.             |
+| removes S                                | duplicates or restores a route that visits S                 | S stays.                                                               |
+| removes S                                | points an existing visit at S                                | S stays.                                                               |
+| removes S                                | reorders a route that visits S                               | S is removed (reordering is work on the route, not on the stop).       |
+| removes S                                | (nobody touches it)                                          | S is skipped in every route until restored.                            |
+| removes route R                          | adds a visit to R, or renames R                              | R stays.                                                               |
+| inserts S1 into route R                  | inserts S2 into R at the same place                          | Both entries kept, in a deterministic order.                           |
+| moves entry E                            | moves entry E elsewhere                                      | E ends at one place; no duplicate.                                     |
+| removes entry E                          | moves entry E                                                | E stays (a concurrent write beats a delete of the same key). Accepted. |
 
 ## 7. Coordinates, zoom range and numeric precision
 
@@ -501,6 +528,8 @@ An asset is referenced wherever its id appears as a complete string value: in el
 
 A normal save writes the bytes of every referenced asset, removed records included, so restoring something after reopening finds its image. Tidy up and exports for sharing purge first (section 5.8), so assets only removed content used are left out. An asset whose bytes are missing is a normal state: the element shows a "missing asset" placeholder, and the reader warns only for assets that visible content uses.
 
+Whoever writes a reference to an asset registers its description in the same command (`addAsset`), also when the description is there already: it is written again, so that a tidy up made elsewhere at the same time (section 5.8) cannot leave the new reference without one. If visible content nevertheless refers to an asset the document does not describe, the bytes are still written and read, and the reader says so (`asset-undescribed`).
+
 On reading, each asset's bytes MUST be hashed and compared with its id; a mismatch means damage, the asset is treated as missing and the user is told.
 
 ### 8.4 Very large media
@@ -515,18 +544,18 @@ A Galatsa file (extension `.galatsa`) is a zip archive:
 
 ```
 mimetype                 "application/vnd.galatsa.presentation+zip", first entry, stored
-manifest.json            versions and merge identity (9.2)
-document.json            the document in JSON form (9.3)
-ydoc.bin                 optional: the Yjs state (9.3)
-assets/sha256-<hex>      one entry per embedded asset, the raw bytes
-thumbnail.png            optional: preview, longest side at most 512 pixels
+manifest.json            versions and merge identity (9.2), stored
+document.json            the document in JSON form (9.3), deflated
+ydoc.bin                 optional: the Yjs state (9.3), deflated
+assets/sha256-<hex>      one entry per embedded asset, the raw bytes, stored
+thumbnail.png            optional: preview, longest side at most 512 pixels, stored
 ```
 
 - `mimetype` comes first and is stored, so tools that look at the first bytes can recognize the file.
-- Text and the Yjs state are deflated. Already compressed media and the thumbnail are stored.
-- **One way to read an archive.** Galatsa files use a strict subset of zip, so that no two readers can find different contents in the same bytes. Readers MUST reject: an archive comment (the end record is the last 22 bytes of the file); bytes that belong to no entry, before, between or after the entries (only the data descriptor of 12 or 16 bytes that some zip writers put after an entry is allowed); entries that share bytes; a directory that does not end exactly at the end record; local headers whose name differs from the directory; entry names that are not printable ASCII, are absolute, or have `..`, `.`, backslashes or empty segments; duplicate names; encryption; archives split over several files; compression methods other than stored and deflate.
+- **Only `document.json` and `ydoc.bin` are compressed.** Assets are stored as they are, whatever their type: most are compressed already, and a reader then needs no memory for them beyond the file itself (section 9.7). (Compressing some assets by media type was the first design; an uncompressed PDF or TIFF then counted against the reader's limit for decompressed data, and the writer could write files the default reader refused.)
+- **One way to read an archive.** Galatsa files use a strict subset of zip, so that no two readers can find different contents in the same bytes. The writer (`writeZip`, own code) writes exactly this subset, and readers MUST reject everything else: an archive comment (the end record is the last 22 bytes of the file); bytes that belong to no entry, before, between or after the entries; entries that share bytes; a directory that does not end exactly at the end record; a local header that differs from the directory in name, flags, method, checksum or sizes; sizes kept after the data (a "data descriptor"); entry names that are not printable ASCII, are absolute, or have `..`, `.`, backslashes or empty segments; duplicate names; encryption; archives split over several files; compression methods other than stored and deflate.
 - **Unknown entries** are checked structurally, not decompressed, and ignored. Writers do not carry them over. A new kind of entry can therefore only hold something that may be lost when an older version saves the file (a cache, a second preview); anything that must survive raises the minimum reader version (section 9.4).
-- **Size.** Version 1 writers do not use zip64, which limits a file to 4 GiB (files with very large media can keep it external, section 8.4). Zip64 can be added later without breaking anything: a writer uses it only for files that need it and then sets `minReaderVersion` to the version that reads zip64. Version 1 readers detect zip64 in every form it takes (the zip64 end locator, an entry count of 0xFFFF, a size or offset of 0xFFFFFFFF in the end record or in an entry, a zip64 extra field) before reading the manifest, and refuse the file as needing a newer version of Galatsa. Files below 4 GiB stay readable by every version.
+- **Size.** Zip without zip64 ends at 4 GiB and 65 534 entries. The version 1 writer refuses to write a file beyond that, with an error that says so and points to keeping very large media next to the presentation (section 8.4); it never writes an archive whose offsets have wrapped around. Zip64 is not part of version 1, because a file is read whole into memory (section 12) and no platform Galatsa runs on reliably holds more than 4 GiB in one buffer: zip64 belongs with reading and writing files as streams. It can be added then without breaking anything: a writer uses it only for files that need it and sets `minReaderVersion` to the version that reads zip64. Version 1 readers detect zip64 in every form it takes (the zip64 end locator, an entry count of 0xFFFF, a size or offset of 0xFFFFFFFF in the end record or in an entry, a zip64 extra field) before reading the manifest, and refuse the file as needing a newer version of Galatsa. Files below 4 GiB stay readable by every version.
 
 ### 9.2 manifest.json
 
@@ -551,7 +580,7 @@ thumbnail.png            optional: preview, longest side at most 512 pixels
 
 `document.json` is the canonical content: a `DocumentSnapshot` as UTF-8 JSON, removed records included (section 5.5). It is enough to open the file. Writers write object keys sorted, so the same document gives the same bytes; readers MUST NOT depend on key order. `readGalatsaSnapshot` (entry `@galatsa/format/read`) reads only this, so the player needs no Yjs.
 
-`ydoc.bin` only preserves CRDT identity: a document reopened from it can still merge with other copies (another user's offline edits, the sync server's state).
+`ydoc.bin` only preserves CRDT identity: a document reopened from it can still merge with other copies (another user's offline edits, the sync server's state). It is the Yjs state as another replica would hold it, without the content of what was deleted (section 5.8).
 
 **Lineage.** A Y.Doc's `meta.lineage` is a random id created with the document's CRDT identity: by `initDocument`, and anew whenever identity is reset: `fromSnapshot` (opening a file without a usable `ydoc.bin`, an export for sharing, a migrated file). Two Y.Docs built from the same `document.json` have different lineages. Sync MUST refuse to exchange updates between documents with different lineages (`checkSync`; `syncDocs` throws `MergeIdentityError`); merging them would compare unrelated CRDT histories and silently drop one user's edits. A _blank_ replica (a new `Y.Doc` that holds nothing yet) has no lineage and may join any document; it receives the lineage with the content. The lineage is not part of the JSON form.
 
@@ -559,8 +588,8 @@ thumbnail.png            optional: preview, longest side at most 512 pixels
 
 1. The archive must open (section 9.1) and the manifest must be readable and say that this reader is new enough (section 9.4). Otherwise the file cannot be opened.
 2. `document.json` is parsed, migrated if the file is older (section 9.4), and read by the grammar (section 2.1). It is _usable_ if it is a JSON object that has the document's tables (`settings`, `elements`, `stops`, `routes`, `assets`). Records and values inside that do not fit are read as defaults, left out or kept as unsupported values, and listed in a warning; they never make the file unreadable.
-3. `ydoc.bin` is _usable_ if the manifest describes it, its entry is intact and no larger than a limit (default 256 MiB), no migration ran, it decodes, it is complete (it holds no updates that wait for others), and its `meta.lineage` equals the manifest's.
-4. If both are usable and the JSON form of the decoded Y.Doc equals the document of step 2 (apart from the two version numbers, which a compatible upgrade may raise), the Y.Doc from `ydoc.bin` is the document: merge identity is kept.
+3. `ydoc.bin` is _usable_ if the manifest describes it, its entry is intact and no larger than a limit (default 256 MiB), no migration ran, it decodes, it is complete (it holds no updates that wait for others), and its `meta.lineage` equals the manifest's. If the state it holds needs a newer reader than this one (section 9.4), the file is refused as needing a newer version, whatever the manifest says.
+4. If both are usable and the JSON form of the decoded Y.Doc equals the document of step 2 (apart from the two version numbers), the Y.Doc from `ydoc.bin` is the document: merge identity is kept. Its versions are raised to those of step 2 if they are lower, and never lowered.
 5. If both are usable but differ, `document.json` wins: it is what other tools read and may have changed deliberately. The document is built from it with a new lineage, and the user is told that it will not merge with other copies.
 6. If only `document.json` is usable, the document is built from it with a new lineage.
 7. If only `ydoc.bin` is usable (`document.json` is missing, fails its checksum, is not JSON or has lost its tables), the document is _recovered_ from `ydoc.bin`, merge identity included, and the user is told. The reader without Yjs cannot do this and reports the file as damaged.
@@ -576,6 +605,8 @@ Both sides of the comparison in step 4 go through the same grammar, so an odd va
 
 **Two numbers.** `schemaVersion` (in the document, and `formatVersion` in the manifest) is the version of the content: the highest format version that wrote it. `minReaderVersion` is the oldest reader that can read it correctly. Both are 1 in this specification.
 
+**Versions only rise.** In the `Y.Doc`, a version is raised by adding a key to `meta`: `"minReaderVersion:<n>"` or `"schemaVersion:<n>"` with the value true (`raiseVersions`). The version in effect is the highest one named, in the base keys `minReaderVersion` and `schemaVersion` (written once, when the document is created) or in such a key (`versionsOf`); `schemaVersion` is at least `minReaderVersion`. Keys are only added, so two clients that raise a version at the same time end with the higher one whichever write Yjs lets win, and nothing a client of any version does lowers it. Readers and writers of every version MUST use the version in effect and MUST NOT lower a version in any other way.
+
 **Additive changes** need no new reader. They go into open slots that every reader keeps and writes back:
 
 - the `ext` maps of elements, stops and routes (`"<owner>.<name>"` -> any value of section 3.4), and `settings`;
@@ -588,9 +619,10 @@ Examples: alt text, opacity, links, how an element fades in at a stop, a licence
 
 **A document that needs a newer reader is not touched** by an older program, in any way:
 
-- the file reader refuses the file with "needs a newer version of Galatsa" (from the manifest, from the document's own `minReaderVersion` if that is higher, or from `ydoc.bin`'s when the document is recovered from it);
-- sync refuses a replica whose `minReaderVersion` is higher than this program reads (`checkSync` returns `needs-newer-version` before any update is exchanged);
-- if the document starts to need a newer version while this program has it open (a newer client in the same session uses something new; it MUST raise `meta.minReaderVersion` in the same transaction), `watchVersion` tells the program at once, every reference operation and tidy up throw `NewerVersionError`, and the file writer refuses to save, because the save would drop what this version cannot read. The shared state itself is not changed by the older program.
+- the file reader refuses the file with "needs a newer version of Galatsa" (from the manifest, from the document's own `minReaderVersion` if that is higher, or from what the state in `ydoc.bin` says);
+- sync refuses a replica whose minimum reader version is higher than this program reads (`checkSync` returns `needs-newer-version` before any update is exchanged);
+- a replica that is not a document yet (a new `Y.Doc` that has neither been initialized nor synced) is not written to either: content created in it would have no merge identity, and the replica could then never sync. Operations throw until it has synced.
+- if the document starts to need a newer version while this program has it open (a newer client in the same session uses something new; it MUST raise the minimum reader version in the same transaction), `watchVersion` tells the program at once, every reference operation and tidy up throw `NewerVersionError`, and the file writer refuses to save, because the save would drop what this version cannot read. The shared state itself is not changed by the older program.
 
 Opening read-only was rejected: the reader cannot know what it would misdraw.
 
@@ -622,20 +654,28 @@ A file either opens or is refused with one `FileFormatError` whose code says why
 | `not-galatsa`   | A zip archive, but not a Galatsa file.                                                                      |
 | `damaged`       | A broken archive structure, an unreadable manifest, or neither `document.json` nor `ydoc.bin` usable (9.3). |
 | `newer-version` | Needs a newer Galatsa (9.4), zip64 included.                                                                |
-| `too-large`     | Over the limits of section 9.7.                                                                             |
+| `too-large`     | Over the limits of section 9.7. Also what the writer throws for a file that does not fit (9.1, 9.7).        |
 | `unsupported`   | An archive feature the format does not use (encryption, split archives, another compression method).        |
 
-Everything else is a warning on a file that did open: `content-quarantined` (with the list of what was read as a default, left out or kept as unsupported; section 2.1), `document-recovered`, `ydoc-discarded`, `migrated`, `asset-damaged` (an asset entry fails its checksum or its hash), `asset-missing`, `thumbnail-missing`. A damaged entry costs that entry, not the file. The writer returns the bytes and its own warnings: `ydoc-not-written` when Yjs cannot encode the state (section 13), in which case the file is written without `ydoc.bin` rather than not at all.
+Everything else is a warning on a file that did open: `content-quarantined` (with the list of what was read as a default, left out or kept as unsupported; section 2.1), `document-recovered`, `ydoc-discarded`, `migrated`, `asset-damaged` (an asset entry fails its checksum or its hash), `asset-missing`, `asset-undescribed` (section 8.3), `thumbnail-missing`. A damaged entry costs that entry, not the file. The writer returns the bytes and its own warnings: `ydoc-not-written` when Yjs cannot encode the state (section 13) or the state is larger than a reader accepts, in which case the file is written without `ydoc.bin` rather than not at all.
 
 The grammar does not check references: dangling parents, frames, stops and assets are legal and handled by resolution. Recovering the last good version after an interrupted save is the job of the saving code (write a temporary file, then replace).
 
 ### 9.7 Limits
 
-- **Memory.** Stored (uncompressed) entries are returned as views of the file's own bytes, so embedded media costs no memory beyond the file. The entries that have to be decompressed (`document.json`, `ydoc.bin`, compressible assets) are bounded in total by `maxInflatedSize` (default 512 MiB), checked against the sizes the directory declares before anything is decompressed. Reading a file therefore needs at most the file plus that limit. Each entry is inflated in 16 KiB steps into a buffer that grows with the data, never past the declared size, so an entry that declares much and holds little costs little, and one that holds more than it declares is stopped there. The result must match the declared size and CRC-32.
-- **Entries:** at most 100 000 (default). Unknown entries are not decompressed.
-- **`ydoc.bin`:** used only up to a size limit (default 256 MiB) and under the conditions of section 9.3.
+**The writer keeps the limits that the reader's defaults allow**, so a file that the writer writes is always one that the default reader opens:
+
+| What                          | Writer                                              | Reader (default)                           |
+| ----------------------------- | --------------------------------------------------- | ------------------------------------------ |
+| `document.json`, uncompressed | at most 256 MiB, else the file is refused           | decompressed entries: 512 MiB in all       |
+| `ydoc.bin`, uncompressed      | at most 256 MiB, else left out (`ydoc-not-written`) | 256 MiB, else ignored (`ydoc-discarded`)   |
+| assets, thumbnail, manifest   | stored, never compressed                            | views of the file's bytes: no extra memory |
+| the whole file                | at most 4 GiB and 65 534 entries, else refused      | zip64 refused as needing a newer version   |
+
+- **Memory.** Stored entries are returned as views of the file's own bytes, so embedded media costs no memory beyond the file. The entries that have to be decompressed are bounded in total by `maxInflatedSize` (default 512 MiB), checked against the sizes the directory declares before anything is decompressed. Reading a file therefore needs at most the file plus that limit. Each entry is inflated in 16 KiB steps into a buffer that grows with the data, never past the declared size, so an entry that declares much and holds little costs little, and one that holds more than it declares is stopped there. The result must match the declared size and CRC-32. A reader tolerates compressed assets (they count against the limit); the writer never writes them.
+- **`ydoc.bin`** is used only under the conditions of section 9.3.
 - **Nesting:** the JSON form is at most 256 levels deep; deeper content is cut (section 2.1). All conversions and the resolver are bounded or iterative, so no input overflows the stack in Galatsa's own code (section 13 for Yjs's).
-- **Small bounds in the grammar:** 64 shifts in a rebase, counters in a revision up to 4096, order keys up to 1024 characters, ids up to 64.
+- **Small bounds in the grammar:** 64 shifts in a rebase, counters in a revision up to 4096, order keys up to 1024 characters (writers keep them under about 130, section 4.1), ids up to 64.
 
 ### 9.8 The zip library
 
@@ -649,7 +689,7 @@ Requirements: a license compatible with GPL-3.0-or-later, no dependencies, works
 
 Licenses and sizes are from the npm registry, checked 2026-11-26.
 
-Choice: **fflate for compression, own code for the archive structure.** The writer uses fflate's `zipSync`. The reader parses the zip directory itself and uses fflate's streaming `Inflate`, because the checks of sections 9.1 and 9.7 need control fflate's unzip does not give.
+Choice: **fflate for compression, own code for the archive structure.** The writer builds the archive itself and uses fflate's `deflateSync` (fflate's own zip writer does not check the 4 GiB limit, and its offsets wrap around silently). The reader parses the zip directory itself and uses fflate's streaming `Inflate`, because the checks of sections 9.1 and 9.7 need control fflate's unzip does not give.
 
 Measured bundle sizes (Vite 8 production build, minified, then gzip; measured 2026-11-26 on this revision with a throwaway script, not part of the repository):
 
@@ -664,16 +704,21 @@ Measured bundle sizes (Vite 8 production build, minified, then gzip; measured 20
 
 ## 10. Undo
 
-Undo and redo are built (in the command layer) on Yjs's `UndoManager`, configured by `createUndoManager` (`ydoc/track.ts`). It tracks the transactions of the local user: those of the reference operations (`ORIGIN.local`) and those of the origins it is given, for example an editor binding, so typing and commands are in one undo history. Loading, record creation, tidy up, the recording of work and remote changes are never undone.
+Undo and redo are built (in the command layer) on Yjs's `UndoManager`, as the subclass that `createUndoManager` returns (`DocumentUndoManager` in `ydoc/track.ts`). It tracks the transactions of the local user: those of the reference operations (`ORIGIN.local`) and those of the origins it is given, for example an editor binding, so typing and commands are in one undo history. Loading, record creation, tidy up, re-keying, the recording of work and remote changes are never undone.
 
-Undo MUST never hard-delete a record, because that would discard other users' concurrent work inside it. So every record is created in two transactions: first, untracked (`ORIGIN.create`), already removed (an element, stop or route with a delete mark that lists itself; a group dissolved); then, in the local transaction, restored. Undoing a creation puts the removal back; redoing takes it away again.
+**Creation.** Undo MUST never hard-delete a record, because that would discard other users' concurrent work inside it. So every record is created in two transactions: first, untracked (`ORIGIN.create`), already removed (an element, stop or route with a delete mark that lists itself; a group dissolved); then, in the local transaction, restored. Undoing a creation puts the removal back; redoing takes it away again.
+
+This only holds if the first of the two transactions really is one of its own. Inside another transaction it would become part of that one, undo would delete the record for good, and what another user did inside it meanwhile would jump or be lost. So every operation that creates records (`addElement`, `group`, `addStop`, `addRoute`, `pasteFragment`, `importCopy`) refuses to run inside a transaction that is not one of the internal ones, with an error that says what to do instead.
+
+**Commands of several operations.** A command that needs several operations to be one undo step runs them in `group(fn)` of the undo manager, not in one Yjs transaction: the operations run as they always do, and the manager makes one step of them, whatever its capture timeout.
 
 How undo meets section 5.5:
 
 - **Undo never writes a revision.** Revisions are only written by the work tracker, in transactions undo does not see. An undo or redo is itself a local transaction, so the records it changes are worked on like by any edit: an undo made without knowing of a delete keeps the element, and an undo made after receiving the delete leaves it deleted.
-- **Marks put back by undo or redo are refreshed** to what the user sees at that moment (section 5.5). So redoing a delete deletes again although the element was edited in between, and undoing a creation removes the element although it was edited since it was created. What another user added or changed without knowing still survives, as with any delete: undoing a grouping dissolves the group and a member another user added meanwhile stays in place; undoing a creation while another user types into the element keeps it, with their text.
-- **Each user's delete is its own mark**, so undoing a delete brings back exactly what that delete hid and nothing another user deleted.
-- **An undo never leaves a key without a value.** When an undo has to bring back the value a key had before, Yjs refuses if a concurrent write by someone else to the same key is on record, even one that lost and is gone. The key is then left with no value at all, and a position or a parent would read as its default: the element would jump to the origin. `createUndoManager` puts the value back in that case, and only when the key has no value, so nothing anyone wrote is overwritten.
+- **Marks put back by undo or redo are refreshed** to what the user sees at that moment (section 5.5). So redoing a delete deletes again although the element was edited in between, and undoing a creation removes the element, with what the user sees in it at that moment, although it was edited since it was created (decided with the users). What another user added or changed without knowing still survives, as with any delete: undoing a grouping dissolves the group and a member another user added meanwhile stays in place; undoing a creation while another user types into the element keeps it, with their text.
+- **Each user's delete is its own mark**, so undoing a delete brings back exactly what that delete hid and nothing another user deleted. Undoing a delete is a restore, and so is work on the element (section 5.5).
+- **An undo finds its mark although someone else put it back.** If another user restored the element and then undid that, the mark is there again, but as a new entry under the same action id, which Yjs does not connect with the entry this user's undo history holds; the undo would silently do nothing, or undo an earlier step instead. The undo manager connects the two (the way Yjs does on the replica that put the mark back), so one press takes the delete back.
+- **An undo never leaves a key without a value.** When an undo has to bring back the value a key had before, Yjs refuses if a concurrent write by someone else to the same key is on record, even one that lost and is gone. The key is then left with no value at all, and a position or a parent would read as its default: the element would jump to the origin. The undo manager puts the value back in that case, and only when the key has no value, so nothing anyone wrote is overwritten.
 
 Route entries are references and are deleted by undo of an insertion; asset descriptions are added untracked.
 
@@ -683,7 +728,7 @@ Route entries are references and are deleted by undo of an insertion; asset desc
 - `packages/core/src/ydoc`: the Yjs binding: root layout, the generic data encoding, `toSnapshot`/`fromSnapshot`/`inspectDocument`, the work tracker and the undo configuration, reference operations, tidy up, paste and import, sync checks. Exported from `@galatsa/core/ydoc`. Test helpers (a seeded random source, a sample document, the random scenario and junk of the property tests) are a separate entry, `@galatsa/core/testing`, not part of the production entries.
 - `packages/format`: reading and writing files, asset hashing, migrations. `@galatsa/format` has everything; `@galatsa/format/read` reads into the JSON form without Yjs.
 
-The Yjs binding is in core because the document model _is_ a Y.Doc; it is a separate entry so the player can use the types and resolution without Yjs. Core stays environment-agnostic: no DOM or Node types; it uses only `globalThis.crypto.getRandomValues`.
+The Yjs binding is in core because the document model _is_ a Y.Doc; it is a separate entry so the player can use the types and resolution without Yjs. Core stays environment-agnostic: no DOM or Node types; it uses only `globalThis.crypto.getRandomValues`. The SHA-256 of the revision digests (section 5.5) is own code in `model/digest.ts`, because the platform's is asynchronous and resolution is not.
 
 **Performance.** Measured on a document of 5000 elements in 50 frames (a throwaway script, 2026-11-26): `toSnapshot` 140 ms; typing through a binding 0.08 ms per character, work recording included; a move 0.08 ms; reparent, restack and group about 10 ms; deleting a frame with 100 children 55 ms; tidy up 290 ms. The reference operations resolve the document anew for each operation, reading only what they need (one element and its ancestors for a move; the children of one or two containers for an insertion; everything for a delete). Creating 5000 elements one operation at a time takes about 10 s, so bulk creation (import) should build a fragment and paste it, which resolves once. The command layer should keep one incrementally updated resolver per document before documents get much larger.
 
@@ -695,7 +740,7 @@ New production dependencies (licenses compatible with GPL-3.0-or-later; versions
 | [lib0](https://www.npmjs.com/package/lib0) (via yjs)                     | 0.2.120 | 2026-11-09 | MIT     | Yjs's utility library.                          |
 | [isomorphic.js](https://www.npmjs.com/package/isomorphic.js) (via lib0)  | 0.2.5   | 2022       | MIT     | Random numbers and crypto across platforms.     |
 | [fractional-indexing](https://www.npmjs.com/package/fractional-indexing) | 4.0.0   | 2026-06-25 | CC0-1.0 | Order key generation (section 4).               |
-| [fflate](https://www.npmjs.com/package/fflate)                           | 0.8.3   | 2026-05-16 | MIT     | Deflate and zip writing (section 9.8).          |
+| [fflate](https://www.npmjs.com/package/fflate)                           | 0.8.3   | 2026-05-16 | MIT     | Deflate and inflate (section 9.8).              |
 
 ## 12. Assumptions
 
@@ -703,19 +748,19 @@ New production dependencies (licenses compatible with GPL-3.0-or-later; versions
 2. Yjs resolves concurrent writes to the same map key the same way on every replica, a concurrent set beats a delete of the same key, and deleting items creates no new items. The tests check the outcomes that depend on it.
 3. No more than a few hundred thousand elements per document.
 4. Containers never need rotation or scale.
-5. A file is read whole into memory; streaming is future work.
+5. A file is read whole into memory, and written from memory; streaming, and with it files over 4 GiB, is future work.
 6. Users who want unbounded deep zoom do it inside frames.
 7. Every `Y.Doc` a user edits has the work tracker attached before the first edit (section 5.5). An edit made on a document without it is not recorded as work and loses against a concurrent delete.
-8. Writer keys (66 random bits per editing session) and action ids (128 bits) never collide. A collision of two writer keys on one record could let a concurrent edit go unnoticed by a delete.
-9. Replicas deliver each other's updates completely and in causal order per client, as Yjs does.
+8. Writer keys (66 random bits per editing session) and action ids (128 bits) never collide, and neither do two different revisions of one record in the 96 bits of their digests. A collision could let a concurrent edit go unnoticed by a delete.
+9. Replicas deliver each other's updates completely, and each client's updates in the order they were made, as Yjs does. The updates of different clients may arrive in any order (section 5.5, "Delivery order").
 
 ## 13. Open questions and known limitations
 
-1. **Live migrations.** Once there is a sync server, a shared document on it may need an incompatible migration while clients are connected. Running it once on the server, raising `minReaderVersion` and resetting the lineage (old clients must reload) is likely, but undecided.
-2. **Key growth.** Order keys grow when many items are inserted at one spot (about 130 characters after 1000 insertions between the same neighbours). Rebalancing (re-keying a container's children in one transaction) would conflict with concurrent reorders. Not needed yet.
-3. **Revisions grow with sessions.** A record keeps one small entry (about 35 bytes in the Yjs state, 20 in JSON) for every editing session that ever worked on it, and nobody but that session can safely remove it. A document edited in hundreds of sessions that each touch hundreds of elements carries megabytes of them. Compacting them is possible only when no copy is offline (it would make offline deletes ineffective and could hide offline work from a later delete); a command for that, with that warning, is future work.
-4. **Place markers stay.** Each frame or group that is removed and tidied leaves an empty marker (about 230 bytes of JSON) until the document's merge identity is reset. The same future command could drop them.
-5. **A delete lists everything it hides.** Deleting a frame with 5000 elements writes one mark of about 250 kB, which stays until tidy up.
+1. **Live migrations.** Once there is a sync server, a shared document on it may need an incompatible migration while clients are connected. Running it once on the server, raising the minimum reader version (section 9.4) and resetting the lineage (old clients must reload) is likely, but undecided.
+2. **Re-keying against a concurrent insert.** A list is re-keyed when a key in it reaches 128 characters (section 4.1), which takes several hundred insertions at one spot. An item that another user inserts into or moves within the same list at the same time keeps the key it was given among the old keys, and can end up at another place in the list. Nothing is lost.
+3. **Revisions grow with sessions.** A record keeps one small entry (about 35 bytes in the Yjs state, 20 in JSON) for every editing session that ever worked on it, and nobody but that session can safely remove it. A document edited in hundreds of sessions that each touch hundreds of elements carries megabytes of them. (Delete marks do not grow with them: a mark holds a digest of fixed size.) Compacting them is possible only when no copy is offline (it would make offline deletes ineffective and could hide offline work from a later delete); a command for that, with that warning, is future work.
+4. **Place markers stay.** Each frame or group that is removed and tidied leaves an empty marker (about MARKERBYTES bytes of JSON) until the document's merge identity is reset. The same future command could drop them.
+5. **A delete lists everything it hides, and marks stay.** Deleting a frame with 5000 elements writes one mark of about MARKKB kB. Tidy up shortens a mark by the records it deletes but does not remove it (section 5.8); a mark goes away when its record is restored or is deleted from the document by a tidy up, and a mark that hides nothing when a replica that holds it works on the record. A mark on a frame or group that became a place marker therefore stays, with the entries of the place markers inside it.
 6. **The instant between a change and its recording** (section 5.5): a delete made by a replica that has received a change but not yet its new revision does not take effect and has to be repeated. Nothing is lost. Writing both in one transaction is not possible without undo restoring old revisions.
 7. **Work done knowingly on a deleted record is not recorded.** If it is later restored, and a third user who saw neither the work nor the first delete deletes it concurrently, that delete hides the work. This needs an undo or redo of an old edit on something the user sees as deleted, a restore, and a third party's concurrent delete.
 8. **Restoring one element out of a deleted container** is done by declaring work on it (`noteWork` with `evenIfDeleted`). Yjs's undo cannot undo that; the element has to be deleted again. No reference operation or interface for a "bin" exists yet.
@@ -728,7 +773,11 @@ New production dependencies (licenses compatible with GPL-3.0-or-later; versions
 15. **Repair writes.** Resolution never writes; stale state (rebases, cycle breakers, gone containers with children) stays. Whether the editor should normalize some of it is open; writing positions outside a move would reintroduce the conflict of section 5.3.
 16. **Mixed double conflicts.** Rule 3 of section 5.3 uses container offsets from rules 1 and 2; if a container is itself in a rule-3 state (two overlapping conflicting container changes), positions inside it are approximate (not lost, possibly slightly off). The property test finds no failure of its invariants, but does not measure this.
 17. **Performance of the reference operations** (section 11): one resolution per operation; an incremental resolver is the command layer's job.
-18. **Reordering a route and a removed stop.** Inserting a visit counts as working on the stop and keeps it; reordering does not (decided with the users). Whether removing a stop should warn when routes still visit it is a question for the editor.
+18. **Deleted content in a running session.** Within a session, Yjs keeps the content of what the user deleted for as long as the undo history can bring it back, and sends it to the replicas the session syncs with (which drop it on arrival). Files never hold it (section 5.8). A sync server that must not see deleted text needs the client to send from the garbage-collected state; that is for the sync package to decide.
+19. **Asset descriptions and a concurrent tidy up.** A use of an asset that is written without `addAsset` (by an extension that sets an asset id directly) does not protect the description against a tidy up made elsewhere at the same time; the asset is then reported as not described (section 8.3) and its bytes are kept.
+20. **No zip64.** Files end at 4 GiB (section 9.1); larger media has to be kept next to the presentation (section 8.4).
+21. **Commands inside one Yjs transaction.** An operation that creates records throws inside another transaction (section 10). Command code has to use the undo manager's `group`, which the command layer should wrap once.
+22. **Reordering a route and a removed stop.** Inserting a visit counts as working on the stop and keeps it; reordering does not (decided with the users). Whether removing a stop should warn when routes still visit it is a question for the editor.
 
 ## 14. Rejected alternatives
 
@@ -747,6 +796,13 @@ New production dependencies (licenses compatible with GPL-3.0-or-later; versions
 - **Comparing content instead of revisions** (a delete lists a hash of what it saw). No bookkeeping at all, but every later change of the JSON form, even a new default, would change the hashes and bring deleted things back.
 - **Yjs's state vector in the delete mark.** Does not see deletions inside a record (removed text), is not available in the JSON form, and grows with the number of sessions in every mark.
 - **Writing the new revision in the same transaction as the change.** Undo would then put the old revision back, which makes an earlier delete apply again or a later one stop applying.
+- **A copy of the revisions in every delete mark (third version).** A mark then grew with the number of sessions that ever worked on each record it lists, a document's marks with sessions times elements, and every local transaction read them all again. A digest has a fixed size, and what a mark lists is read once.
+- **Declaring a visit as work in the operation that inserts it (third version).** Redoing "add visit", undoing "remove visit" and duplicating a route create visits without that operation, so a stop removed elsewhere at the same time was lost against them. The tracker now finds every new visit itself.
+- **Tidy up removing marks that hide nothing (third version).** With the changes of different users arriving in any order, such a mark may list work that has not arrived yet; removing it brought a deleted element back for good.
+- **Place markers as dissolved containers (third version).** Undoing "remove frame, keep contents" after a tidy up took the dissolve back and showed an emptied frame. A marker now has a flag of its own that nothing undoes.
+- **`minReaderVersion` as a plain value, last writer wins.** A client that had not seen a raise could lower it again by writing the old value. Raising by adding keys cannot be undone by any write.
+- **Creating a record in whatever transaction the caller has open.** The untracked first step of a creation (section 10) merged into the caller's transaction, and undo then deleted the record for good, with what others had put into it. Refused instead.
+- **References as an array, last writer wins.** Two users who each attached something to the same element lost one attachment. A set keeps both.
 - **Refusing a file when anything in `document.json` is invalid (second version).** One odd value, written by a normal operation or by a peer, made a file that saved without error impossible to open. Hence one grammar and quarantine.
 - **Refusing `ydoc.bin` when it holds anything its JSON form lacks (second version).** One unknown key from one peer cost every user their merge identity on every reopen, which strands offline work. It is kept and reported instead; exports for sharing carry only the JSON form.
 - **Tidy up that moves survivors out of removed containers and rewrites their positions (second version).** Its writes conflicted with offline moves, and content added offline to a purged container had lost its frame of reference and jumped. Place markers and no rewrites keep both in place.
@@ -768,6 +824,10 @@ New production dependencies (licenses compatible with GPL-3.0-or-later; versions
 - **Accepting any zip archive.** An archive comment, or bytes between entries, can hold a second archive that another reader would find instead. The strict subset has one reading.
 - **A limit on the total declared size of all entries (second version).** The default of 4 GiB was more than a reader can allocate, and it counted stored media that need not be copied at all.
 - **Throwing on values JSON cannot express.** One value from a peer made a whole document unsaveable.
+- **fflate's `zipSync` for writing (third version).** It does not check the 4 GiB limit: offsets and sizes wrap around and the file cannot be read by anything. The writer is 100 lines of own code and refuses.
+- **Compressing assets by media type (third version).** Compressed entries count against the reader's memory limit, so two large uncompressed images made a file its own writer's reader refused. Stored assets cost no memory and little space, since most media is compressed already.
+- **Zip64 in version 1.** No reader that holds the file in one buffer could open such a file (section 9.1).
+- **Tolerant zip reading (local headers not compared, sizes after the data accepted).** Two readers can then see different contents in one file.
 - **Migrating element data on load.** Every extension upgrade would cut a file off from other users' offline copies.
 
 ## 15. Tests
@@ -778,10 +838,12 @@ All tests run with `pnpm check` (Vitest). Concurrency tests use replicas that st
 - `packages/core/src/ydoc/merge-structure.test.ts`: rows of the tables in sections 4.3, 5.7 and 6.5.
 - `packages/core/src/ydoc/regressions.test.ts`: the defects found in the first review: rebase chains and returns, lineage refusal, lossless round trip of every odd value, undo of grouping and of creation with concurrent work, precision of operations far from the origin, operations on children of gone containers, moves with late-arriving parents, tidy up and export purging, paste with reference remapping.
 - `packages/core/src/ydoc/review2.test.ts`: the defects found in the second review and the rows of section 5.7 added since: the path rule (moved group, moved subframe, ungroup and deep edit inside a deleted frame), two deletes of one frame, a concurrent edit that a single revision token lost, typing through an editor binding into elements and speaker notes, visits and reorders against removed stops and routes, undo against deletes in both directions, redo of a delete after edits, undo of a creation after edits, merged undo steps, undo covering binding origins, undo that Yjs leaves half done, place markers after tidy up, operations refusing invalid arguments, a snapshot that is valid whatever a peer wrote, deep nesting, equal JSON forms on author and peer, `__proto__` keys, paste order, three-way reparent, the version gate, a blank replica, and import as a copy.
-- `packages/core/src/ydoc/property.test.ts` with `scenario.ts`: for random documents, three replicas apply 80 random steps each run (all reference operations on elements, stops and routes, typing through an editor binding's own transactions, duplicate, undo, redo, tidy up, full and one-way syncs), then sync fully. The scenario keeps its own record of which replica had seen which work when each delete mark was written, independent of the document's revisions, and checks: the replicas converge; every snapshot is valid and survives a round trip through a new document; the documents hold nothing the grammar has no place for; no step throws; **nothing is hidden by a delete that had not seen all work on it or on a container between it and the deleted element** (work done on a record its user saw as deleted excepted); the drawing order is sane; an export purge and a tidy up change nothing the user sees, and nothing a route plays. Two more properties run on random junk, written by a peer into the Y.Doc or found in a document's JSON: reading is total, valid, stable, at most 256 levels deep and the same on every replica, resolution and tidy up work on it, and the document survives a round trip. 40 seeds by default; `GALATSA_FUZZ_SEEDS` (with `GALATSA_FUZZ_FIRST` and `GALATSA_FUZZ_STEPS`) for a long run. The scenario check was itself checked by putting two of the old defects back.
+- `packages/core/src/ydoc/review3.test.ts`: the defects found in the third review: marks of fixed size whatever the history, and no cost per transaction; a stop kept by a redone, restored or duplicated visit; restore and undo of a delete against an older delete that arrives later; an undo that finds a mark someone else put back; tidy up against a concurrent duplicate that needs an asset description, against unknown root types, against an undo of "remove frame, keep contents", and against a mark whose work arrives later; creation refused inside a transaction and `group` as one undo step; import as a copy with frame stops whose frame is gone, and with the routes' playing order; versions that only rise; a blank replica refused; long order keys re-keyed; references as a set; an independent copy.
+- `packages/core/src/ydoc/property.test.ts` with `scenario.ts`: for random documents, three replicas apply 80 random steps each run (all reference operations on elements, stops and routes, typing through an editor binding's own transactions, duplicate, commands of several operations in one undo step, undo, redo, tidy up, import as a copy, full and one-way syncs), then sync fully. **The scenario has a model of its own**, which shares no code with the resolver or the tracker: its own computation of the tree (parents, cycles, gone containers), and for every record the set of units of work done on it, with what each replica has received of them. It has no revisions. For each mark it remembers what the writer saw: which records, and which work on each. After every step and every sync it computes from this, for the replicas involved, which elements, stops and routes must be hidden, and compares with what the implementation says, **in both directions**: nothing is hidden that should be visible (work survives), and nothing is visible that should be hidden (a delete deletes). It also checks what each new mark lists against what the model says the user saw. Further checks: the replicas converge; every snapshot is valid and survives a round trip through a new document; the documents hold nothing the grammar has no place for; no step throws; the drawing order is sane; an export purge and a tidy up change nothing the user sees and nothing a route plays, and a tidy up rewrites nothing it keeps; an import as a copy shows what the source showed. Two more properties run on random junk, written by a peer into the Y.Doc or found in a document's JSON: reading is total, valid, stable, at most 256 levels deep and the same on every replica, resolution and tidy up work on it, and the document survives a round trip. 40 seeds by default; `GALATSA_FUZZ_SEEDS` (with `GALATSA_FUZZ_FIRST` and `GALATSA_FUZZ_STEPS`) for a long run. The tests were themselves tested by mutation: MUTANTCOUNT deliberate defects were put into the resolver, the tracker, tidy up, the operations and the file code one at a time (a delete that hides too much or too little, work not recorded or recorded where it must not be, marks not refreshed, a visit that is not work, a restore that is not work, tidy up that rewrites or removes too much, a writer that compresses assets or does not check sizes, a reader that does not compare headers, and so on); MUTANTRESULT.
 - `packages/core/src/ydoc/encode.test.ts`: the generic encoding round-trips every shared type, the escape and any trees.
-- `packages/core/src/model/model.test.ts`: order keys and their syntax, ids, zoom clamp, resolution (orphans, cycles, the three position rules, the path rule for deletes, what a delete lists, trees 30 000 deep), routes and show/hide, stop regions, and the grammar: what is reported, what junk reads as, that reading the result changes nothing, restoring unsupported values, nesting depth, external media.
+- `packages/core/src/model/model.test.ts`: order keys and their syntax, ids, zoom clamp, SHA-256 against its published test vectors and one pinned revision digest, resolution (orphans, cycles, the three position rules, the path rule for deletes, what a delete lists, trees 30 000 deep), routes and show/hide, stop regions, and the grammar: what is reported, what junk reads as, that reading the result changes nothing, restoring unsupported values, nesting depth, external media.
 - `packages/format/src/zip.test.ts`: CRC-32, order, deterministic output, unsafe and duplicate names, truncation, corruption, limits, zip64 refusal, overlapping entries, lying sizes stopped early, local/central name mismatch, skipped unknown entries.
 - `packages/format/src/file.test.ts`: round trip with equal document and bytes; archive and manifest layout; unknown extensions with and without `ydoc.bin`; merge identity across a reopened file; assets kept while soft-deleted and dropped in exports for sharing; migrations (with a test registry, since version 1 is the first); compatible newer files keep their additions; too-new files are refused; damage codes and recovery from `ydoc.bin`; asset hashes; `ydoc.bin` discarded when it disagrees, is not described by the manifest, has another lineage or is too large; content the format has no place for reported and absent from sharing exports; assets referenced from settings, transitions and embeds; absurdly deep nesting opened and cut.
 - `packages/format/src/review2.test.ts`: every odd value a peer can write still gives a file that opens equal with both readers, with and without `ydoc.bin`; `__proto__` keys in files; a file written without `ydoc.bin` when Yjs cannot encode; quarantine per record and value with the list the user gets; unknown kinds of values kept and written back; open slots on assets, route entries, stop views and visibility changes; damaged asset and `ydoc.bin` entries; unknown archive entries and manifest fields; the version gate in the writer and reader; every form of zip64; archive comments, hidden archives and trailing bytes; the memory bound.
+- `packages/format/src/review3.test.ts`: the writer refuses a file over the size limit and over the entry limit instead of wrapping around (and, when `GALATSA_HEAVY=1` is set, writes a real archive of 3.5 GiB and refuses one of 4.4 GiB); assets are stored whatever their media type, and a file with more uncompressed media than the reader's limit for decompressed data opens; a document or state over the writer's limits; local headers that differ from the directory in checksum, sizes, method or flags; sizes after the data; a `ydoc.bin` that needs a newer reader than the manifest says; versions never lowered by the reader; no deleted text in a saved file; an asset that nothing describes.
 - `packages/format/src/property.test.ts`: on the random scenarios and the random junk of core's tests, every file written at any moment reads back as the same document with its merge identity, by both readers; an export for sharing shows the same and holds only what is visible; a reopened file still syncs with the other replicas. 15 seeds by default.
