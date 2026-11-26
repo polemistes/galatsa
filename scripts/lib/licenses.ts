@@ -14,9 +14,11 @@
 //   still rejected: non-commercial and no-derivatives Creative Commons licenses,
 //   SSPL, BUSL, Commons Clause, proprietary, and unknown or missing licenses.
 //
-// IMPORTANT: the license lists below were written from memory. They must be verified
-// against the license texts and the SPDX license list in package F0-02 (see
-// docs/adr/). Until then, treat every entry as unverified.
+// IMPORTANT: the license lists below (PRODUCTION_LICENSES, DEVELOPMENT_FREE_LICENSES,
+// ACCEPTED_EXCEPTIONS, WORKSPACE_LICENSES and NON_FREE_PATTERN) were written from
+// memory. They will be checked against the license texts, the SPDX license list and
+// the FSF compatibility list in package F0-02. Until then, treat every entry as
+// unverified.
 
 /** Licenses accepted for production dependencies. */
 export const PRODUCTION_LICENSES: ReadonlySet<string> = new Set([
@@ -43,6 +45,8 @@ export const PRODUCTION_LICENSES: ReadonlySet<string> = new Set([
   "MPL-2.0",
   "LGPL-2.0-only",
   "LGPL-2.0-or-later",
+  "LGPL-2.0",
+  "LGPL-2.0+",
   "LGPL-2.1-only",
   "LGPL-2.1-or-later",
   "LGPL-2.1",
@@ -71,7 +75,6 @@ export const DEVELOPMENT_FREE_LICENSES: ReadonlySet<string> = new Set([
   "AGPL-3.0-only",
   "AGPL-3.0-or-later",
   "AGPL-3.0",
-  "LGPL-2.0",
   "EPL-1.0",
   "EPL-2.0",
   "CDDL-1.0",
@@ -96,6 +99,9 @@ export const ACCEPTED_EXCEPTIONS: ReadonlySet<string> = new Set([
  */
 const NON_FREE_PATTERN =
   /\b(NC|ND)\b|SSPL|BUSL|Commons-Clause|Proprietary|Custom|UNLICENSED|UNKNOWN|SEE LICENSE/i;
+
+/** Operator words. They are never valid as a license id or exception id. */
+const OPERATORS: ReadonlySet<string> = new Set(["AND", "OR", "WITH"]);
 
 /**
  * Evaluates an SPDX-style license expression against a predicate for single license ids.
@@ -148,7 +154,9 @@ export function evaluateLicense(
       if (next() !== ")") throw new Error("missing closing parenthesis");
       return inner;
     }
-    if (!/^[A-Za-z0-9.+-]+$/.test(token)) throw new Error(`invalid license id: ${token}`);
+    if (!/^[A-Za-z0-9.+-]+$/.test(token) || OPERATORS.has(token)) {
+      throw new Error(`invalid license id: ${token}`);
+    }
     const allowed = isAllowedId(token);
     if (peek() === "WITH") {
       next();
@@ -236,10 +244,54 @@ export function normalizeLockKey(key: string): string {
 }
 
 /**
- * Lockfile entries that are not project dependencies. They are the pnpm program itself,
- * pinned by the "packageManager" field, and its per-platform binaries. pnpm is MIT
- * licensed (checked with `npm view pnpm@12.19.0 license` and `npm view @pnpm/exe license`).
+ * Returns the "name@version" ids of every package in the text of pnpm-lock.yaml, for
+ * all platforms (optional and platform-specific packages included).
+ *
+ * pnpm 12 can write several YAML documents into the lockfile. A document whose
+ * importers have "packageManagerDependencies" describes the pnpm program itself
+ * (pinned by the "packageManager" field of package.json), not the project, so it is
+ * skipped. That document is recognised by its structure, never by package names.
  */
-export function isPackageManagerEntry(id: string): boolean {
-  return id.startsWith("pnpm@") || id.startsWith("@pnpm/exe.");
+export function lockfilePackageIds(lockfileText: string): Set<string> {
+  const ids = new Set<string>();
+  const text = lockfileText.replace(/\r\n/g, "\n");
+  for (const document of text.split(/^---$/m)) {
+    if (/^ {4}packageManagerDependencies:/m.test(document)) continue;
+    const section = document.split(/^packages:\n/m)[1];
+    if (section === undefined) continue;
+    // The section ends at the next top-level key (for example "snapshots:").
+    const body = section.split(/^\S/m)[0] ?? "";
+    for (const match of body.matchAll(/^ {2}(\S.*?):\s*$/gm)) {
+      ids.add(normalizeLockKey(match[1] ?? ""));
+    }
+  }
+  return ids;
+}
+
+/**
+ * Licenses accepted for the project's own workspace packages. The program is
+ * GPL-3.0-or-later. The sync server (packages/server, phase 4) will be
+ * AGPL-3.0-or-later.
+ */
+export const WORKSPACE_LICENSES: ReadonlySet<string> = new Set([
+  "GPL-3.0-or-later",
+  "AGPL-3.0-or-later",
+]);
+
+/** One workspace package, as listed by `pnpm ls --recursive --depth -1 --json`. */
+export interface WorkspacePackage {
+  readonly name: string;
+  /** Path of the package folder, relative to the repository root, with "/" separators. */
+  readonly path: string;
+  /** The "license" field of its package.json, if any. */
+  readonly license: string | undefined;
+}
+
+/** Returns the workspace packages whose license field is not in WORKSPACE_LICENSES. */
+export function findWorkspaceViolations(
+  packages: readonly WorkspacePackage[],
+): WorkspacePackage[] {
+  return packages.filter(
+    (pkg) => pkg.license === undefined || !WORKSPACE_LICENSES.has(pkg.license),
+  );
 }

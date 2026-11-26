@@ -6,7 +6,8 @@ import {
   findViolations,
   flattenReport,
   isAcceptable,
-  isPackageManagerEntry,
+  findWorkspaceViolations,
+  lockfilePackageIds,
   normalizeLockKey,
   type PackageLicense,
 } from "./licenses.ts";
@@ -60,6 +61,16 @@ describe("evaluateLicense", () => {
     expect(evaluateLicense("MIT WITH Some-made-up-exception", onlyMit)).toBe(false);
   });
 
+  it("rejects operator words used as license or exception ids", () => {
+    const all = (): boolean => true;
+    expect(evaluateLicense("MIT OR OR", all)).toBe(false);
+    expect(evaluateLicense("MIT AND AND", all)).toBe(false);
+    expect(evaluateLicense("OR", all)).toBe(false);
+    expect(evaluateLicense("WITH", all)).toBe(false);
+    expect(evaluateLicense("MIT OR WITH", all)).toBe(false);
+    expect(evaluateLicense("()", all)).toBe(false);
+  });
+
   it("rejects a doubled WITH", () => {
     expect(evaluateLicense("MIT WITH WITH", onlyMit)).toBe(false);
     expect(evaluateLicense("MIT WITH LLVM-exception WITH LLVM-exception", onlyMit)).toBe(
@@ -100,9 +111,11 @@ describe("license policies", () => {
       "GPL-3.0",
       "GPL-3.0+",
       "GPL-2.0+",
+      "LGPL-2.0",
       "LGPL-2.1",
       "LGPL-2.1+",
       "LGPL-3.0",
+      "LGPL-3.0+",
     ]) {
       expect(isAcceptable(license, "production"), license).toBe(true);
     }
@@ -205,9 +218,74 @@ describe("report helpers", () => {
     );
   });
 
-  it("recognises the pnpm program entries in the lockfile", () => {
-    expect(isPackageManagerEntry("pnpm@12.19.0")).toBe(true);
-    expect(isPackageManagerEntry("@pnpm/exe.linux-x64@12.19.0")).toBe(true);
-    expect(isPackageManagerEntry("vite@8.3.8")).toBe(false);
+  it("reads lockfile ids from every project document and skips the pnpm program document", () => {
+    const lockfile = [
+      "---",
+      "lockfileVersion: '9.0'",
+      "",
+      "importers:",
+      "",
+      "  .:",
+      "    configDependencies: {}",
+      "    packageManagerDependencies:",
+      "      pnpm:",
+      "        specifier: 12.19.0",
+      "        version: 12.19.0",
+      "",
+      "packages:",
+      "",
+      "  '@pnpm/exe.linux-x64@12.19.0':",
+      "    resolution: {integrity: sha512-x}",
+      "",
+      "  pnpm@12.19.0:",
+      "    resolution: {integrity: sha512-x}",
+      "",
+      "---",
+      "lockfileVersion: '9.0'",
+      "",
+      "importers:",
+      "",
+      "  .:",
+      "    devDependencies:",
+      "      vite:",
+      "        specifier: 8.3.8",
+      "        version: 8.3.8",
+      "",
+      "packages:",
+      "",
+      "  '@rolldown/binding-win32-x64-msvc@1.2.19':",
+      "    resolution: {integrity: sha512-x}",
+      "    cpu: [x64]",
+      "    os: [win32]",
+      "",
+      "  vite@8.3.8:",
+      "    resolution: {integrity: sha512-x}",
+      "",
+      "snapshots:",
+      "",
+      "  not-a-package@1.0.0: {}",
+      "",
+    ].join("\r\n");
+    expect([...lockfilePackageIds(lockfile)]).toEqual([
+      "@rolldown/binding-win32-x64-msvc@1.2.19",
+      "vite@8.3.8",
+    ]);
+  });
+});
+
+describe("workspace packages", () => {
+  it("accepts GPL-3.0-or-later and AGPL-3.0-or-later, and nothing else", () => {
+    const violations = findWorkspaceViolations([
+      { name: "galatsa", path: ".", license: "GPL-3.0-or-later" },
+      { name: "@galatsa/server", path: "packages/server", license: "AGPL-3.0-or-later" },
+      { name: "@galatsa/a", path: "packages/a", license: "GPL-2.0-only" },
+      { name: "@galatsa/b", path: "packages/b", license: "MIT" },
+      { name: "@galatsa/c", path: "packages/c", license: undefined },
+    ]);
+    expect(violations.map((v) => v.name)).toEqual([
+      "@galatsa/a",
+      "@galatsa/b",
+      "@galatsa/c",
+    ]);
   });
 });
