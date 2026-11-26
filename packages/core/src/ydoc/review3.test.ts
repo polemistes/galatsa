@@ -212,6 +212,28 @@ describe("review 3: restoring is work", () => {
     });
   }
 
+  it("guard: work done in the same transaction as one's own delete counts against another delete", () => {
+    const s = base();
+    ops.addElement(s, frame("F"));
+    ops.addElement(s, shape("X", "F"));
+    const a = forkDoc(s, 1);
+    const b = forkDoc(s, 2);
+    // A moves X and deletes the frame around it, in one transaction.
+    a.transact(() => {
+      ops.moveElement(a, "X", 50, 50);
+      ops.deleteElements(a, ["F"]);
+    }, ORIGIN.local);
+    // B, who knows of neither, deletes X.
+    ops.deleteElements(b, ["X"]);
+    syncDocs(a, b);
+    expect(vis(a)).toEqual([]);
+    // A takes the frame back. B's delete never saw the move, so X is there.
+    ops.restoreElement(a, "F");
+    syncDocs(a, b);
+    expect(vis(a)).toEqual(["F", "X"]);
+    expect(vis(b)).toEqual(["F", "X"]);
+  });
+
   it("guard: undoing one's own delete does not take back another user's delete one has seen", () => {
     const s = base();
     ops.addElement(s, frame("F"));

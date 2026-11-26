@@ -544,9 +544,18 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
       name = label;
       fn();
     };
+    // One local step of a replica inside a step of several.
+    const act = (who: number, label: string, fn: () => void) => {
+      const target = replicas[who]!;
+      const was = toSnapshot(target);
+      fn();
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+      oracle.observe(who, was, toSnapshot(target));
+      oracle.verify(who, target, `step ${step} (stale redo: ${label})`);
+    };
     try {
       const id = all.length > 0 ? pick(all) : "";
-      const roll = int(35);
+      const roll = int(36);
       if (all.length === 0 && roll < 17) {
         run("add element", () =>
           ops.addElement(
@@ -715,6 +724,32 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
         run("tidy up", () => tidyUp(doc));
         oracle.tidied(before, toSnapshot(doc));
         local = false;
+      } else if (roll === 35 && containers.length > 0) {
+        // A delete is taken back, someone else removes the same container
+        // another way, and the delete is redone on what is left of it.
+        const target = pick(containers);
+        const other = (r + 1 + int(replicas.length - 1)) % replicas.length;
+        const peer = replicas[other]!;
+        counts.set("stale redo", (counts.get("stale redo") ?? 0) + 1);
+        act(r, "delete", () => ops.deleteElements(doc, [target], o));
+        act(r, "undo", () => undo[r]!.undo());
+        syncDocs(doc, peer);
+        oracle.delivered(r, other);
+        oracle.delivered(other, r);
+        const theirs = new Resolver(yLookup(peer));
+        if (theirs.isContainer(target) && !theirs.isGone(target)) {
+          if (chance(0.5)) act(other, "dissolve", () => ops.dissolve(peer, target, o));
+          else act(other, "delete", () => ops.deleteElements(peer, [target], o));
+          const inside = pick(visible);
+          if (chance(0.5) && inside !== target && !theirs.isGone(inside))
+            act(other, "move", () =>
+              ops.moveElement(peer, inside, int(400), int(400), o),
+            );
+        }
+        syncInto(doc, peer);
+        oracle.delivered(r, other);
+        oracle.verify(r, doc, `step ${step} (stale redo: sync)`);
+        act(r, "redo", () => undo[r]!.redo());
       } else if (roll === 34 && visible.length > 0) {
         // A command of two operations as one undo step.
         const inside = pick(visible);
