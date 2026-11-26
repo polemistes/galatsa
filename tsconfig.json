@@ -1,12 +1,15 @@
 {
-  // Type-checks every source file in the repository in one program, so that code
-  // in any folder is checked. Node types and the DOM library are added here, for
-  // scripts, tests and configs. Each workspace package also has its own
-  // "typecheck" script with its own environment (see tsconfig.base.json).
+  // Type-checks every TypeScript file in the repository in one program, so that no
+  // folder can be skipped by accident: all packages (extensions included), apps,
+  // bench, tests, scripts and the root config files. Because it covers everything,
+  // it loads both Node types and the DOM library.
+  //
+  // The environment rules of each package (for example that @galatsa/core uses
+  // neither Node nor DOM APIs) are enforced by the package's own tsconfig.json, run
+  // by its "typecheck" script (`pnpm -r run typecheck`). See tsconfig.base.json.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "allowImportingTsExtensions": true,
     "allowJs": true,
     "checkJs": true,
     "types": ["node"],
@@ -18,15 +21,17 @@
     "*.tsx",
     "*.mts",
     "*.cts",
+    "*.js",
     "*.mjs",
-    "packages/**/src/**/*.ts",
-    "packages/**/src/**/*.tsx",
-    "packages/**/src/**/*.mts",
-    "packages/**/src/**/*.cts",
-    "apps/**/src/**/*.ts",
-    "apps/**/src/**/*.tsx",
-    "apps/**/src/**/*.mts",
-    "apps/**/src/**/*.cts",
+    "*.cjs",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "packages/**/*.mts",
+    "packages/**/*.cts",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "apps/**/*.mts",
+    "apps/**/*.cts",
     "bench/**/*.ts",
     "bench/**/*.tsx",
     "bench/**/*.mts",
@@ -38,7 +43,18 @@
     "scripts/**/*.ts",
     "scripts/**/*.tsx",
     "scripts/**/*.mts",
-    "scripts/**/*.cts"
+    "scripts/**/*.cts",
+    "scripts/**/*.js",
+    "scripts/**/*.mjs",
+    "scripts/**/*.cjs"
   ],
-  "exclude": ["**/node_modules", "**/dist", "**/coverage", ".claude"]
+  "exclude": [
+    "**/node_modules",
+    "**/dist",
+    "**/build",
+    "**/out",
+    "**/coverage",
+    "**/target",
+    ".claude"
+  ]
 }

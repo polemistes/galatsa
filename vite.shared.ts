@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Vite settings shared by vitest.config.ts and, later, the vite.config.ts of each app
+// and browser package. Spread it into the config:
+//
+//   export default defineConfig({ ...workspaceSourceResolve, plugins: [...] });
+//
+// It adds the "@galatsa/source" export condition (see tsconfig.base.json), so Vite and
+// Vitest load other workspace packages from their src/ instead of their dist/, and no
+// build is needed first. Setting "conditions" replaces Vite's defaults, so the
+// defaults are listed again. "ssr" covers Vitest's Node environment.
+
+import { defaultClientConditions, defaultServerConditions, type UserConfig } from "vite";
+
+export const SOURCE_CONDITION = "@galatsa/source";
+
+export const workspaceSourceResolve = {
+  resolve: {
+    conditions: [SOURCE_CONDITION, ...defaultClientConditions],
+  },
+  ssr: {
+    resolve: {
+      conditions: [SOURCE_CONDITION, ...defaultServerConditions],
+    },
+  },
+} satisfies UserConfig;
