@@ -676,11 +676,25 @@ describe("review 2: every replica reads the same JSON form", () => {
       dataMap(d, "X").set("__proto__", { a: 1 });
       dataMap(d, "X").set("nested", JSON.parse('{"__proto__": {"b": 1}, "c": 2}'));
     });
+    // An attribute of that name is something Yjs itself cannot hand out.
+    d.transact(() => {
+      const text = new Y.Text("t");
+      dataMap(d, "X").set("text", text);
+      text.setAttribute("__proto__", { polluted: true } as unknown as string);
+      text.setAttribute("align", "left");
+    });
     const peer = forkDoc(d, 78);
     const data = toSnapshot(d).elements.X!.data;
     expect(Object.hasOwn(data, "__proto__")).toBe(true);
     expect(data.nested).toEqual({ c: 2 });
+    expect(data.text).toEqual({
+      $y: "text",
+      delta: [{ insert: "t" }],
+      attributes: { align: "left" },
+    });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
     expect(toSnapshot(peer)).toEqual(toSnapshot(d));
+    expect(toSnapshot(fromSnapshot(toSnapshot(d)))).toEqual(toSnapshot(d));
   });
 });
 

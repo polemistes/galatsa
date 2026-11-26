@@ -8,7 +8,8 @@
 // nothing the user sees. For random junk written by a peer: reading stays total
 // and the same on every replica.
 //
-// 40 seeds by default; set GALATSA_FUZZ_SEEDS for a long run.
+// 40 seeds of 80 steps by default; set GALATSA_FUZZ_SEEDS (and GALATSA_FUZZ_FIRST,
+// GALATSA_FUZZ_STEPS) for a long run.
 
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -29,6 +30,7 @@ const env = (globalThis as { process?: { env?: Record<string, string | undefined
   .process?.env;
 const SEEDS = Number(env?.GALATSA_FUZZ_SEEDS ?? 40);
 const FIRST = Number(env?.GALATSA_FUZZ_FIRST ?? 1);
+const STEPS = Number(env?.GALATSA_FUZZ_STEPS ?? 80);
 
 describe(`random scenarios: ${SEEDS} seeds from ${FIRST}`, () => {
   it(
@@ -37,7 +39,7 @@ describe(`random scenarios: ${SEEDS} seeds from ${FIRST}`, () => {
       const failures: string[] = [];
       const steps = new Map<string, number>();
       for (let seed = FIRST; seed < FIRST + SEEDS; seed++) {
-        const result = runScenario(seed);
+        const result = runScenario(seed, { steps: STEPS });
         failures.push(...result.failures);
         for (const [name, count] of result.steps)
           steps.set(name, (steps.get(name) ?? 0) + count);
@@ -66,7 +68,7 @@ describe(`random scenarios: ${SEEDS} seeds from ${FIRST}`, () => {
         expect(steps.get(name) ?? 0, name).toBeGreaterThan(0);
       }
     },
-    Math.max(30_000, SEEDS * 400),
+    Math.max(30_000, SEEDS * STEPS * 5),
   );
 });
 
@@ -99,7 +101,7 @@ describe(`random junk from a peer: ${SEEDS} seeds`, () => {
         expect(
           // No record or record key is left that the format has no place for.
           after.problems.filter((p) =>
-            /^(elements|stops|routes|assets)\.[^.]*(\.[^.]*)?: (unknown field|not a valid id|not an object|no valid element type)/.test(
+            /^((elements|stops|routes)\.[^.]*(\.[^.]*)?|assets\.[^.]*): (unknown field|not a valid id|not an object|no valid element type)/.test(
               p,
             ),
           ),

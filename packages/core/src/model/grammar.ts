@@ -404,14 +404,24 @@ function hasOnly(raw: Raw, keys: readonly string[]): boolean {
   return Object.keys(raw).every((key) => keys.includes(key));
 }
 
+/**
+ * Reads the entries of a shared map, or the attributes of a shared text or XML
+ * node. Yjs cannot hand out an attribute named "__proto__" (it collects
+ * attributes in a plain object), so there is none.
+ */
 function readEntries(
   raw: unknown,
   p: Problems,
   level: number,
+  attributes = false,
 ): { [key: string]: DataValue } {
   const out: { [key: string]: DataValue } = {};
   if (!isPlainObject(raw)) return out;
   for (const key of Object.keys(raw)) {
+    if (attributes && key === "__proto__") {
+      p.add('an attribute named "__proto__" is left out');
+      continue;
+    }
     const name = wellFormed(key);
     if (name !== key) p.at(key, () => p.add("key is not well-formed Unicode"));
     setOwn(
@@ -496,7 +506,7 @@ function readNodeAttributes(
   level: number,
 ): NodeAttributes | undefined {
   if (raw === undefined) return undefined;
-  const attributes = p.at("attributes", () => readEntries(raw, p, level));
+  const attributes = p.at("attributes", () => readEntries(raw, p, level, true));
   return Object.keys(attributes).length === 0 ? undefined : attributes;
 }
 
@@ -626,7 +636,7 @@ function readTagged(raw: Raw, tag: unknown, p: Problems, level: number): DataVal
       return {
         $y: "xmlElement",
         name: wellFormed(raw.name),
-        attributes: p.at("attributes", () => readEntries(attributes, p, level + 1)),
+        attributes: p.at("attributes", () => readEntries(attributes, p, level + 1, true)),
         children: p.at("children", () => readXmlChildren(children, p, level + 1)),
       };
     }
