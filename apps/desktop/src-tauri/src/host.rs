@@ -203,7 +203,10 @@ fn power() -> Power {
             match read("type").as_deref() {
                 Some("Mains") => {
                     let online = read("online");
-                    details.push(format!("{name}: mains online={}", online.as_deref().unwrap_or("?")));
+                    details.push(format!(
+                        "{name}: mains online={}",
+                        online.as_deref().unwrap_or("?")
+                    ));
                     if online.as_deref() == Some("1") {
                         on_mains = Some(true);
                     } else if on_mains.is_none() {

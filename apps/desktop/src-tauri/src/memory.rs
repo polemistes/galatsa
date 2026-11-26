@@ -163,7 +163,10 @@ impl Sampler {
         let mut names: HashMap<u32, String> = HashMap::new();
         if let Ok(entries) = std::fs::read_dir("/proc") {
             for entry in entries.flatten() {
-                let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok())
+                let Some(pid) = entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|s| s.parse::<u32>().ok())
                 else {
                     continue;
                 };
@@ -171,7 +174,9 @@ impl Sampler {
                     continue;
                 };
                 // "pid (comm) state ppid ...": comm may contain spaces and parentheses.
-                let Some(close) = stat.rfind(')') else { continue };
+                let Some(close) = stat.rfind(')') else {
+                    continue;
+                };
                 let open = stat.find('(').unwrap_or(0);
                 let comm = stat[open + 1..close].to_string();
                 let mut rest = stat[close + 1..].split_whitespace();
@@ -375,7 +380,7 @@ impl Sampler {
             let child = process.parent().map(|p| p.as_u32()) == Some(me);
             // SAFETY: the function takes any pid and returns a pid or -1.
             let ours = responsible
-                .map(|f| unsafe { f(pid as libc::pid_t) } == me as libc::pid_t)
+                .map(|f| (unsafe { f(pid as libc::pid_t) }) == me as libc::pid_t)
                 .unwrap_or(false);
             if child || ours {
                 out.push((pid, process.name().to_string_lossy().into_owned()));
