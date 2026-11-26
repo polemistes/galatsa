@@ -72,9 +72,15 @@ test("edit a text box in place: type, caret, selection, paste, IME", async ({
   const box = await plainTextBox(page);
   // Zoom 1, the box's top-left corner 100 px in from the stage's top-left.
   await setCamera(page, { x: box.x - 100 + 640, y: box.y - 100 + 360, zoom: 1 });
-  const stage = page.locator(".stage");
-  const region = { x: 60, y: 60, width: Math.min(box.width + 80, 1200), height: 240 };
-  const before = await stage.screenshot({ clip: region });
+  // Screenshots of the box's surroundings, in page coordinates.
+  const stageBox = (await page.locator(".stage").boundingBox())!;
+  const region = {
+    x: stageBox.x + 60,
+    y: stageBox.y + 60,
+    width: Math.min(box.width + 80, 1200),
+    height: 240,
+  };
+  const before = await page.screenshot({ clip: region });
 
   // Double-click on the first line opens the editor with the box's text.
   const point = await page.evaluate(([x, y]) => window.protoKonva!.toClient(x, y), [
@@ -105,7 +111,7 @@ test("edit a text box in place: type, caret, selection, paste, IME", async ({
   // Selection with the keyboard, then typing over it.
   await page.keyboard.press("Shift+End");
   expect(await selection(page)).toEqual([7, 12, "Hello, world"]);
-  await stage.screenshot({ path: join(RESULTS_DIR, "edit-selection.png"), clip: region });
+  await page.screenshot({ path: join(RESULTS_DIR, "edit-selection.png"), clip: region });
   await page.keyboard.type("there");
   await expect(textarea).toHaveValue("Hello, there");
 
@@ -156,7 +162,7 @@ test("edit a text box in place: type, caret, selection, paste, IME", async ({
     selectionStart: 2,
     selectionEnd: 2,
   });
-  await stage.screenshot({
+  await page.screenshot({
     path: join(RESULTS_DIR, "edit-ime-composing.png"),
     clip: region,
   });
@@ -169,7 +175,7 @@ test("edit a text box in place: type, caret, selection, paste, IME", async ({
   expect(log).toContain("compositionstart:");
   expect(log).toContain("compositionupdate:かな");
   expect(log).toContain("compositionend:仮名");
-  await stage.screenshot({ path: join(RESULTS_DIR, "edit-typed.png"), clip: region });
+  await page.screenshot({ path: join(RESULTS_DIR, "edit-typed.png"), clip: region });
 
   // Escape ends editing; the canvas now draws the new text.
   await page.keyboard.press("Escape");
@@ -184,7 +190,7 @@ test("edit a text box in place: type, caret, selection, paste, IME", async ({
   expect(lines.map((l) => l.text).join(" ")).toBe(expected);
   await page.evaluate(() => window.protoKonva!.nextFrame());
   await page.evaluate(() => window.protoKonva!.nextFrame());
-  const after = await stage.screenshot({
+  const after = await page.screenshot({
     path: join(RESULTS_DIR, "edit-after.png"),
     clip: region,
   });
