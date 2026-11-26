@@ -2,11 +2,14 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  type ComparableRun,
   compareRuns,
+  countOver,
+  estimateRefreshInterval,
   frameStats,
   percentile,
   relativeDifference,
+  type VerdictInputs,
+  verdictInputs,
 } from "./stats.ts";
 
 describe("percentile", () => {
@@ -28,71 +31,144 @@ describe("percentile", () => {
 });
 
 describe("frameStats", () => {
-  it("computes mean, percentiles, max and threshold counts", () => {
-    // 100 frames: 90 of 10 ms, 5 of 16.7 ms (not over), 3 of 20 ms, 1 of 40, 1 of 120.
-    const values = [
-      ...Array<number>(90).fill(10),
-      ...Array<number>(5).fill(16.7),
-      ...Array<number>(3).fill(20),
-      40,
-      120,
-    ];
+  it("computes mean, percentiles and extremes", () => {
+    const values = [...Array<number>(90).fill(10), ...Array<number>(9).fill(20), 120];
     const stats = frameStats(values.reverse());
     expect(stats.count).toBe(100);
-    expect(stats.mean).toBeCloseTo((900 + 83.5 + 60 + 40 + 120) / 100, 10);
+    expect(stats.mean).toBeCloseTo((900 + 180 + 120) / 100, 10);
     expect(stats.min).toBe(10);
     expect(stats.p50).toBe(10);
-    expect(stats.p95).toBe(16.7);
-    expect(stats.p99).toBe(40);
+    expect(stats.p95).toBe(20);
+    expect(stats.p99).toBe(20);
     expect(stats.max).toBe(120);
-    expect(stats.over).toEqual({ "16.7": 5, "33": 2, "100": 1 });
   });
 
   it("handles no frames", () => {
-    const stats = frameStats([]);
-    expect(stats.count).toBe(0);
-    expect(stats.mean).toBeNaN();
-    expect(stats.over).toEqual({ "16.7": 0, "33": 0, "100": 0 });
+    expect(frameStats([]).count).toBe(0);
+    expect(frameStats([]).mean).toBeNaN();
+  });
+});
+
+describe("estimateRefreshInterval", () => {
+  it("averages out alternating timestamps (Firefox-like 16.1 / 17.1 ms)", () => {
+    const deltas = Array.from({ length: 120 }, (_, i) => (i % 2 === 0 ? 16.1 : 17.1));
+    expect(estimateRefreshInterval(deltas)).toBeCloseTo(16.6, 6);
+  });
+
+  it("ignores a few stray long frames", () => {
+    const deltas = [...Array<number>(110).fill(8.333), ...Array<number>(10).fill(100)];
+    expect(estimateRefreshInterval(deltas)).toBeCloseTo(8.333, 6);
+  });
+});
+
+describe("verdictInputs", () => {
+  it("counts missed, long and stalled frames relative to the refresh interval", () => {
+    // 60 Hz: missed over 25 ms, long over 41.67 ms, stall over 100 ms.
+    const frames = [16.7, 17.2, 24.9, 25.1, 33.3, 41.6, 41.7, 50, 100, 110];
+    const v = verdictInputs({
+      refreshIntervalMs: 1000 / 60,
+      frameMs: frames,
+      renderMs: frames.map(() => 1),
+      textSharp: { p50Ms: 17, maxMs: 20, missing: 0 },
+      loadMs: 5,
+      peakMemory: null,
+      problems: [],
+    });
+    expect(v.missedFrames.count).toBe(7);
+    expect(v.missedFrames.thresholdMs).toBeCloseTo(25, 10);
+    expect(v.longFrames.count).toBe(4);
+    expect(v.stalls.count).toBe(1);
+    expect(v.missedFrames.ratio).toBeCloseTo(0.7, 10);
+    expect(v.refreshRateHz).toBeCloseTo(60, 10);
+    expect(v.valid).toBe(true);
+  });
+
+  it("uses refresh-relative thresholds on a 120 Hz display, and keeps 60 Hz ones", () => {
+    const frames = [8.3, 8.4, 13, 16.7, 30];
+    const v = verdictInputs({
+      refreshIntervalMs: 1000 / 120,
+      frameMs: frames,
+      renderMs: frames,
+      textSharp: { p50Ms: null, maxMs: null, missing: 1 },
+      loadMs: 0,
+      peakMemory: null,
+      problems: ["hidden"],
+    });
+    expect(v.missedFrames.count).toBe(3); // over 12.5 ms
+    expect(v.longFrames.count).toBe(1); // over 20.8 ms
+    expect(v.missedFrames60Hz.count).toBe(1); // over 25 ms
+    expect(v.valid).toBe(false);
+  });
+
+  it("counts strictly over the threshold", () => {
+    expect(countOver([1, 2, 3], 2)).toEqual({ thresholdMs: 2, count: 1, ratio: 1 / 3 });
+    expect(countOver([], 2).ratio).toBe(0);
   });
 });
 
 describe("compareRuns", () => {
-  const run = (intervals: number[]): ComparableRun => ({
-    timings: { runMs: intervals.reduce((a, b) => a + b, 0) },
-    stats: {
-      interval: frameStats(intervals),
-      callbackInterval: frameStats(intervals),
-      script: frameStats(intervals.map(() => 0.01)),
-    },
+  const inputs = (
+    frameMs: number[],
+    overrides: Partial<VerdictInputs> = {},
+  ): VerdictInputs => ({
+    ...verdictInputs({
+      refreshIntervalMs: 1000 / 60,
+      frameMs,
+      renderMs: frameMs.map((v) => v / 2),
+      textSharp: { p50Ms: 16.7, maxMs: 33, missing: 0 },
+      loadMs: 10,
+      peakMemory: null,
+      problems: [],
+    }),
+    ...overrides,
   });
+  const steady = Array<number>(2775).fill(16.67);
+  const withMissed = (count: number) => steady.map((v, i) => (i < count ? 33.3 : v));
 
   it("measures the symmetric relative difference", () => {
     expect(relativeDifference(100, 105)).toBeCloseTo(5 / 105, 12);
-    expect(relativeDifference(105, 100)).toBeCloseTo(5 / 105, 12);
     expect(relativeDifference(0, 0)).toBe(0);
   });
 
-  it("agrees within 5 % and disagrees outside", () => {
-    const a = run(Array<number>(1000).fill(16.67));
-    const close = run(Array<number>(1000).fill(17.2));
-    const far = run(Array<number>(1000).fill(18));
-    expect(compareRuns(a, close).agree).toBe(true);
-    expect(compareRuns(a, far).agree).toBe(false);
+  it("agrees on identical runs", () => {
+    expect(compareRuns(inputs(steady), inputs(steady)).agree).toBe(true);
   });
 
-  it("does not let the maximum or threshold counts decide", () => {
-    const base = Array<number>(1000).fill(16.67);
-    const spike = [...base.slice(1), 150];
-    const comparison = compareRuns(run(base), run(spike));
+  it("uses an absolute floor for small counts", () => {
+    // 2 against 6 missed frames: 67 % apart, but within the floor of 3 + 2775 * 0.2 %.
+    expect(compareRuns(inputs(withMissed(2)), inputs(withMissed(6))).agree).toBe(true);
+    // 2 against 20 is not.
+    expect(compareRuns(inputs(withMissed(2)), inputs(withMissed(20))).agree).toBe(false);
+  });
+
+  it("uses 5 % for large counts", () => {
+    expect(compareRuns(inputs(withMissed(1000)), inputs(withMissed(1040))).agree).toBe(
+      true,
+    );
+    expect(compareRuns(inputs(withMissed(1000)), inputs(withMissed(1100))).agree).toBe(
+      false,
+    );
+  });
+
+  it("disagrees on render time, text latency and refresh changes", () => {
+    const base = inputs(steady);
+    const slowerRender = inputs(steady.map((v) => v * 1.2));
+    expect(compareRuns(base, slowerRender).agree).toBe(false);
+    const lateText = inputs(steady, { textSharp: { p50Ms: 60, maxMs: 80, missing: 0 } });
+    expect(compareRuns(base, lateText).agree).toBe(false);
+    const otherDisplay = inputs(steady, { refreshIntervalMs: 8.33 });
+    expect(compareRuns(base, otherDisplay).agree).toBe(false);
+  });
+
+  it("does not let the maximum or load time decide", () => {
+    const spike = inputs(steady.map((v, i) => (i === 5 ? 90 : v)));
+    const slowLoad = inputs(steady, { loadMs: 900 });
+    const comparison = compareRuns(inputs(steady), spike);
     expect(comparison.agree).toBe(true);
-    const max = comparison.metrics.find((m) => m.name.includes("max"))!;
-    expect(max.withinTolerance).toBe(false);
-    expect(max.decisive).toBe(false);
-  });
-
-  it("disagrees when the frame counts differ", () => {
-    const a = run(Array<number>(1000).fill(16.67));
-    const b = run(Array<number>(900).fill(16.67));
-    expect(compareRuns(a, b).agree).toBe(false);
+    expect(
+      comparison.metrics.find((m) => m.name.startsWith("frame time max"))!
+        .withinTolerance,
+    ).toBe(false);
+    expect(compareRuns(inputs(steady), slowLoad).agree).toBe(true);
   });
 });

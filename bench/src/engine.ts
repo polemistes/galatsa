@@ -3,6 +3,16 @@
 // The smallest interface a rendering engine implements to run the benchmark. It is a
 // stand-in for the real renderer interface, which will replace it once an engine has
 // been chosen.
+//
+// Rules for engines under the benchmark:
+// - Draw on the main thread. The meter measures the main thread's animation frames;
+//   work moved to a worker (OffscreenCanvas transferred to a worker, rendering in a
+//   worker) would escape it, so it is not allowed in the benchmark.
+// - Draw what the camera sees in each render(): skipping elements while the camera
+//   moves, ignoring devicePixelRatio or using very low image resolutions will show
+//   up in the captures (see snapshot()) even if the frame times look good.
+// - load() is timed and reported (verdictInputs.loadMs); work moved into it, such
+//   as pre-rendering the whole scene, is visible there.
 
 import type { CameraPose } from "./camera.ts";
 import type { Scene } from "./scene.ts";
@@ -41,9 +51,14 @@ export interface EngineSetup {
    * current camera, after the drawing work that makes it so has been done (for an
    * engine that redraws text later, at a lower cost, while the camera moves, that is
    * when the sharp redraw has finished). The benchmark measures the time from the
-   * first frame in which the camera stands still to the first call after it. Calls at
+   * first frame in which the camera stands still to the start of the animation frame
+   * after the first call, so the result is at least one refresh interval. Calls at
    * other times are ignored, so an engine whose text is always sharp may call it
    * at the end of every render().
+   *
+   * The meter trusts this call. An engine that leaves re-rasterising to the browser
+   * (CSS transforms) cannot see when the browser has repainted text sharply, so its
+   * figure is a lower bound; compare the captures to see the result.
    */
   readonly reportTextSharp: () => void;
 }
@@ -66,4 +81,12 @@ export interface BenchEngine {
   render(camera: CameraPose): void;
   /** Removes everything the engine added and frees what it holds. */
   dispose(): void;
+  /**
+   * Optional. An image (PNG preferred) of exactly what the engine has drawn for the
+   * current camera, at device resolution. Used only in capture runs, at the end of
+   * each hold, while the run is paused; the paused frame is left out of the timing.
+   * Engines that cannot read back their own output (DOM engines) leave it out, and
+   * the host may take a screenshot instead.
+   */
+  snapshot?(): Promise<Blob>;
 }

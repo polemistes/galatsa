@@ -57,6 +57,13 @@ export async function generateImage(asset: ImageAsset): Promise<Blob> {
   fillImagePixels(asset, image.data);
   context.putImageData(image, 0, 0);
   const blob = await encode(canvas);
+  // Browsers that cannot encode the requested type silently return PNG instead,
+  // which would change the scene's files. Refuse rather than measure something else.
+  if (blob.type !== IMAGE_TYPE) {
+    throw new Error(
+      `This browser encoded ${blob.type || "an unknown type"} instead of ${IMAGE_TYPE}`,
+    );
+  }
   // Release the canvas memory right away instead of waiting for garbage collection.
   canvas.width = 0;
   canvas.height = 0;

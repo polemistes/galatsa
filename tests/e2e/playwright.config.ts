@@ -7,10 +7,12 @@ export const BENCH_PORT = 5199;
 
 // End-to-end tests are not part of `pnpm check`. They need browsers, which are
 // installed separately with
-// `pnpm --filter @galatsa/e2e exec playwright install chromium`.
+// `pnpm --filter @galatsa/e2e exec playwright install chromium firefox`.
 export default defineConfig({
   testDir: ".",
-  fullyParallel: true,
+  // One test at a time: benchmark runs must not compete for the CPU.
+  workers: 1,
+  fullyParallel: false,
   forbidOnly: Boolean(process.env["CI"]),
   retries: process.env["CI"] ? 1 : 0,
   reporter: [["list"]],
@@ -30,10 +32,8 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
     {
-      // The benchmark runs alone, so that other tests do not disturb its timing.
       name: "bench-chromium",
       testMatch: "bench-*.spec.ts",
-      fullyParallel: false,
       // No device preset: it would replace the browser's real user agent, which the
       // results record. "chromium" is the full browser in its new headless mode,
       // closer to a normal window than the separate headless shell.
@@ -50,6 +50,15 @@ export default defineConfig({
             "--enable-blink-features=ForceEagerMeasureMemory",
           ],
         },
+      },
+    },
+    {
+      name: "bench-firefox",
+      testMatch: "bench-*.spec.ts",
+      use: {
+        browserName: "firefox",
+        baseURL: `http://localhost:${BENCH_PORT}`,
+        viewport: { width: 1400, height: 1000 },
       },
     },
   ],

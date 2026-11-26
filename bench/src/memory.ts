@@ -10,6 +10,10 @@
 // - performance.memory: non-standard, Chromium only. The JavaScript heap only; images
 //   decoded by the browser and GPU memory are not included. Chromium rounds the
 //   values unless started with --enable-precise-memory-info.
+// - An external sampler: a function the host gives the runner (for example a desktop
+//   shell that reads the memory of its own processes). It is called at the phase
+//   events of the run (see BenchEvent in runner.ts) and is the only source that can
+//   include decoded images and GPU memory.
 
 export interface JsHeapSample {
   /** Frame index: -1 before load, 0 to frames - 1 during the run, frames after it. */
@@ -35,6 +39,59 @@ export interface MemoryReport {
     readonly peakUsedBytes: number | null;
     readonly samples: readonly JsHeapSample[];
   };
+  /** Results of the external sampler, if one was given. */
+  readonly external: {
+    readonly available: boolean;
+    /** What the sampler measures, as it describes itself. */
+    readonly source: string | null;
+    readonly peakBytes: number | null;
+    readonly samples: readonly ExternalMemorySample[];
+  };
+}
+
+export interface ExternalMemorySample {
+  /** The event at which it was taken, for example "run-start" or "hold-start". */
+  readonly event: string;
+  /** Frame index of the run, or null outside the frames. */
+  readonly frame: number | null;
+  readonly bytes: number;
+}
+
+/** A memory sampler outside the page, for example in a desktop shell. */
+export interface ExternalMemorySampler {
+  /** What it measures, for example "resident memory of the app and its web processes". */
+  readonly source: string;
+  /** Bytes in use now, or null if it cannot tell. Must not block for long. */
+  sample(): Promise<number | null>;
+}
+
+/** The most complete memory peak available, preferring external, then browser, then heap. */
+export function bestPeakMemory(
+  report: MemoryReport,
+): { bytes: number; source: string } | null {
+  if (report.external.peakBytes !== null) {
+    return {
+      bytes: report.external.peakBytes,
+      source: `external: ${report.external.source ?? ""}`,
+    };
+  }
+  const ua = report.userAgentSpecific;
+  const uaValues = [ua.afterLoadBytes, ua.afterRunBytes].filter(
+    (v): v is number => v !== null,
+  );
+  if (uaValues.length > 0) {
+    return {
+      bytes: Math.max(...uaValues),
+      source: "measureUserAgentSpecificMemory (after load, after run)",
+    };
+  }
+  if (report.jsHeap.peakUsedBytes !== null) {
+    return {
+      bytes: report.jsHeap.peakUsedBytes,
+      source: "performance.memory (JavaScript heap only)",
+    };
+  }
+  return null;
 }
 
 interface ChromiumMemoryInfo {
@@ -114,14 +171,40 @@ export class MemoryRecorder {
   private uaError: string | null = null;
   private readonly enabled: boolean;
   private readonly timeoutMs: number;
+  private readonly sampler: ExternalMemorySampler | undefined;
+  private readonly externalSamples: ExternalMemorySample[] = [];
+  private readonly pendingExternal: Promise<void>[] = [];
 
   /**
    * @param enabled whether to call measureUserAgentSpecificMemory at all
    * @param timeoutMs how long to wait for each measureUserAgentSpecificMemory call
+   * @param sampler optional external sampler
    */
-  constructor(enabled: boolean, timeoutMs: number) {
+  constructor(enabled: boolean, timeoutMs: number, sampler?: ExternalMemorySampler) {
     this.enabled = enabled;
     this.timeoutMs = timeoutMs;
+    this.sampler = sampler;
+  }
+
+  /**
+   * Asks the external sampler for a sample, without waiting for it. Call
+   * settleExternal() before report() to collect the answers.
+   */
+  sampleExternal(event: string, frame: number | null): void {
+    if (this.sampler === undefined) return;
+    this.pendingExternal.push(
+      this.sampler.sample().then(
+        (bytes) => {
+          if (bytes !== null) this.externalSamples.push({ event, frame, bytes });
+        },
+        () => {},
+      ),
+    );
+  }
+
+  /** Waits for the external sampler's outstanding answers. */
+  async settleExternal(): Promise<void> {
+    await Promise.all(this.pendingExternal);
   }
 
   /** Records a JavaScript heap sample, if available. Cheap enough to call during the run. */
@@ -157,6 +240,15 @@ export class MemoryRecorder {
         available: this.heapAvailable,
         peakUsedBytes: used.length > 0 ? Math.max(...used) : null,
         samples: this.samples,
+      },
+      external: {
+        available: this.sampler !== undefined,
+        source: this.sampler?.source ?? null,
+        peakBytes:
+          this.externalSamples.length > 0
+            ? Math.max(...this.externalSamples.map((s) => s.bytes))
+            : null,
+        samples: this.externalSamples,
       },
     };
   }
