@@ -33,7 +33,7 @@ import {
 } from "../model/types.ts";
 import { referencedAssets, remapStrings } from "../model/walk.ts";
 import { jsonFromY } from "./encode.ts";
-import { addAsset, assertWritable, slots, type OpOptions } from "./ops.ts";
+import { addAsset, assertWritable, slotsOf, type OpOptions } from "./ops.ts";
 import { META_KEYS, ORIGIN, roots } from "./schema.ts";
 import {
   RECORD_KEYS,
@@ -315,7 +315,7 @@ export function pasteFragment(
   const mapId = (id: string | null) => (id === null ? null : (ids.get(id) ?? id));
 
   // In front of everything the user sees in the target container.
-  const front = slots(new Resolver(yLookup(doc)), parent).pop();
+  const front = slotsOf(new Resolver(yLookup(doc)), parent).pop();
   const rootKeys = keysBetween(front?.order ?? null, null, fragment.roots.length);
   const rootIndex = new Map(fragment.roots.map((id, i) => [id, i]));
   // Each root is created removed, with a mark that covers what is pasted inside it.

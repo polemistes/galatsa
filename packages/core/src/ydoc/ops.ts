@@ -170,7 +170,7 @@ function resolver(doc: Y.Doc): Resolver {
  * Children of a container that occupy a slot the user sees, back to front: live
  * children, and gone containers that still hold visible children.
  */
-export function slots(
+export function slotsOf(
   r: Resolver,
   parent: ElementId | null,
   except?: ElementId,
@@ -252,7 +252,7 @@ export function addElement(doc: Y.Doc, init: NewElement, options?: OpOptions): E
   checkId(id, "element id");
   if (roots(doc).elements.has(id)) throw new Error(`Element ${id} exists already`);
   const parent = init.parent ?? null;
-  const siblings = slots(resolver(doc), parent);
+  const siblings = slotsOf(resolver(doc), parent);
   const action = newId(options?.randomBytes);
   const raw: Record<string, unknown> = {
     type: init.type,
@@ -439,7 +439,8 @@ function place(
   id: ElementId,
   target: ElementId | null,
 ): void {
-  const envelope = r.get(id)!;
+  const envelope = r.get(id);
+  if (!envelope) throw new Error(`No element ${id}`);
   const parent = r.parentOf(id);
   const local = r.localPosition(id);
   const d = r.offset(parent, target);
@@ -489,7 +490,7 @@ export function reparent(
   transact(doc, options, () => {
     const r = resolver(doc);
     checkTarget(r, id, target);
-    const siblings = slots(r, target, id);
+    const siblings = slotsOf(r, target, id);
     const map = elementMap(doc, id);
     place(map, r, id, target);
     map.set("order", keyAt(siblings, options?.index ?? siblings.length, options?.random));
@@ -511,7 +512,7 @@ function restack(
     const r = resolver(doc);
     const logical = r.logicalParentOf(id);
     const holder = r.slotIn(id, logical) ?? id;
-    const all = slots(r, logical);
+    const all = slotsOf(r, logical);
     if (!all.some((s) => s.id === holder))
       all.push({ id: holder, order: r.get(holder)?.order ?? "" });
     all.sort(compareOrdered);
@@ -586,7 +587,7 @@ export function group(
   }
   // The group goes just in front of the frontmost member's slot.
   const holders = new Set(ids.map((id) => r.slotIn(id, logical) ?? id));
-  const all = slots(r, logical);
+  const all = slotsOf(r, logical);
   const front = sortOrdered(all.filter((s) => holders.has(s.id))).pop();
   const others = all.filter((s) => !ids.includes(s.id));
   const index = front
