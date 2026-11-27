@@ -9,7 +9,7 @@ import { SHAPE_TYPE } from "@galatsa/extension-examples";
 import { addElement } from "@galatsa/core/ydoc";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Editor } from "./editor.ts";
-import { wheelZoomFactor } from "./dom.ts";
+import { wheelPixels, wheelZoomFactor } from "./dom.ts";
 import { NAVIGATION } from "./navigation.ts";
 import { key, pointer, testEditor } from "./test-support.ts";
 
@@ -150,6 +150,27 @@ describe("navigation from the keyboard", () => {
     expect(right - left).toBeGreaterThan(850);
   });
 
+  it("centres an element without size at the zoom it has, instead of zooming all the way in", () => {
+    const editor = setup();
+    const point = addElement(editor.doc, {
+      type: FRAME_TYPE,
+      parent: null,
+      x: 10,
+      y: 20,
+      size: { w: 0, h: 0 },
+      data: {},
+    });
+    editor.services.camera.set({ space: null, cx: 500, cy: 400, zoom: 3 });
+    editor.services.selection.set([point]);
+    expect(editor.run(NAVIGATION.viewSelection).ok).toBe(true);
+    expect(editor.camera.zoom).toBe(3);
+    const p = editor.projection(null);
+    expect(10 * p.scale + p.ox).toBeCloseTo(500, 6);
+    expect(20 * p.scale + p.oy).toBeCloseTo(400, 6);
+    expect(editor.run(NAVIGATION.viewAll).ok).toBe(true);
+    expect(editor.camera.zoom).toBe(3);
+  });
+
   it("pans with the arrow keys", () => {
     const editor = setup();
     editor.keyDown(key("ArrowRight", { code: "ArrowRight" }));
@@ -214,6 +235,21 @@ describe("the wheel", () => {
     // A trackpad pinch: small steps, as they come.
     expect(wheelZoomFactor(-4)).toBeCloseTo(Math.exp(0.04), 12);
   });
+
+  it("reads pixels, lines and pages, a page across being the canvas's width", () => {
+    expect(wheelPixels({ deltaX: 3, deltaY: -5, deltaMode: 0 }, 1000, 800)).toEqual({
+      dx: 3,
+      dy: -5,
+    });
+    expect(wheelPixels({ deltaX: 1, deltaY: 3, deltaMode: 1 }, 1000, 800)).toEqual({
+      dx: 16,
+      dy: 48,
+    });
+    expect(wheelPixels({ deltaX: 1, deltaY: -1, deltaMode: 2 }, 1000, 800)).toEqual({
+      dx: 1000,
+      dy: -800,
+    });
+  });
 });
 
 describe("Space and a drag", () => {
@@ -236,6 +272,35 @@ describe("Space and a drag", () => {
     editor.pointerDown(pointer(150, 150));
     editor.pointerUp(pointer(150, 150));
     expect(editor.selection).toEqual([id]);
+  });
+
+  it("lets go when Space is released with a modifier held", () => {
+    const editor = setup();
+    const id = shape(editor, 100, 100, 200, 200);
+    editor.keyDown(key(" ", { code: "Space" }));
+    expect(editor.keyUp(key(" ", { code: "Space", shiftKey: true }))).toBe(true);
+    expect(editor.cursor).toBe("default");
+    const before = editor.camera;
+    editor.pointerDown(pointer(150, 150));
+    editor.pointerUp(pointer(150, 150));
+    expect(editor.camera).toEqual(before);
+    expect(editor.selection).toEqual([id]);
+  });
+
+  it("lets go of a finger that a pinch takes over", () => {
+    const editor = setup();
+    editor.keyDown(key(" ", { code: "Space" }));
+    editor.pointerDown(pointer(100, 100, { pointerType: "touch" }));
+    expect(editor.cursor).toBe("grabbing");
+    // The second finger: the pinch has the camera now.
+    editor.pointerWithdraw();
+    editor.keyUp(key(" ", { code: "Space" }));
+    expect(editor.cursor).toBe("default");
+    // A mouse moving afterwards does not drag the canvas.
+    const before = editor.camera;
+    editor.pointerMove(pointer(400, 400));
+    editor.pointerMove(pointer(450, 420));
+    expect(editor.camera).toEqual(before);
   });
 
   it("does not take Space from a drag in progress", () => {

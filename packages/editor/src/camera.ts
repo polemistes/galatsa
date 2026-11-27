@@ -78,17 +78,23 @@ export function visibleWorld(
  * The camera that shows `rect` (in the space of `space`) filling the view,
  * with a margin, within the zoom range. The precision budget is left to the
  * camera, which applies it where it anchors the view (a frame inside `space`
- * may allow more).
+ * may allow more). A rectangle without width or height (an element without
+ * size) is centred at `pointZoom`, the zoom the camera has, rather than
+ * zoomed into as far as the camera goes.
  */
 export function fitCamera(
   rect: Rect,
   space: ElementId | null,
   size: ScreenSize,
   margin = 0.05,
+  pointZoom = 1,
 ): CameraView {
   const cx = rect.x + rect.w / 2;
   const cy = rect.y + rect.h / 2;
-  const zoom = zoomToFit(rect, size.width, size.height) * (1 - 2 * margin);
+  const zoom =
+    rect.w > 0 || rect.h > 0
+      ? zoomToFit(rect, size.width, size.height) * (1 - 2 * margin)
+      : pointZoom;
   return {
     space,
     cx,

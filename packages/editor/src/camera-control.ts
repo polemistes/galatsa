@@ -71,6 +71,8 @@ export class CameraControl {
 
   /** The camera as it is set: anchored, within the zoom limits, and pinned to its anchor. */
   place(view: CameraView): CameraView {
+    // The pointer's screen position no longer stands for its root point.
+    this.#pointer = null;
     const anchored = this.#anchoring.anchor(view);
     const zoom = clampZoom(anchored.zoom, anchored.cx, anchored.cy);
     const placed = zoom === anchored.zoom ? anchored : { ...anchored, zoom };

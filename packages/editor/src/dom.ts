@@ -9,7 +9,7 @@
 //   it goes up; other buttons are ignored, and a pointer whose pointerup never
 //   came is dropped (pointers.ts).
 // - The camera (docs/adr/0008): the middle button drags the canvas, and so
-//   does any button while Space is held (the editor's hand). Two fingers pan
+//   does the primary button while Space is held (the editor's hand). Two fingers pan
 //   and pinch. The wheel and two fingers on a trackpad scroll the canvas
 //   (Shift turns a mouse wheel sideways); with Ctrl or Cmd, which is also what
 //   browsers send for a pinch on a trackpad, they zoom about the pointer.
@@ -38,6 +38,21 @@ const MAX_ZOOM_PIXELS = 25;
 export function wheelZoomFactor(dy: number): number {
   const capped = Math.max(-MAX_ZOOM_PIXELS, Math.min(MAX_ZOOM_PIXELS, dy));
   return Math.exp(-capped * ZOOM_PER_PIXEL);
+}
+
+/**
+ * A wheel event's movement in pixels. Wheels may report lines (16 pixels
+ * each) or pages: a page is the width of the canvas across and its height
+ * down.
+ */
+export function wheelPixels(
+  e: { readonly deltaX: number; readonly deltaY: number; readonly deltaMode: number },
+  width: number,
+  height: number,
+): { dx: number; dy: number } {
+  if (e.deltaMode === 2) return { dx: e.deltaX * width, dy: e.deltaY * height };
+  const line = e.deltaMode === 1 ? LINE : 1;
+  return { dx: e.deltaX * line, dy: e.deltaY * line };
 }
 
 /** Safari's gesture events (a pinch on a trackpad): not in the DOM's types. */
@@ -178,10 +193,7 @@ export function mountEditor(
     "wheel",
     (e) => {
       e.preventDefault();
-      const scale =
-        e.deltaMode === 1 ? LINE : e.deltaMode === 2 ? surface.clientHeight : 1;
-      let dx = e.deltaX * scale;
-      let dy = e.deltaY * scale;
+      let { dx, dy } = wheelPixels(e, surface.clientWidth, surface.clientHeight);
       if (e.ctrlKey || e.metaKey) {
         const rect = surface.getBoundingClientRect();
         editor.zoomAt(

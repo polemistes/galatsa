@@ -49,7 +49,7 @@ import {
 } from "@galatsa/renderer";
 import type * as Y from "yjs";
 import { CameraControl } from "./camera-control.ts";
-import { fitCamera, screenToWorld, type ScreenSize } from "./camera.ts";
+import { screenToWorld, type ScreenSize } from "./camera.ts";
 import { documentAssets } from "./images.ts";
 import {
   detectPlatform,
@@ -452,7 +452,7 @@ export class Editor {
 
   /** Shows `rect` (root space by default) filling the view. */
   fit(rect: Rect, space: ElementId | null = null): void {
-    this.services.camera.set(fitCamera(rect, space, this.screen));
+    this.services.camera.fit(rect, space);
   }
 
   /** Shows everything the document has at the top level. */
@@ -665,7 +665,8 @@ export class Editor {
 
   keyUp(input: KeyInput): boolean {
     if (!this.#inputEnabled) return false;
-    if (isHandKey(input) && this.#view.releaseHand()) return true;
+    // Space let go with a modifier held still puts the hand away.
+    if (input.key === " " && this.#view.releaseHand()) return true;
     return this.tools.keyUp({
       key: input.key,
       modifiers: this.#modifiers(input),

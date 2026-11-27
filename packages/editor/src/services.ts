@@ -145,7 +145,7 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
         host.invalidate();
       },
       fit(rect, space) {
-        this.set(fitCamera(rect, space, host.screen()));
+        this.set(fitCamera(rect, space, host.screen(), undefined, state.camera.zoom));
       },
     },
     mode: {

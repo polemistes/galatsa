@@ -181,6 +181,30 @@ describe("zoom about the pointer", () => {
     expect(editor.camera.zoom).toBeCloseTo(800 * 0.9, 6);
   });
 
+  it("hit-tests a root point at its own place once the camera has moved since the pointer was there", () => {
+    const editor = setup();
+    const a = frame(editor, 100, 100, 50, 50);
+    const b = frame(editor, 400, 100, 50, 50);
+    editor.renderNow();
+    editor.pointerMove({
+      x: 125,
+      y: 125,
+      pointerType: "mouse",
+      button: -1,
+      pressure: 0,
+      shiftKey: false,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+    });
+    const world = editor.screenToWorld({ x: 125, y: 125 });
+    // The camera moves without a pointer event: b is under that screen point now.
+    editor.pan(-300, 0);
+    editor.renderNow();
+    expect(editor.services.scene.elementAt(world, 0)).toBe(a);
+    expect(b).toBeTruthy();
+  });
+
   it("gives tools the pointer exactly in the camera's space", () => {
     const editor = setup();
     const far = 2 ** 40;
