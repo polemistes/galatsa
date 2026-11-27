@@ -17,6 +17,7 @@
     "@galatsa/editor": "workspace:*",
     "@galatsa/extension-api": "workspace:*",
     "@galatsa/extension-examples": "workspace:*",
+    "@galatsa/extension-image": "workspace:*",
     "@galatsa/extension-shape": "workspace:*",
     "@galatsa/format": "workspace:*",
     "@galatsa/i18n": "workspace:*",

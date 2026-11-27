@@ -259,6 +259,9 @@ importers:
       '@galatsa/extension-examples':
         specifier: workspace:*
         version: link:../../packages/extensions/examples
+      '@galatsa/extension-image':
+        specifier: workspace:*
+        version: link:../../packages/extensions/image
       '@galatsa/extension-shape':
         specifier: workspace:*
         version: link:../../packages/extensions/shape

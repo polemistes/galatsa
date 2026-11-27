@@ -24,7 +24,8 @@ import {
   type ElementId,
 } from "@galatsa/core";
 import { fromSnapshot } from "@galatsa/core/ydoc";
-import { IMAGE_TYPE, TEXT_TYPE, imageView, textView } from "@galatsa/extension-examples";
+import { TEXT_TYPE, textView } from "@galatsa/extension-examples";
+import { IMAGE_TYPE, imageView } from "@galatsa/extension-image/view";
 import {
   SHAPE_TYPE,
   newShapeData,
