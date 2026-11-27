@@ -375,19 +375,57 @@ describe("where a paste lands among frames", () => {
     expect(at(editor, copy!)).toEqual({ x: 120, y: 120, parent: f });
   });
 
-  it("goes into the container of what is selected, centred in the part of it in view", () => {
+  it("goes into the container of what is selected, centred on the selection", () => {
     const editor = make();
     const a = rect(editor, 50, 50, 40, 40);
     const f = frame(editor, 600, 100, 300, 300);
-    const inF = rect(editor, 10, 10, 20, 20, f);
+    const inF = rect(editor, 100, 100, 20, 20, f); // centre (710, 210)
     editor.services.selection.set([a]);
     const data = clipboardData();
     editor.clipboardCopy(data);
     editor.services.selection.set([inF]);
     editor.clipboardPaste(readClipboard(data));
     const [copy] = editor.selection;
-    // Centred in the frame's box (600..900 by 100..400).
-    expect(at(editor, copy!)).toEqual({ x: 730, y: 230, parent: f });
+    expect(at(editor, copy!)).toEqual({ x: 690, y: 190, parent: f });
+  });
+
+  it("pastes a copied frame next to the copy pasted before, never into it (F-E)", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 300, 200);
+    rect(editor, 10, 10, 40, 40, f);
+    editor.services.selection.set([f]);
+    const data = clipboardData();
+    editor.clipboardCopy(data);
+    editor.clipboardPaste(readClipboard(data));
+    const [first] = editor.selection;
+    expect(at(editor, first!).parent).toBeNull();
+    editor.clipboardPaste(readClipboard(data));
+    const [second] = editor.selection;
+    expect(second).not.toBe(first);
+    expect(at(editor, second!).parent).toBeNull();
+    // A third, with the second selected: on the canvas too.
+    editor.clipboardPaste(readClipboard(data));
+    expect(at(editor, editor.selection[0]!).parent).toBeNull();
+  });
+
+  it("does not leave a copy of an element of a frame on top of that frame outside it (F-K)", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 300, 300);
+    const x = rect(editor, 10, 10, 40, 40, f);
+    const y = rect(editor, 600, 500, 40, 40);
+    editor.services.selection.set([x]);
+    const data = clipboardData();
+    editor.clipboardCopy(data);
+    // A selection on the canvas: the copy goes there, onto it, not onto the frame.
+    editor.services.selection.set([y]);
+    editor.clipboardPaste(readClipboard(data));
+    expect(at(editor, editor.selection[0]!)).toEqual({ x: 600, y: 500, parent: null });
+    // A selection on the canvas that lies over the frame: the copy shows in
+    // the frame, so it goes into it.
+    const over = rect(editor, 300, 300, 40, 40);
+    editor.services.selection.set([over]);
+    editor.clipboardPaste(readClipboard(data));
+    expect(at(editor, editor.selection[0]!)).toEqual({ x: 300, y: 300, parent: f });
   });
 
   it("goes into the frame in view when what it was copied from is out of view", () => {

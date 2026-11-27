@@ -40,7 +40,7 @@ import type {
   SpacePoint,
   ToolPointerEvent,
 } from "@galatsa/extension-api/editing";
-import { BASICS, readFragment } from "@galatsa/extension-basics";
+import { BASICS, frameIds, openFrames, readFragment } from "@galatsa/extension-basics";
 import type { I18n, MessageValues } from "@galatsa/i18n";
 import {
   CanvasRenderer,
@@ -220,6 +220,9 @@ export class Editor {
   #cancelFrame: (() => void) | null = null;
   #cursor: Cursor = "default";
   #keymap: { mode: Mode; map: Map<Shortcut, ShortcutTarget> } | null = null;
+  /** The fragment pasted last (its roots) and what that paste made: copies, not targets. */
+  #lastPaste: { readonly roots: string; readonly ids: readonly ElementId[] } | null =
+    null;
   #clipboard: { readonly fragment: Fragment; readonly origin: ClipboardOrigin } | null =
     null;
   #notice: EditorNotice | null = null;
@@ -945,6 +948,14 @@ export class Editor {
     });
     if (outcome.ok) {
       this.dismissNotice();
+      const roots = readFragment(fragment).fragment?.roots ?? [];
+      const made = (outcome.value as { readonly ids?: readonly ElementId[] }).ids ?? [];
+      const last = this.#lastPaste;
+      const key = roots.join(" ");
+      this.#lastPaste = {
+        roots: key,
+        ids: [...(last?.roots === key ? last.ids : []), ...made],
+      };
       const assets = (outcome.value as { readonly assets?: readonly AssetId[] }).assets;
       if (assets !== undefined && assets.length > 0) void this.#adopt(assets);
     } else if (!this.host.commands.gestureActive(this.environment()))
@@ -977,10 +988,15 @@ export class Editor {
   /** Where a paste lands: the rule of paste-target.ts (docs/adr/0014). */
   #pasteTarget(raw: unknown, origin: ClipboardOrigin | null): PasteTarget {
     const { fragment } = readFragment(raw);
+    const roots = fragment?.roots ?? [];
+    const last = this.#lastPaste;
+    const copies = last !== null && last.roots === roots.join(" ") ? last.ids : [];
     return pasteTarget({
       scene: this.live,
       frameType: FRAME_TYPE,
-      roots: fragment?.roots ?? [],
+      frames: openFrames(this.doc, this.live, frameIds(this.doc), [...roots, ...copies]),
+      roots,
+      copies,
       bounds: fragment === null ? null : fragmentBounds(fragment),
       origin,
       selection: this.selection,
