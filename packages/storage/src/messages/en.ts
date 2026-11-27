@@ -56,6 +56,8 @@ export default {
     "This presentation needs a newer version of Galatsa, so this version cannot save it.",
   "notice.save-no-merge-state":
     "The file was saved, but without the history that lets it merge with other copies.",
+  "notice.save-without-previews":
+    "The file was saved without the smaller copies of its images, because it would have been too large with them. It opens more slowly; nothing of the presentation is missing.",
   "recovery.heading": "Unsaved work",
   "recovery.offer":
     "“{title}” was not closed properly. The last change was made {when, date, medium} at {when, time, short}. Do you want to continue where you left off?",

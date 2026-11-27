@@ -10,6 +10,7 @@
 // Node. `dom.ts` turns DOM events into those values.
 
 import {
+  type AssetId,
   type CameraView,
   type ElementId,
   type Fragment,
@@ -26,6 +27,7 @@ import {
 } from "@galatsa/core/ydoc";
 import type { ContributionId, Label, Mode, Shortcut } from "@galatsa/extension-api";
 import type {
+  AssetStore,
   CommandEnvironment,
   CommandOutcome,
   Cursor,
@@ -53,6 +55,7 @@ import {
   withinLimits,
   writeFragment,
   type ClipboardContent,
+  type ClipboardFile,
   type ClipboardOrigin,
   type ClipboardProblem,
   type ClipboardTarget,
@@ -78,6 +81,15 @@ import {
   type StateChange,
 } from "./services.ts";
 import { ToolController } from "./tools.ts";
+import {
+  IMPORT_CASCADE,
+  mergeFragments,
+  placeFragments,
+  readFiles,
+  type ImportFile,
+  type ImportReport,
+  type PlacedFragment,
+} from "./import.ts";
 
 /** Runs `frame` before the next repaint; returns how to cancel it. */
 export type FrameScheduler = (frame: () => void) => () => void;
@@ -92,6 +104,17 @@ export interface EditorOptions {
   readonly images?: ImageSource;
   /** Natural pixel sizes of images; default the document's asset descriptions. */
   readonly assets?: SceneAssets;
+  /**
+   * Where importers put the bytes of files that are dropped, pasted or picked
+   * (`importFiles`); without it, files are not imported.
+   */
+  readonly assetStore?: AssetStore;
+  /**
+   * Brings the bytes of assets a paste refers to into this document's store
+   * (from another document of the program, which has them), and resolves to
+   * the ones it could not find. Without it, pasted assets are not checked.
+   */
+  readonly adoptAssets?: (ids: readonly AssetId[]) => Promise<AssetId[]>;
   readonly mode?: Mode;
   /** The tool picked at start and after a tool is done (the first tool when absent). */
   readonly defaultTool?: ContributionId;
@@ -116,7 +139,10 @@ export interface PointerInput {
 
 export type EditorChange = StateChange | "tool" | "cursor" | "notice";
 
-/** A message the interface shows (a message key, of the editor's bundle or an extension's). */
+/**
+ * A message the interface shows: a message key (of the editor's bundle, or an
+ * extension's label, as importers give them), with its values.
+ */
 export interface EditorNotice {
   readonly message: string;
   readonly values?: MessageValues;
@@ -189,6 +215,10 @@ export class Editor {
     null;
   #notice: EditorNotice | null = null;
   #focusCanvas: (() => void) | null = null;
+  readonly #assetStore: AssetStore | null;
+  readonly #adoptAssets: ((ids: readonly AssetId[]) => Promise<AssetId[]>) | null;
+  /** Imports still running (`importFiles`). */
+  #importing = 0;
   /** The context menu (right click), drawn by the interface. */
   readonly contextMenu = new ContextMenu();
   #disposed = false;
@@ -218,6 +248,8 @@ export class Editor {
     this.i18n = options.i18n;
     this.platform = options.platform ?? detectPlatform();
     this.#schedule = options.schedule ?? defaultScheduler();
+    this.#assetStore = options.assetStore ?? null;
+    this.#adoptAssets = options.adoptAssets ?? null;
     this.undo = createUndoManager(doc);
     this.live = liveResolver(doc);
     this.scene = new EditorScene(doc, this.live);
@@ -782,7 +814,15 @@ export class Editor {
       this.#notify(PASTE_PROBLEMS[content.problem]);
       return false;
     }
-    if (content.fragment === undefined) return false;
+    if (content.fragment === undefined) {
+      // Files (an image copied in another program, files copied in a file
+      // manager) go to the importers; the paste is told as done when the
+      // import starts, so the browser does nothing else with them.
+      const files = content.files.filter(isImportFile);
+      if (files.length === 0 || !this.canImport) return false;
+      void this.importFiles(files);
+      return true;
+    }
     return this.#paste(content.fragment, content.origin).ok;
   }
 
@@ -796,10 +836,35 @@ export class Editor {
       fragment,
       ...this.#pasteTarget(fragment, origin),
     });
-    if (outcome.ok) this.dismissNotice();
-    else if (!this.host.commands.gestureActive(this.environment()))
+    if (outcome.ok) {
+      this.dismissNotice();
+      const assets = (outcome.value as { readonly assets?: readonly AssetId[] }).assets;
+      if (assets !== undefined && assets.length > 0) void this.#adopt(assets);
+    } else if (!this.host.commands.gestureActive(this.environment()))
       this.#notify(PASTE_PROBLEMS.damaged);
     return outcome;
+  }
+
+  /**
+   * After a paste: the bytes of its assets are brought into this document's
+   * store where the program has them; what it does not have (copied from
+   * another program or browser) is told in a notice, so that a save that
+   * would lack those images is never silent.
+   */
+  async #adopt(assets: readonly AssetId[]): Promise<void> {
+    const adopt = this.#adoptAssets;
+    if (adopt === null) return;
+    let missing: AssetId[];
+    try {
+      missing = await adopt(assets);
+    } catch {
+      missing = [...assets];
+    }
+    if (this.#disposed) return;
+    const found = assets.filter((id) => !missing.includes(id));
+    if (found.length > 0) this.renderer.imagesChanged(found);
+    if (missing.length > 0)
+      this.#notify("editor:paste.assetsMissing", { count: missing.length });
   }
 
   /** A container the user can paste into: there, seen, not locked. */
@@ -876,6 +941,71 @@ export class Editor {
   #notify(message: string, values?: MessageValues): void {
     this.#notice = values === undefined ? { message } : { message, values };
     this.#emit("notice");
+  }
+
+  // -------------------------------------------------------------------------
+  // Importing files (import.ts, docs/adr/0012)
+  // -------------------------------------------------------------------------
+
+  /** Whether files can be imported (an asset store was given). */
+  get canImport(): boolean {
+    return this.#assetStore !== null;
+  }
+
+  /** True while an import runs. */
+  get importing(): boolean {
+    return this.#importing > 0;
+  }
+
+  /**
+   * Imports files (dropped, pasted or picked) through the importers, and
+   * pastes what they make as one undo step, centred on `at` (a point on
+   * screen, CSS pixels) or the middle of the view; several files are placed
+   * a little apart. What was pasted is selected. Notices of the importers,
+   * and files no importer takes, are told in a notice. Resolves to whether
+   * something was pasted.
+   */
+  async importFiles(files: readonly ImportFile[], at?: Point): Promise<boolean> {
+    const store = this.#assetStore;
+    if (store === null || !this.#inputEnabled || files.length === 0) return false;
+    const view = this.services.camera.viewport();
+    const target =
+      at !== undefined && this.screen.width > 0
+        ? this.screenToWorld(at)
+        : { x: view.x + view.w / 2, y: view.y + view.h / 2 };
+    const zoom = this.#state.camera.zoom;
+    const step = IMPORT_CASCADE / (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
+    this.#importing++;
+    let report: ImportReport;
+    try {
+      report = await readFiles(this.host, files, this.#state.mode, {
+        assets: store,
+        view,
+        cancellation: { cancelled: false, onCancel: () => () => {} },
+        progress: () => {},
+      });
+    } finally {
+      this.#importing--;
+    }
+    if (this.#disposed) return false;
+    let pasted = false;
+    const placed = placeFragments(
+      report.results.map((r) => r.fragment),
+      target,
+      step,
+    );
+    const merged = placed.length > 1 ? mergeFragments(placed) : null;
+    const batches: PlacedFragment[] =
+      merged !== null ? [{ fragment: merged, dx: 0, dy: 0 }] : placed;
+    for (const { fragment, dx, dy } of batches) {
+      const outcome = this.run(BASICS.paste, { fragment, parent: null, dx, dy });
+      if (outcome.ok) pasted = true;
+    }
+    const first = report.notices[0];
+    if (first !== undefined) this.#notify(first.message, first.values);
+    else if (pasted) this.dismissNotice();
+    if (pasted) this.invalidate();
+    return pasted;
   }
 
   /**
@@ -958,6 +1088,11 @@ export class Editor {
     detachLiveResolver(this.doc);
     this.#listeners.clear();
   }
+}
+
+/** A clipboard file whose bytes can be read. */
+function isImportFile(file: ClipboardFile): file is ClipboardFile & ImportFile {
+  return typeof file.arrayBuffer === "function";
 }
 
 /** Space alone (no modifiers): the hand. */

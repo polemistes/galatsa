@@ -227,7 +227,8 @@ export interface ZipContents {
 }
 
 /**
- * Opens an archive. Entries for which `accept` returns false are checked
+ * Opens an archive. Entries for which `accept` returns false (given the
+ * name and the compression method, 0 stored or 8 deflated) are checked
  * structurally but not decompressed or kept. Throws FileFormatError for anything
  * that is not a complete zip archive in the subset this format uses: an archive
  * comment or bytes after the archive, gaps or overlapping entries, local
@@ -239,7 +240,7 @@ export interface ZipContents {
 export function openZip(
   bytes: Uint8Array,
   limits: ZipLimits = DEFAULT_ZIP_LIMITS,
-  accept: (name: string) => boolean = () => true,
+  accept: (name: string, method: number) => boolean = () => true,
 ): ZipContents {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const u16 = (at: number) => view.getUint16(at, true);
@@ -376,7 +377,7 @@ export function openZip(
     const dataStart = localOffset + 30 + localNameLength + u16(localOffset + 28);
     if (dataStart + compressedSize > cdOffset)
       throw damaged(`the entry ${name} is cut short`);
-    if (method === 8 && accept(name)) {
+    if (method === 8 && accept(name, method)) {
       inflated += size;
       if (inflated > limits.maxInflatedSize) {
         throw new FileFormatError(
@@ -415,7 +416,7 @@ export function openZip(
 
   const contents: ZipContents = { entries: new Map(), damaged: new Set() };
   for (const entry of pending) {
-    if (!accept(entry.name)) continue;
+    if (!accept(entry.name, entry.method)) continue;
     const raw = bytes.subarray(entry.dataStart, entry.dataStart + entry.compressedSize);
     const data = entry.method === 0 ? raw : inflateBounded(raw, entry.size);
     if (data === null || crc32(data) !== entry.crc) contents.damaged.add(entry.name);

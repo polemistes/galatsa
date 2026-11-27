@@ -12,10 +12,10 @@
 // is parsed (the length of the text) and before it is pasted (the number of
 // elements and how deep containers nest), so a huge or hostile clipboard is
 // refused with a notice instead of freezing the page. An envelope of another
-// version is recognised and refused, never handed on as text. Anything else
-// on the clipboard (text from another program, image files) is described so
-// that the text and image extensions can paste it later; the editor does not
-// paste it yet.
+// version is recognised and refused, never handed on as text. Files on the
+// clipboard (an image copied in another program) are imported through the
+// importers, as dropped files are (import.ts, docs/adr/0012). Text from other
+// programs is described, for the text extension to paste later.
 
 import type { ElementId, Fragment, Point, Rect } from "@galatsa/core";
 
@@ -44,10 +44,15 @@ export interface ClipboardTarget {
   setData(type: string, data: string): void;
 }
 
-/** A file on the clipboard, as much as the editor needs to know of it. */
+/**
+ * A file on the clipboard, as much as the editor needs to know of it (a
+ * browser `File` is one). With `arrayBuffer`, it can be imported.
+ */
 export interface ClipboardFile {
   readonly name: string;
   readonly type: string;
+  readonly size?: number;
+  arrayBuffer?(): Promise<ArrayBuffer>;
 }
 
 /**
@@ -84,7 +89,7 @@ export interface ClipboardContent {
   readonly problem: ClipboardProblem | null;
   /** Plain text that is not the program's (text from another program), or null. */
   readonly text: string | null;
-  /** Files (pasted images, for the image extension later). */
+  /** Files (an image copied in another program); the editor imports them (import.ts). */
   readonly files: readonly ClipboardFile[];
 }
 

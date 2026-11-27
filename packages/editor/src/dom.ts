@@ -18,10 +18,19 @@
 //   is clicked, and lets go of held keys (Space) when it loses it.
 // - Copy, cut and paste carry the system clipboard; a right click opens the
 //   context menu (context-menu.ts).
+// - Files dropped on the canvas are imported where they are dropped, files
+//   on the clipboard where the view is, and the context menu can pick files
+//   (import.ts, docs/adr/0012).
 
 import type { I18n } from "@galatsa/i18n";
 import type { Editor, PointerInput } from "./editor.ts";
-import { readClipboard, readClipboardText } from "./clipboard.ts";
+import {
+  readClipboard,
+  readClipboardText,
+  type ClipboardFile,
+  type ClipboardSource,
+} from "./clipboard.ts";
+import type { ImportFile } from "./import.ts";
 import { openContextMenu, type MenuClipboard } from "./context-menu.ts";
 import { keyInput } from "./keymap.ts";
 import { PointerTracker, type PointerAction, type PointerFacts } from "./pointers.ts";
@@ -57,6 +66,74 @@ export function wheelPixels(
   if (e.deltaMode === 2) return { dx: e.deltaX * width, dy: e.deltaY * height };
   const line = e.deltaMode === 1 ? LINE : 1;
   return { dx: e.deltaX * line, dy: e.deltaY * line };
+}
+
+/**
+ * A clipboard event's data, with files that are only listed as items (some
+ * browsers give a copied image as an item of kind "file" and no file).
+ */
+function withItemFiles(data: DataTransfer): ClipboardSource {
+  const files: ClipboardFile[] = data.files ? [...data.files] : [];
+  if (files.length === 0 && data.items) {
+    for (const item of [...data.items]) {
+      if (item.kind !== "file") continue;
+      const file = item.getAsFile();
+      if (file !== null) files.push(file);
+    }
+  }
+  return { types: [...data.types], getData: (type) => data.getData(type), files };
+}
+
+/** The files of a drop. */
+function filesOf(data: DataTransfer): ImportFile[] {
+  const files: ImportFile[] = data.files ? [...data.files] : [];
+  if (files.length > 0 || !data.items) return files;
+  for (const item of [...data.items]) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (file !== null) files.push(file);
+  }
+  return files;
+}
+
+/**
+ * Image items of the asynchronous clipboard, as files to import. They have no
+ * name of their own; the one they get ("Pasted image 1") is the user's
+ * language, since it becomes the element's name and may be shown in notices.
+ */
+async function imageFilesOf(
+  items: readonly ClipboardItem[],
+  i18n: I18n,
+): Promise<ImportFile[]> {
+  const files: ImportFile[] = [];
+  for (const [i, item] of items.entries()) {
+    const type = item.types.find((t) => t.startsWith("image/"));
+    if (type === undefined) continue;
+    const blob = await item.getType(type);
+    const suffix = type
+      .slice("image/".length)
+      .replace("svg+xml", "svg")
+      .replace("jpeg", "jpg");
+    files.push({
+      name: `${i18n.t("editor:import.clipboardName", { number: i + 1 })}.${suffix}`,
+      type,
+      size: blob.size,
+      arrayBuffer: () => blob.arrayBuffer(),
+    });
+  }
+  return files;
+}
+
+/** The file input's `accept`: the media types and extensions the importers read. */
+function acceptFor(editor: Editor): string {
+  const out = new Set<string>();
+  for (const importer of editor.host.importers(editor.mode)) {
+    for (const type of importer.definition.fileTypes) {
+      for (const media of type.mediaTypes) out.add(media);
+      for (const extension of type.extensions) out.add(`.${extension}`);
+    }
+  }
+  return [...out].join(",");
 }
 
 /** Safari's gesture events (a pinch on a trackpad): not in the DOM's types. */
@@ -273,8 +350,47 @@ export function mountEditor(
   clipboard("copy", (data) => editor.clipboardCopy(data ?? undefined));
   clipboard("cut", (data) => editor.clipboardCut(data ?? undefined));
   clipboard("paste", (data) =>
-    data === null ? editor.clipboardPaste() : editor.clipboardPaste(readClipboard(data)),
+    data === null
+      ? editor.clipboardPaste()
+      : editor.clipboardPaste(readClipboard(withItemFiles(data))),
   );
+
+  // Files dropped on the canvas: imported where they are dropped.
+  const hasFiles = (e: DragEvent): boolean =>
+    e.dataTransfer !== null && [...e.dataTransfer.types].includes("Files");
+  on("dragover", (e) => {
+    if (!hasFiles(e) || !editor.canImport || !editor.inputEnabled) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = "copy";
+  });
+  on("drop", (e) => {
+    if (!hasFiles(e) || !editor.canImport) return;
+    e.preventDefault();
+    const files = filesOf(e.dataTransfer!);
+    if (files.length === 0) return;
+    surface.focus({ preventScroll: true });
+    const rect = surface.getBoundingClientRect();
+    void editor.importFiles(files, { x: e.clientX - rect.left, y: e.clientY - rect.top });
+  });
+
+  // Picking files (the context menu's "Insert a file"): a file input that is
+  // never shown, accepting what the importers read.
+  const chooseFiles = (): void => {
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.multiple = true;
+    picker.accept = acceptFor(editor);
+    picker.style.display = "none";
+    picker.addEventListener("change", () => {
+      const files = picker.files ? [...picker.files] : [];
+      picker.remove();
+      surface.focus({ preventScroll: true });
+      if (files.length > 0) void editor.importFiles(files);
+    });
+    picker.addEventListener("cancel", () => picker.remove());
+    document.body.append(picker);
+    picker.click();
+  };
 
   // The context menu's clipboard entries go through the same events: the
   // browser sends a copy or cut event for `execCommand` during a click. A
@@ -286,15 +402,34 @@ export function mountEditor(
     cut: () => viaEvent("cut", () => editor.clipboardCut()),
     paste: () => {
       const read = navigator.clipboard?.readText?.bind(navigator.clipboard);
-      if (read === undefined) {
-        editor.clipboardPaste();
+      const pasteText = (): void => {
+        if (read === undefined) {
+          editor.clipboardPaste();
+          return;
+        }
+        read().then(
+          (text) => editor.clipboardPaste(readClipboardText(text)),
+          () => editor.clipboardPaste(),
+        );
+      };
+      // An image on the clipboard (copied in another program) is imported;
+      // the asynchronous clipboard gives it as a typed item. Anything else,
+      // or a browser that does not let the page read items, goes the text way.
+      const readItems = navigator.clipboard?.read?.bind(navigator.clipboard);
+      if (readItems === undefined || !editor.canImport) {
+        pasteText();
         return;
       }
-      read().then(
-        (text) => editor.clipboardPaste(readClipboardText(text)),
-        () => editor.clipboardPaste(),
+      readItems().then(
+        async (items) => {
+          const files = await imageFilesOf(items, i18n);
+          if (files.length > 0) void editor.importFiles(files);
+          else pasteText();
+        },
+        () => pasteText(),
       );
     },
+    ...(editor.canImport ? { chooseFiles } : {}),
   };
   const viaEvent = (command: "copy" | "cut", fallback: () => boolean): void => {
     surface.focus({ preventScroll: true });

@@ -50,7 +50,12 @@ export type FileWarningCode =
   /** Visible content refers to an asset the document has no description of. */
   | "asset-undescribed"
   /** The thumbnail is missing although the manifest lists it. */
-  | "thumbnail-missing";
+  | "thumbnail-missing"
+  /**
+   * The writer left the reduced versions of images out, because the file would
+   * not fit with them (they are a cache and are made again when needed).
+   */
+  | "previews-not-written";
 
 export interface FileWarning {
   code: FileWarningCode;
