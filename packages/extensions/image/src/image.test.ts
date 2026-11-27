@@ -24,6 +24,8 @@ import {
   type CommandEnvironment,
   type ImportContext,
   type ImportSource,
+  type ToolPointerEvent,
+  type ToolSession,
 } from "@galatsa/extension-api/editing";
 import {
   createRecordingDrawContext,
@@ -36,6 +38,7 @@ import { boxForCrop, dragCrop, fromBoxFrame, toBoxFrame, type CropBox } from "./
 import {
   IMAGE_CROP,
   IMAGE_CROP_RESET,
+  IMAGE_CROP_TOOL,
   IMAGE_IMPORTER,
   IMAGE_INSERT,
   IMAGE_SET_STYLE,
@@ -117,7 +120,19 @@ function setup() {
     progress: () => {},
   };
   const importer = host.importers().find((r) => r.id === IMAGE_IMPORTER)!.definition;
-  return { doc, undo, host, services, run, must, element, assets, context, importer };
+  return {
+    doc,
+    undo,
+    host,
+    services,
+    env,
+    run,
+    must,
+    element,
+    assets,
+    context,
+    importer,
+  };
 }
 
 const INFO: AssetInfo = {
@@ -332,5 +347,70 @@ describe("drawing", () => {
     imageView.draw(model, missing, { id: "e", w: 40, h: 30 });
     expect(missing.calls.some((c) => c.op === "text")).toBe(true);
     expect(imageView.assets!(model)).toEqual([ASSET]);
+  });
+});
+
+function pointer(x: number, y: number): ToolPointerEvent {
+  return {
+    screen: { x, y },
+    world: { x, y },
+    pointerType: "mouse",
+    button: 0,
+    pressure: 0.5,
+    modifiers: { shift: false, alt: false, ctrl: false, meta: false, mod: false },
+  };
+}
+
+describe("the crop tool", () => {
+  it("drags an edge of the selected image, previews without writing, and crops with one command", () => {
+    const t = setup();
+    const id = t.must<ElementId>(IMAGE_INSERT, {
+      asset: ASSET,
+      info: INFO,
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 300,
+    });
+    t.services.selection.set([id]);
+    const log = { done: 0, overlays: 0 };
+    const session: ToolSession = {
+      environment: t.env,
+      run: (command, args) => t.host.commands.execute(command, t.env(), args),
+      isEnabled: (command, args) => t.host.commands.isEnabled(command, t.env(), args),
+      extensions: t.host,
+      gesture: () => t.host.commands.beginGesture(t.env()),
+      scale: () => 1,
+      requestOverlay: () => (log.overlays += 1),
+      editText: () => {},
+      setCursor: () => {},
+      done: () => (log.done += 1),
+    };
+    const tool = t.host.tools().find((r) => r.id === IMAGE_CROP_TOOL)!.definition;
+    expect(tool.shortcuts).toEqual(["c"]);
+    const handler = tool.start(session);
+    const steps = t.undo.undoStack.length;
+    // The right edge, from 400 to 300: a quarter of the image cut away.
+    handler.pointerDown!(pointer(400, 150));
+    handler.pointerMove!(pointer(350, 150));
+    expect(t.element(id).data.crop).toBeNull();
+    const overlay = createRecordingDrawContext();
+    handler.drawOverlay!(overlay);
+    expect(overlay.calls.some((c) => c.op === "image")).toBe(true);
+    handler.pointerUp!(pointer(300, 150));
+    expect(t.element(id).data.crop).toEqual({ x: 0, y: 0, w: 3000, h: 3000 });
+    expect(t.element(id).size).toEqual({ w: 300, h: 300 });
+    expect(t.undo.undoStack.length).toBe(steps + 1);
+    // Escape leaves the tool; a click beside any image too.
+    expect(
+      handler.keyDown!({
+        key: "Escape",
+        modifiers: pointer(0, 0).modifiers,
+        repeat: false,
+      }),
+    ).toBe(true);
+    expect(log.done).toBe(1);
+    handler.pointerDown!(pointer(900, 900));
+    expect(log.done).toBe(2);
   });
 });
