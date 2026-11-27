@@ -161,6 +161,11 @@ test("the camera follows the mouse, the trackpad, touch and the keyboard", async
       async () => (await page.evaluate(() => document.activeElement?.className)) ?? "",
     )
     .toContain("galatsa-canvas");
+  // The new rectangle is selected; Escape clears the selection, so that the
+  // arrow keys below move the view rather than the rectangle.
+  await expect.poll(() => selection(page)).toHaveLength(1);
+  await page.keyboard.press("Escape");
+  await expect.poll(() => selection(page)).toEqual([]);
 
   // The wheel scrolls (a mouse wheel, or two fingers on a trackpad).
   let before = await camera(page);

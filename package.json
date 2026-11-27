@@ -27,6 +27,7 @@
   "devDependencies": {
     "@eslint/compat": "2.1.1",
     "@eslint/js": "10.0.1",
+    "@galatsa/extension-shape": "workspace:*",
     "@galatsa/i18n": "workspace:*",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@types/node": "catalog:",

@@ -79,7 +79,7 @@ async function insertRect(page: Page, x: number, y: number, w: number, h: number
   return page.evaluate(
     ([px, py, pw, ph]) => {
       const editor = (window as unknown as Dev).galatsaDev.editor()!;
-      const outcome = editor.run("examples.shape/insert", {
+      const outcome = editor.run("galatsa.shape/insert", {
         kind: "rect",
         x: px,
         y: py,
@@ -157,7 +157,7 @@ test("the selection tool selects, groups, scales, rotates, locks and copies with
 
   const a = await insertRect(page, 100, 100, 100, 100);
   const b = await insertRect(page, 300, 100, 100, 100);
-  const SHAPE = "examples.shape/shape";
+  const SHAPE = "galatsa.shape/shape";
   expect(await count(page, SHAPE)).toBe(2);
 
   // Click, Shift-click, a click on empty canvas, and a rubber band.

@@ -196,6 +196,9 @@ importers:
       '@eslint/js':
         specifier: 10.0.1
         version: 10.0.1(eslint@10.14.0(supports-color@7.2.0))
+      '@galatsa/extension-shape':
+        specifier: workspace:*
+        version: link:packages/extensions/shape
       '@galatsa/i18n':
         specifier: workspace:*
         version: link:packages/i18n
@@ -250,15 +253,24 @@ importers:
       '@galatsa/editor':
         specifier: workspace:*
         version: link:../../packages/editor
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../../packages/extension-api
       '@galatsa/extension-examples':
         specifier: workspace:*
         version: link:../../packages/extensions/examples
+      '@galatsa/extension-shape':
+        specifier: workspace:*
+        version: link:../../packages/extensions/shape
       '@galatsa/format':
         specifier: workspace:*
         version: link:../../packages/format
       '@galatsa/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@galatsa/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
       '@galatsa/storage':
         specifier: workspace:*
         version: link:../../packages/storage
@@ -424,6 +436,28 @@ importers:
         version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
 
   packages/extensions/select:
+    dependencies:
+      '@galatsa/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../../extension-api
+      '@galatsa/extension-basics':
+        specifier: workspace:*
+        version: link:../basics
+      '@galatsa/i18n':
+        specifier: workspace:*
+        version: link:../../i18n
+      yjs:
+        specifier: 13.6.33
+        version: 13.6.33
+    devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
+
+  packages/extensions/shape:
     dependencies:
       '@galatsa/core':
         specifier: workspace:*

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The editor's development page (apps/web) in a real browser: it opens the
-// sample scene, a shape tool from the sketches draws a rectangle with the
-// mouse, the selection tool drags it (previewed while dragging, one step at the
-// end), and undo and redo work from the keyboard. Runs in the "chromium",
+// sample scene, the shape extension's rectangle tool draws a rectangle with
+// the mouse, the selection tool drags it (previewed while dragging, one step at
+// the end), and undo and redo work from the keyboard. Runs in the "chromium",
 // "editor-firefox" and, where Playwright's WebKit can run, "editor-webkit"
 // projects (`pnpm --filter @galatsa/e2e exec playwright test editor.spec.ts`).
 
@@ -11,7 +11,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { WEB_PORT } from "./playwright.config.ts";
 
 const URL = `http://localhost:${WEB_PORT}/?lang=en&fresh`;
-const SHAPE = "examples.shape/shape";
+const SHAPE = "galatsa.shape/shape";
 
 interface Probe {
   shapes: number;
@@ -121,7 +121,7 @@ test("the development page edits the sample scene with the mouse and the keyboar
   // Pick the rectangle tool by its shortcut and draw with the mouse.
   await surface.focus();
   await page.keyboard.press("r");
-  expect((await probe(page)).tool).toBe("examples.shape/rect");
+  expect((await probe(page)).tool).toBe("galatsa.shape/rect");
   const from = at(box.width * 0.3, box.height * 0.3);
   const to = at(box.width * 0.5, box.height * 0.6);
   await page.mouse.move(from.x, from.y);

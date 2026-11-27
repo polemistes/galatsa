@@ -15,9 +15,12 @@
     "@galatsa/bench": "workspace:*",
     "@galatsa/core": "workspace:*",
     "@galatsa/editor": "workspace:*",
+    "@galatsa/extension-api": "workspace:*",
     "@galatsa/extension-examples": "workspace:*",
+    "@galatsa/extension-shape": "workspace:*",
     "@galatsa/format": "workspace:*",
     "@galatsa/i18n": "workspace:*",
+    "@galatsa/renderer": "workspace:*",
     "@galatsa/storage": "workspace:*",
     "yjs": "13.6.33"
   },
