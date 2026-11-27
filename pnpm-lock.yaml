@@ -232,6 +232,12 @@ importers:
       '@galatsa/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../packages/extension-api
+      '@galatsa/renderer':
+        specifier: workspace:*
+        version: link:../packages/renderer
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -308,6 +314,22 @@ importers:
         version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
 
   packages/i18n:
+    devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
+
+  packages/renderer:
+    dependencies:
+      '@galatsa/core':
+        specifier: workspace:*
+        version: link:../core
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../extension-api
+      '@galatsa/i18n':
+        specifier: workspace:*
+        version: link:../i18n
     devDependencies:
       vitest:
         specifier: 'catalog:'
