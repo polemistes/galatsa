@@ -31,7 +31,6 @@ import {
   type RouteId,
   type Stop,
   type StopId,
-  type StopView,
 } from "@galatsa/core";
 import { pasteFragment, toSnapshot } from "@galatsa/core/ydoc";
 import {
@@ -183,27 +182,6 @@ export function readFragment(raw: unknown): ReadFragmentResult {
       }
     }
   });
-  // A rectangle stop is in the roots' space (null), as copy writes it, or in
-  // the space of a frame or group of the fragment. Any other space would name
-  // an unrelated element of the document it is pasted into (docs/adr/0013).
-  const spaceProblem = (view: StopView): boolean => {
-    if (view.kind !== "rect" || view.space === null) return false;
-    const type = Object.hasOwn(elements, view.space)
-      ? elements[view.space]!.type
-      : undefined;
-    return type !== FRAME_TYPE && type !== GROUP_TYPE;
-  };
-  for (const [key, list] of [
-    ["stops", Object.entries(stops).map(([id, stop]) => [id, stop.view] as const)],
-    ["fallbackViews", Object.entries(fallbackViews)],
-  ] as const) {
-    p.at(key, () => {
-      for (const [id, view] of list) {
-        if (spaceProblem(view))
-          p.at(id, () => p.add("space must be a frame or group of the fragment"));
-      }
-    });
-  }
   // Frames and groups are core's: their data is checked here, as an element
   // type's reader checks its own.
   for (const id of Object.keys(elements))

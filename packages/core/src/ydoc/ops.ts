@@ -71,6 +71,7 @@ import {
   type RouteEntryId,
   type RouteId,
   type Shift,
+  type Stop,
   type StopId,
   type StopView,
   type TextRun,
@@ -821,7 +822,14 @@ function routeMap(doc: Y.Doc, id: RouteId): Y.Map<unknown> {
 
 export function addStop(
   doc: Y.Doc,
-  init: { id?: StopId; view: StopView; name?: string; notes?: TextRun[] },
+  init: {
+    id?: StopId;
+    view: StopView;
+    name?: string;
+    notes?: TextRun[];
+    /** Open slots (section 9.4), as in the JSON form; a copy of a stop keeps them. */
+    ext?: Stop["ext"];
+  },
   options?: OpOptions,
 ): StopId {
   prepare(doc, options);
@@ -839,7 +847,7 @@ export function addStop(
         transition: null,
         rev: {},
         deleted: { [action]: { seen: { [id]: "" } } },
-        ext: {},
+        ext: init.ext ?? {},
       },
       p,
     ),
@@ -1092,6 +1100,30 @@ export function moveRouteEntry(
         order: keyAt(entryList(entries, entry), index, options?.random),
       }),
     );
+  });
+}
+
+/**
+ * Points a visit at another stop, in place: the entry keeps its id, its place
+ * in the route and its `ext`. Concurrent writes to the same entry (another
+ * re-pointing, a move) are resolved whole, one of them winning, so a visit is
+ * never doubled. Pointing a visit at a stop is work on that stop (section 5.5).
+ */
+export function setRouteEntryStop(
+  doc: Y.Doc,
+  route: RouteId,
+  entry: RouteEntryId,
+  stop: StopId,
+  options?: OpOptions,
+): void {
+  checkId(stop, "stop id");
+  transact(doc, options, () => {
+    const entries = entriesMap(routeMap(doc, route));
+    const current = entries.get(entry);
+    if (current === undefined) throw new Error(`No entry ${entry}`);
+    const read = checked("route entry", (p) => readRouteEntry(current, p));
+    if (read.stop === stop) return;
+    entries.set(entry, cloneJson({ ...read, stop }));
   });
 }
 

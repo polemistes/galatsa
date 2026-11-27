@@ -7,11 +7,42 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { copyFragment, type Fragment } from "../model/fragment.ts";
 import { Resolver } from "../model/resolve.ts";
-import { regionToWorld, stopRegion } from "../model/route.ts";
+import { regionToWorld, routeSteps, stopRegion } from "../model/route.ts";
 import { FRAME_TYPE } from "../model/types.ts";
 import { pasteFragment } from "./document-ops.ts";
 import * as ops from "./ops.ts";
 import { stopsAndRoutesOf, toSnapshot, yLookup } from "./snapshot.ts";
+import { forkDoc, syncDocs } from "./sync.ts";
+import { trackWork } from "./track.ts";
+
+describe("pointing a visit at another stop", () => {
+  it("keeps the entry, its place and ext, and never doubles it when concurrent", () => {
+    const a = base();
+    trackWork(a);
+    const view = { kind: "rect", space: null, x: 0, y: 0, w: 1, h: 1 } as const;
+    const s1 = ops.addStop(a, { view, ext: { "x.note": "kept" } });
+    const s2 = ops.addStop(a, { view });
+    const s3 = ops.addStop(a, { view });
+    const route = ops.addRoute(a);
+    const e1 = ops.insertRouteEntry(a, route, s1, { ext: { "x.pause": 2 } });
+    ops.insertRouteEntry(a, route, s2);
+    expect(toSnapshot(a).stops[s1]!.ext).toEqual({ "x.note": "kept" });
+    const b = forkDoc(a, 99);
+    trackWork(b);
+    // A points the visit at s3 while B points it at s2 and moves it.
+    ops.setRouteEntryStop(a, route, e1, s3);
+    ops.setRouteEntryStop(b, route, e1, s2);
+    ops.moveRouteEntry(b, route, e1, 1);
+    syncDocs(a, b);
+    for (const doc of [a, b]) {
+      const steps = routeSteps(toSnapshot(doc), route);
+      expect(steps).toHaveLength(2);
+      expect(steps.filter((step) => step.entry === e1)).toHaveLength(1);
+      expect(toSnapshot(doc).routes[route]!.entries[e1]!.ext).toEqual({ "x.pause": 2 });
+    }
+    expect(routeSteps(toSnapshot(a), route)).toEqual(routeSteps(toSnapshot(b), route));
+  });
+});
 
 const SHAPE = "galatsa.shapes/shape";
 
