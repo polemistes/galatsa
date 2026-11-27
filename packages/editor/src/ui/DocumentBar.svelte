@@ -7,7 +7,7 @@
 <script lang="ts">
   import type { I18n } from "@galatsa/i18n";
   import { noticeText } from "@galatsa/storage";
-  import type { DocumentState, EditorDocument } from "../document.ts";
+  import { statusMessage, type EditorDocument } from "../document.ts";
   import Dialog from "./Dialog.svelte";
   import { translator, Watched } from "./reactive.ts";
 
@@ -19,18 +19,10 @@
   const status = $derived(state.status);
   const busy = $derived(state.phase !== "open" || state.savingFile);
 
-  /** The save status in words (the storage layer's texts). */
-  function statusLine(s: DocumentState): string | null {
-    if (s.phase === "closing") return t("editor:status.closing");
-    if (s.savingFile) return t("editor:status.savingFile");
-    if (s.status.problem !== null) return t("storage:status.failed");
-    if (s.status.saving || s.status.pending) return t("storage:status.saving");
-    if (s.status.unsavedToFile && s.status.fileName !== null)
-      return t("storage:status.unsavedToFile");
-    if (s.status.lastStoredAt !== null)
-      return t("storage:status.saved", { when: s.status.lastStoredAt });
-    return null;
-  }
+  const statusLine = $derived.by(() => {
+    const message = statusMessage(state);
+    return message === null ? null : t(message.key, message.values);
+  });
 
   function saveThenClose(): void {
     void doc.saveAsFile().then((result) => {
@@ -55,7 +47,7 @@
 </div>
 
 <div class="bar">
-  <span role="status" class="galatsa-save-status">{statusLine(state)}</span>
+  <span role="status" class="galatsa-save-status">{statusLine}</span>
   <button type="button" disabled={busy} onclick={() => void doc.saveAsFile()}>
     {t("editor:action.saveAsFile")}
   </button>

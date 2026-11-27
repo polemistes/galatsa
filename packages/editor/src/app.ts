@@ -198,7 +198,11 @@ export class EditorApp {
     }
     this.#closeEditor();
     const session = result.session;
-    const doc = new EditorDocument(session, { i18n: this.i18n }, result.notices);
+    const doc = new EditorDocument(
+      session,
+      { i18n: this.i18n, volatile: this.#state.noStorage },
+      result.notices,
+    );
     let editor: Editor | null = null;
     const images = assetImages(
       session.doc,

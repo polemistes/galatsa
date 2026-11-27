@@ -12,7 +12,7 @@ import {
   type MemoryStore,
 } from "@galatsa/storage";
 import { describe, expect, it, vi } from "vitest";
-import { EditorDocument } from "./document.ts";
+import { EditorDocument, statusMessage } from "./document.ts";
 import { registerEditorMessages } from "./extensions.ts";
 import { testI18n } from "./test-support.ts";
 
@@ -118,5 +118,46 @@ describe("closing a document", () => {
     });
     expect(untitled.suggestedName()).toBe("Untitled presentation.galatsa");
     expect(untitled.state.notices).toEqual([]);
+  });
+});
+
+describe("without the browser's storage (a store in memory)", () => {
+  it("never says saved, warns and offers a file while changes are not in a file", async () => {
+    const { storage, i18n } = setup();
+    const session = await storage.create({ title: "Talk" });
+    const file = memoryFile("talk.galatsa");
+    const doc = new EditorDocument(session, {
+      i18n,
+      volatile: true,
+      pickTarget: async () => file,
+      requestPersistence: async () => true,
+      warnOnUnload: false,
+    });
+    expect(doc.wouldLoseWork()).toBe(false);
+    addBox(session.doc);
+    await session.flush();
+    // Stored in memory: the status must not say "Saved".
+    expect(session.status.pending).toBe(false);
+    expect(session.status.lastStoredAt).not.toBeNull();
+    expect(statusMessage(doc.state)?.key).toBe("editor:status.notStored");
+    expect(doc.wouldLoseWork()).toBe(true);
+    expect(await doc.close()).toBe("offer-save");
+    expect(session.closed).toBe(false);
+    // Saved to a file: nothing to lose, and it closes.
+    doc.keepOpen();
+    expect((await doc.saveAsFile())?.ok).toBe(true);
+    expect(doc.wouldLoseWork()).toBe(false);
+    expect(await doc.close()).toBe("closed");
+  });
+
+  it("with the browser's storage, a stored change is saved and leaving is safe", async () => {
+    const { storage, i18n } = setup();
+    const session = await storage.create({ title: "Talk" });
+    const doc = new EditorDocument(session, { i18n, warnOnUnload: false });
+    addBox(session.doc);
+    await session.flush();
+    expect(statusMessage(doc.state)?.key).toBe("storage:status.saved");
+    expect(doc.wouldLoseWork()).toBe(false);
+    await session.close({ evenIfUnstored: true });
   });
 });

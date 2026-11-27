@@ -14,6 +14,7 @@ export default {
   "status.closing": "Closing the presentation…",
   "status.closed": "The presentation is closed.",
   "status.savingFile": "Saving as a file…",
+  "status.notStored": "Not saved – save as a file",
   "status.noStorage":
     "The browser’s storage cannot be used. Your work is not saved automatically; save the presentation as a file.",
   "close.heading": "Not everything is saved",

@@ -14,6 +14,7 @@ export default {
   "status.closing": "Lukker presentasjonen …",
   "status.closed": "Presentasjonen er lukket.",
   "status.savingFile": "Lagrer som fil …",
+  "status.notStored": "Ikke lagret – lagre som fil",
   "status.noStorage":
     "Nettleserens lager kan ikke brukes. Arbeidet ditt lagres ikke automatisk; lagre presentasjonen som fil.",
   "close.heading": "Ikke alt er lagret",

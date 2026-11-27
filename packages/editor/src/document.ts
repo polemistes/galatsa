@@ -14,6 +14,11 @@
 // ask. Then `close()`; if it answers that not everything reached the store,
 // the offer comes, and only after it may the document be closed anyway
 // (`evenIfUnstored`).
+//
+// Without the browser's storage (the program fell back to a store in memory,
+// which a reload or a closed tab loses), "stored" means nothing: the status
+// never says "Saved", and leaving or closing warns and offers to save as a
+// file whenever there are changes not saved to a file.
 
 import { roots } from "@galatsa/core/ydoc";
 import { FILE_EXTENSION } from "@galatsa/format";
@@ -44,6 +49,30 @@ export interface DocumentState {
   readonly notices: readonly Notice[];
   /** A save to a file is running. */
   readonly savingFile: boolean;
+  /** The store is in memory only: nothing survives a reload (`DocumentOptions.volatile`). */
+  readonly volatile: boolean;
+}
+
+/** The save status in words: a message key of the editor or the storage layer, and its values. */
+export function statusMessage(
+  state: DocumentState,
+): { readonly key: string; readonly values?: { readonly when: number } } | null {
+  const s = state.status;
+  if (state.phase === "closing") return { key: "editor:status.closing" };
+  if (state.savingFile) return { key: "editor:status.savingFile" };
+  if (state.volatile) {
+    // Only a file keeps the work: "stored" in memory is not saved.
+    return s.unsavedToFile || s.fileName === null
+      ? { key: "editor:status.notStored" }
+      : null;
+  }
+  if (s.problem !== null) return { key: "storage:status.failed" };
+  if (s.saving || s.pending) return { key: "storage:status.saving" };
+  if (s.unsavedToFile && s.fileName !== null)
+    return { key: "storage:status.unsavedToFile" };
+  if (s.lastStoredAt !== null)
+    return { key: "storage:status.saved", values: { when: s.lastStoredAt } };
+  return null;
 }
 
 /** How long closing waits for changes that are only waiting for their turn. */
@@ -60,6 +89,11 @@ export interface DocumentOptions {
   readonly requestPersistence?: () => Promise<boolean>;
   /** Warn before the window closes while changes are not stored (default: in a browser). */
   readonly warnOnUnload?: boolean;
+  /**
+   * The store is in memory only (the browser's storage could not be used):
+   * changes not saved to a file are lost when the page goes.
+   */
+  readonly volatile?: boolean;
 }
 
 export class EditorDocument {
@@ -83,6 +117,7 @@ export class EditorDocument {
       status: session.status,
       notices: [...notices],
       savingFile: false,
+      volatile: options.volatile === true,
     };
     this.#cleanup.push(
       session.subscribe((status) => {
@@ -93,8 +128,7 @@ export class EditorDocument {
     const win = (globalThis as { window?: Window }).window;
     if (win !== undefined && options.warnOnUnload !== false) {
       const onUnload = (event: BeforeUnloadEvent): void => {
-        const { pending, problem } = this.session.status;
-        if (this.#state.phase === "closed" || (!pending && problem === null)) return;
+        if (!this.wouldLoseWork()) return;
         event.preventDefault();
         // Browsers show their own text; some still want a value here.
         event.returnValue = this.#i18n.t("editor:unload.warning");
@@ -106,6 +140,17 @@ export class EditorDocument {
 
   get state(): DocumentState {
     return this.#state;
+  }
+
+  /**
+   * True if work would be lost if the page went now: changes not in the store
+   * (or a store with a problem), or, with a store in memory only, changes not
+   * saved to a file.
+   */
+  wouldLoseWork(): boolean {
+    if (this.#state.phase === "closed") return false;
+    const { pending, problem, unsavedToFile } = this.session.status;
+    return pending || problem !== null || (this.#state.volatile && unsavedToFile);
   }
 
   subscribe(listener: (state: DocumentState) => void): () => void {
@@ -193,7 +238,11 @@ export class EditorDocument {
       ]);
       status = this.session.status;
     }
-    if (status.problem !== null || status.pending) {
+    if (
+      status.problem !== null ||
+      status.pending ||
+      (this.#state.volatile && status.unsavedToFile)
+    ) {
       this.#set({ phase: "offer-save", status });
       return "offer-save";
     }
