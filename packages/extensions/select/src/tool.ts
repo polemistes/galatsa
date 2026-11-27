@@ -41,11 +41,11 @@ import {
 import { BASICS, isFrame } from "@galatsa/extension-basics";
 import {
   dropBox,
-  dropFrames,
-  dropTarget,
+  dropInto,
   labelAt,
+  planDrop,
   shownFrames,
-  type DropFrame,
+  type DropPlan,
   type ShownFrame,
 } from "./frames.ts";
 import {
@@ -90,6 +90,11 @@ const MIN_SIZE = 2;
 export const ROTATE_STEP = Math.PI / 12;
 /** Arrow keys nudge by this much, with Shift by ten times as much. */
 const NUDGE = 1;
+/**
+ * A selection that starts with its centre outside its frame leaves it once
+ * the centre has moved half its larger side, and at least this far (CSS px).
+ */
+const DROP_REACH = 24;
 
 const COLOR = "#2563eb";
 const HANDLE_FILL = "#ffffff";
@@ -121,10 +126,8 @@ type Drag =
       readonly clicked: ElementId | null;
       gesture: Gesture | null;
       offset: Point;
-      /** The frames the selection can be dropped into, found when the drag starts. */
-      frames: readonly DropFrame[];
-      /** The containers the moved elements are seen in now. */
-      readonly from: ReadonlySet<ElementId | null>;
+      /** Where the selection can go, worked out when the drag starts. */
+      plan: DropPlan | null;
       /** The container a drop here moves them into; undefined: they stay where they are. */
       target: ElementId | null | undefined;
     }
@@ -374,8 +377,7 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     ids: readonly ElementId[],
     clicked: ElementId | null,
   ): void => {
-    const r = resolver();
-    const moving = outermost(r, ids);
+    const moving = outermost(resolver(), ids);
     drag = {
       kind: "move",
       start: event,
@@ -384,8 +386,7 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       clicked,
       gesture: null,
       offset: { x: 0, y: 0 },
-      frames: [],
-      from: new Set(moving.map((id) => r.logicalParentOf(id))),
+      plan: null,
       target: undefined,
     };
   };
@@ -411,7 +412,7 @@ export function startSelectTool(session: ToolSession): ToolHandler {
   const nameUnder = (point: Point, hit: ElementId | null): ElementId | null => {
     const r = resolver();
     if (hit !== null && !isFrame(r, hit)) return null;
-    const id = labelAt(framesShown(), point, zoom());
+    const id = labelAt(doc, framesShown(), point, zoom());
     return id === null || r.isLocked(id) ? null : id;
   };
 
@@ -427,10 +428,17 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     if (d.gesture === null) {
       if (far < CLICK_SLOP) return;
       d.gesture = session.gesture();
-      d.frames = dropFrames(
-        doc,
-        d.items.map((item) => item.id),
+      const scene = services().scene;
+      const bounds = union(
+        d.items.map((i) => scene.bounds(i.id)).filter((b): b is Rect => b !== null),
       );
+      if (bounds !== null)
+        d.plan = planDrop(
+          doc,
+          d.items.map((item) => item.id),
+          bounds,
+          DROP_REACH / zoom(),
+        );
       setCursor("move");
     }
     let dx = event.world.x - d.start.world.x;
@@ -440,11 +448,13 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       else dx = 0;
     }
     d.offset = { x: dx, y: dy };
-    // Let go here, the selection goes into the frame under the pointer, or
-    // out to the canvas (docs/adr/0014); where all of it is seen already, it
-    // stays.
-    const target = dropTarget(d.frames, event.world);
-    const into = d.from.size !== 1 || !d.from.has(target) ? target : undefined;
+    // Let go here, the selection stays in its frame unless its centre,
+    // moved by the same offset (Shift's lock included), clearly lands
+    // elsewhere (docs/adr/0014, dropInto).
+    const into =
+      d.plan === null
+        ? undefined
+        : dropInto(d.plan, { x: d.plan.start.x + dx, y: d.plan.start.y + dy });
     if (into !== d.target) {
       d.target = into;
       session.requestOverlay();
@@ -832,7 +842,7 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       }
       // The frame a drop would move the selection into.
       if (drag?.kind === "move" && drag.target !== undefined && drag.target !== null) {
-        const box = dropBox(drag.frames, drag.target);
+        const box = drag.plan === null ? null : dropBox(drag.plan, drag.target);
         if (box !== null) {
           const path = ctx.createPath();
           path.rect(box.x, box.y, box.w, box.h);

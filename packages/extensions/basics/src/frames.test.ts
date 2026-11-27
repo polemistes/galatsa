@@ -7,7 +7,7 @@
 // frame. Every command is one undo step that undo takes back whole.
 
 import { FRAME_TYPE, regionToWorld, stopRegion, type ElementId } from "@galatsa/core";
-import { addStop, setLocked, stopsAndRoutesOf } from "@galatsa/core/ydoc";
+import { addStop, setData, setLocked, stopsAndRoutesOf } from "@galatsa/core/ydoc";
 import { describe, expect, it } from "vitest";
 import { BASICS, FRAME_PADDING, MAX_NAME_LENGTH, elementName, frameAt } from "./index.ts";
 import { setupBasics, visibleState, type BasicsSetup } from "./testing.ts";
@@ -234,17 +234,38 @@ describe("into and out of frames", () => {
     const f = t.frame(0, 0, 400, 400);
     const back = t.frame(50, 50, 100, 100, f);
     const front = t.frame(60, 60, 100, 100, f);
-    const r = () => t.resolver();
-    expect(frameAt(r(), { x: 70, y: 70 })).toBe(front);
-    expect(frameAt(r(), { x: 55, y: 55 })).toBe(back);
-    expect(frameAt(r(), { x: 300, y: 300 })).toBe(f);
-    expect(frameAt(r(), { x: 900, y: 300 })).toBeNull();
-    expect(frameAt(r(), { x: 70, y: 70 }, [front])).toBe(back);
-    expect(frameAt(r(), { x: 70, y: 70 }, [f])).toBeNull();
+    expect(frameAt(t.doc, { x: 70, y: 70 })).toBe(front);
+    expect(frameAt(t.doc, { x: 55, y: 55 })).toBe(back);
+    expect(frameAt(t.doc, { x: 300, y: 300 })).toBe(f);
+    expect(frameAt(t.doc, { x: 900, y: 300 })).toBeNull();
+    expect(frameAt(t.doc, { x: 70, y: 70 }, [front])).toBe(back);
+    expect(frameAt(t.doc, { x: 70, y: 70 }, [f])).toBeNull();
     setLocked(t.doc, front, true);
-    expect(frameAt(r(), { x: 70, y: 70 })).toBe(back);
+    expect(frameAt(t.doc, { x: 70, y: 70 })).toBe(back);
     t.must(BASICS.delete, { ids: [back] });
-    expect(frameAt(r(), { x: 70, y: 70 })).toBe(f);
+    expect(frameAt(t.doc, { x: 70, y: 70 })).toBe(f);
+  });
+
+  it("finds frames in groups, nested frames reaching out of their frame, by the stacking order, and not where clipped away", () => {
+    const t = setupBasics();
+    // A frame in a group.
+    const grouped = t.frame(1000, 0, 100, 100);
+    t.must(BASICS.group, { ids: [grouped, t.shape(1200, 0)] });
+    expect(frameAt(t.doc, { x: 1050, y: 50 })).toBe(grouped);
+    // A nested frame reaching out of its frame (100..400) to 600.
+    const outer = t.frame(100, 500, 300, 300);
+    const out = t.frame(200, 10, 300, 100, outer);
+    expect(frameAt(t.doc, { x: 550, y: 550 })).toBe(out);
+    // Clipped by its frame, it is not found where it cannot be seen.
+    setData(t.doc, outer, "clip", true);
+    expect(frameAt(t.doc, { x: 550, y: 550 })).toBeNull();
+    expect(frameAt(t.doc, { x: 350, y: 550 })).toBe(out);
+    // Siblings by the stacking order, not by when they were made.
+    const a = t.frame(2000, 0, 100, 100);
+    const b = t.frame(2050, 0, 100, 100);
+    expect(frameAt(t.doc, { x: 2075, y: 50 })).toBe(b);
+    t.must(BASICS.sendToBack, { ids: [b] });
+    expect(frameAt(t.doc, { x: 2075, y: 50 })).toBe(a);
   });
 
   it("moves into another container with the move, as a drag does: one step, one place", () => {

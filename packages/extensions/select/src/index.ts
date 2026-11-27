@@ -35,16 +35,17 @@ export * from "./geometry.ts";
 export { CLICK_FRAME, startFrameTool } from "./frame-tool.ts";
 export {
   LABEL_HEIGHT,
-  LABEL_MIN_WIDTH,
+  LABEL_MAX_WIDTH,
+  LABEL_MIN_FRAME,
   UNNAMED_FRAME,
   dropBox,
-  dropFrames,
-  dropTarget,
+  dropInto,
   frameOverlay,
   labelAt,
   labelRect,
+  planDrop,
   shownFrames,
-  type DropFrame,
+  type DropPlan,
   type ShownFrame,
 } from "./frames.ts";
 

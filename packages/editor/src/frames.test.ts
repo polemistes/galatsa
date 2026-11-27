@@ -15,6 +15,7 @@ import { INSERT_FRAME, visibleState } from "@galatsa/extension-basics/testing";
 import {
   FRAME_TOOL,
   LABEL_HEIGHT,
+  labelAt,
   SELECT_TOOL,
   shownFrames,
 } from "@galatsa/extension-select";
@@ -335,11 +336,11 @@ describe("the context menu", () => {
     const a = rect(editor, 600, 100, 40, 40);
     setLocked(editor.doc, f, true);
     editor.services.selection.set([a]);
-    openContextMenu(editor, { x: 150, y: 100 - LABEL_HEIGHT / 2 }, none);
+    openContextMenu(editor, { x: 120, y: 100 - LABEL_HEIGHT / 2 }, none);
     expect(editor.selection).toEqual([f]);
     // An element over the name wins.
-    const over = rect(editor, 140, 80, 40, 40);
-    openContextMenu(editor, { x: 150, y: 100 - LABEL_HEIGHT / 2 }, none);
+    const over = rect(editor, 110, 80, 40, 40);
+    openContextMenu(editor, { x: 120, y: 100 - LABEL_HEIGHT / 2 }, none);
     expect(editor.selection).toEqual([over]);
   });
 });
@@ -414,5 +415,183 @@ describe("where a paste lands among frames", () => {
     editor.clipboardPaste(readClipboard(data));
     const [copy] = editor.selection;
     expect(at(editor, copy!)).toEqual({ x: 110, y: 110, parent: f });
+  });
+});
+
+function inside(
+  editor: Editor,
+  parent: ElementId,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  return must<ElementId>(editor, INSERT_FRAME, { x, y, w, h, parent });
+}
+
+/** A drag with Shift held down once it has started (Shift at the press adds to the selection). */
+function shiftDrag(
+  editor: Editor,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): void {
+  editor.pointerDown(pointer(from.x, from.y));
+  for (let i = 1; i <= 4; i++) {
+    const t = i / 4;
+    editor.pointerMove(
+      pointer(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t, {
+        shiftKey: true,
+      }),
+    );
+  }
+  editor.pointerUp(pointer(to.x, to.y, { shiftKey: true }));
+}
+
+describe("the drop rule: an element stays in its frame unless it clearly lands elsewhere", () => {
+  it("keeps an element in a frame that is in a group (F-A), and the frame in the group (F-A2)", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 400, 300);
+    const g = must<ElementId>(editor, BASICS.group, {
+      ids: [f, rect(editor, 600, 100, 40, 40)],
+    });
+    const a = rect(editor, 10, 10, 40, 40, f);
+    editor.services.selection.set([]);
+    drag(editor, { x: 130, y: 130 }, { x: 160, y: 160 });
+    expect(at(editor, a)).toEqual({ x: 140, y: 140, parent: f });
+    // Dropped into the frame in the group from the canvas.
+    const b = rect(editor, 700, 600, 40, 40);
+    drag(editor, { x: 720, y: 620 }, { x: 300, y: 300 });
+    expect(at(editor, b).parent).toBe(f);
+    // The frame dragged by its name stays in its group.
+    editor.services.selection.set([]);
+    drag(
+      editor,
+      { x: 110, y: 100 - LABEL_HEIGHT / 2 },
+      { x: 140, y: 130 - LABEL_HEIGHT / 2 },
+    );
+    expect(at(editor, f)).toEqual({ x: 130, y: 130, parent: g });
+  });
+
+  it("keeps an element in a nested frame where that reaches out of its frame, and drops into that part (F-B)", () => {
+    const editor = make();
+    const outer = frame(editor, 100, 100, 300, 300);
+    const out = inside(editor, outer, 200, 10, 300, 100); // 300..600 by 110..210
+    const a = rect(editor, 180, 20, 40, 40, out); // 480..520, outside `outer`
+    editor.services.selection.set([]);
+    drag(editor, { x: 500, y: 150 }, { x: 510, y: 150 });
+    expect(at(editor, a)).toEqual({ x: 490, y: 130, parent: out });
+    const b = rect(editor, 700, 600, 40, 40);
+    drag(editor, { x: 720, y: 620 }, { x: 550, y: 160 });
+    expect(at(editor, b).parent).toBe(out);
+  });
+
+  it("keeps a frame dragged by its name where it is, also when the name lies over another frame (F-C)", () => {
+    const editor = make();
+    const outer = frame(editor, 100, 100, 400, 300);
+    const top = inside(editor, outer, 50, 5, 100, 100); // its name lies above `outer`
+    editor.services.selection.set([]);
+    drag(
+      editor,
+      { x: 160, y: 105 - LABEL_HEIGHT / 2 },
+      { x: 170, y: 115 - LABEL_HEIGHT / 2 },
+    );
+    expect(at(editor, top)).toEqual({ x: 160, y: 115, parent: outer });
+    // A frame just below another: its name lies over the one above.
+    const above = frame(editor, 100, 600, 200, 100);
+    const below = frame(editor, 100, 710, 200, 100);
+    editor.services.selection.set([]);
+    drag(
+      editor,
+      { x: 120, y: 710 - LABEL_HEIGHT / 2 },
+      { x: 140, y: 730 - LABEL_HEIGHT / 2 },
+    );
+    expect(at(editor, below)).toEqual({ x: 120, y: 730, parent: null });
+    expect(editor.live.logicalChildren(above)).toEqual([]);
+  });
+
+  it("follows the element where Shift keeps the move level, not the pointer (F-D)", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 300, 200); // 100..400 by 100..300
+    const a = rect(editor, 10, 150, 40, 40, f); // 110..150 by 250..290
+    editor.services.selection.set([]);
+    // The pointer ends below the frame; the element moves only sideways.
+    shiftDrag(editor, { x: 130, y: 270 }, { x: 230, y: 320 });
+    expect(at(editor, a)).toEqual({ x: 210, y: 250, parent: f });
+  });
+
+  it("keeps an element that reaches out of its frame there, until it is clearly dragged away (F-F)", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 200, 200); // 100..300
+    const a = rect(editor, 170, 50, 100, 40, f); // 270..370: its centre is outside
+    editor.services.selection.set([]);
+    // Taken by the part outside the frame and moved a little: it stays.
+    drag(editor, { x: 350, y: 170 }, { x: 355, y: 170 });
+    expect(at(editor, a)).toEqual({ x: 275, y: 150, parent: f });
+    // Dragged well away (more than half its size): it leaves.
+    drag(editor, { x: 355, y: 170 }, { x: 655, y: 170 });
+    expect(at(editor, a)).toEqual({ x: 575, y: 150, parent: null });
+    // A selection in a frame and on the canvas, moved a little: each stays.
+    const inF = rect(editor, 10, 10, 40, 40, f);
+    const onCanvas = rect(editor, 500, 500, 40, 40);
+    editor.services.selection.set([inF, onCanvas]);
+    drag(editor, { x: 130, y: 130 }, { x: 135, y: 130 });
+    expect(at(editor, inF)).toEqual({ x: 115, y: 110, parent: f });
+    expect(at(editor, onCanvas)).toEqual({ x: 505, y: 500, parent: null });
+  });
+
+  it("moves an element out when its centre crosses its frame's edge, and in when it crosses another's", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 200, 200);
+    const g = frame(editor, 500, 100, 200, 200);
+    const a = rect(editor, 80, 80, 40, 40, f); // centre (200, 200)
+    editor.services.selection.set([]);
+    drag(editor, { x: 200, y: 200 }, { x: 400, y: 200 });
+    expect(at(editor, a).parent).toBeNull();
+    drag(editor, { x: 400, y: 200 }, { x: 600, y: 200 });
+    expect(at(editor, a).parent).toBe(g);
+  });
+});
+
+describe("frames on the canvas", () => {
+  it("draws a dragged frame's outline and name where the preview is (F-G)", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 200, 100);
+    editor.services.selection.set([]);
+    editor.pointerDown(pointer(120, 100 - LABEL_HEIGHT / 2));
+    for (let i = 1; i <= 4; i++)
+      editor.pointerMove(pointer(120 + 25 * i, 100 - LABEL_HEIGHT / 2));
+    const during = shownFrames(editor.services, editor.doc).find((s) => s.id === f)!;
+    expect(during.box).toMatchObject({ x: 200, y: 100 });
+    editor.pointerUp(pointer(220, 100 - LABEL_HEIGHT / 2));
+    expect(at(editor, f)).toMatchObject({ x: 200, y: 100 });
+  });
+
+  it("takes the name of the frame on top where names overlap (F-H)", () => {
+    const editor = make();
+    const a = frame(editor, 100, 100, 100, 100);
+    const b = frame(editor, 150, 100, 100, 100);
+    must(editor, BASICS.rename, { id: a, name: "A long name for the frame" });
+    const point = { x: 170, y: 100 - LABEL_HEIGHT / 2 };
+    const shown = () => shownFrames(editor.services, editor.doc);
+    expect(labelAt(editor.doc, shown(), point, 1)).toBe(b);
+    must(editor, BASICS.sendToBack, { ids: [b] });
+    expect(labelAt(editor.doc, shown(), point, 1)).toBe(a);
+  });
+
+  it("takes a name only where it is drawn: not over a small frame's neighbours (F-L)", () => {
+    const editor = make();
+    const small = frame(editor, 100, 100, 20, 20);
+    const narrow = frame(editor, 300, 100, 40, 40);
+    editor.services.selection.set([]);
+    // Under LABEL_MIN_FRAME pixels wide: no name, nothing to take above it.
+    click(editor, 110, 100 - LABEL_HEIGHT / 2);
+    expect(editor.selection).toEqual([]);
+    // A name is no wider than its frame on screen.
+    click(editor, 330, 100 - LABEL_HEIGHT / 2);
+    expect(editor.selection).toEqual([narrow]);
+    editor.services.selection.set([]);
+    click(editor, 345, 100 - LABEL_HEIGHT / 2);
+    expect(editor.selection).toEqual([]);
+    expect(small).toBeDefined();
   });
 });

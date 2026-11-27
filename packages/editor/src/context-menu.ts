@@ -183,6 +183,7 @@ export function elementForMenu(editor: Editor, point: Point): ElementId | null {
   const hit = found === null ? null : selectableFor(editor.live, found);
   if (hit !== null && editor.live.get(hit)?.type !== FRAME_TYPE) return hit;
   const name = labelAt(
+    editor.doc,
     shownFrames(editor.services, editor.doc),
     editor.screenToWorld(point),
     editor.services.camera.get().zoom,

@@ -13,7 +13,7 @@ import {
   type ElementId,
   type Point,
   type Rect,
-  type Resolver,
+  Resolver,
 } from "@galatsa/core";
 import {
   addElement,
@@ -23,6 +23,7 @@ import {
   renameElement,
   roots,
   slotsOf,
+  yLookup,
 } from "@galatsa/core/ydoc";
 import { defineCommand, type CommandContext } from "@galatsa/extension-api/editing";
 import type * as Y from "yjs";
@@ -68,48 +69,146 @@ export function isFrame(r: Resolver, id: ElementId | null): id is ElementId {
   return id !== null && r.get(id)?.type === FRAME_TYPE;
 }
 
-/** A frame's box in root space, or null for anything else. */
-function frameBox(r: Resolver, id: ElementId): Rect | null {
-  const size = r.get(id)?.size;
-  if (!isFrame(r, id) || size === undefined) return null;
-  const at = r.worldOrigin(id);
-  return { x: at.x, y: at.y, w: size.w, h: size.h };
+type YRecord = { get?(key: string): unknown } | undefined;
+
+/**
+ * The frames of a document, seen or not, found by the type key of each
+ * record alone: much cheaper than resolving every element.
+ */
+export function frameIds(doc: Y.Doc): ElementId[] {
+  const elements = roots(doc).elements;
+  const out: ElementId[] = [];
+  for (const [id, record] of elements.entries()) {
+    const r = record as YRecord;
+    if (typeof r?.get === "function" && r.get("type") === FRAME_TYPE) out.push(id);
+  }
+  return out;
+}
+
+/** Whether a frame draws its contents only inside its box (`data.clip`). */
+function clips(doc: Y.Doc, id: ElementId): boolean {
+  const record = roots(doc).elements.get(id) as YRecord;
+  const data = typeof record?.get === "function" ? record.get("data") : undefined;
+  if (data === null || typeof data !== "object") return false;
+  const clip =
+    typeof (data as YRecord)?.get === "function"
+      ? (data as { get(key: string): unknown }).get("clip")
+      : (data as { clip?: unknown }).clip;
+  return clip === true;
+}
+
+/** A frame elements can be put into, as the user sees it. */
+export interface OpenFrame {
+  readonly id: ElementId;
+  /** Its box in root space. */
+  readonly box: Rect;
+  /** Where it can be seen: inside every clipping frame around it (root space); null for everywhere. */
+  readonly visible: Rect | null;
+}
+
+function intersect(a: Rect, b: Rect): Rect {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  return {
+    x,
+    y,
+    w: Math.max(0, Math.min(a.x + a.w, b.x + b.w) - x),
+    h: Math.max(0, Math.min(a.y + a.h, b.y + b.h) - y),
+  };
+}
+
+function holds(r: Rect, p: Point): boolean {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 }
 
 /**
- * The innermost frame the user can put elements into whose box holds `point`
- * (root space), or null for the canvas: from the root down, into the frontmost
- * open frame (seen, not locked) that holds the point, as far as one is found.
- * Frames in `exclude`, and everything inside them, are passed over, so that
- * elements being moved are never dropped into themselves.
+ * Compares two drawing paths: each is the list of (order key, id) of the
+ * element and every container above it in the effective tree, from the root
+ * down. Siblings sort by key and id, and a container before what is in it:
+ * the order the renderer draws in (docs/adr/0001, section 4.2).
+ */
+function comparePaths(a: readonly string[], b: readonly string[]): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return a.length - b.length;
+}
+
+/** The drawing path of an element (see comparePaths). */
+export function drawingPath(r: Resolver, id: ElementId): string[] {
+  const path: string[] = [];
+  for (let at: ElementId | null = id; at !== null; at = r.parentOf(at)) {
+    path.unshift(r.get(at)?.order ?? "", at);
+    if (path.length > 2 * 4096) break; // a cycle the resolver would have broken
+  }
+  return path;
+}
+
+/**
+ * The frames among `ids` the user can put elements into (seen and not
+ * locked, neither among `exclude` nor inside one of them), in drawing order,
+ * back to front, with their boxes in root space.
+ */
+export function openFrames(
+  doc: Y.Doc,
+  r: Resolver,
+  ids: readonly ElementId[],
+  exclude: readonly ElementId[] = [],
+): OpenFrame[] {
+  const skip = (id: ElementId): boolean => exclude.some((e) => r.isWithin(id, e));
+  const out: { frame: OpenFrame; path: string[] }[] = [];
+  for (const id of ids) {
+    const size = r.get(id)?.size;
+    if (!isFrame(r, id) || size === undefined) continue;
+    if (r.isGone(id) || r.isLocked(id) || skip(id)) continue;
+    const at = r.worldOrigin(id);
+    let visible: Rect | null = null;
+    for (let p = r.parentOf(id); p !== null; p = r.parentOf(p)) {
+      if (!isFrame(r, p) || r.isGone(p) || !clips(doc, p)) continue;
+      const s = r.get(p)!.size;
+      if (s === undefined) continue;
+      const o = r.worldOrigin(p);
+      const box = { x: o.x, y: o.y, w: s.w, h: s.h };
+      visible = visible === null ? box : intersect(visible, box);
+    }
+    const box = { x: at.x, y: at.y, w: size.w, h: size.h };
+    out.push({ frame: { id, box, visible }, path: drawingPath(r, id) });
+  }
+  out.sort((a, b) => comparePaths(a.path, b.path));
+  return out.map((o) => o.frame);
+}
+
+/**
+ * The frame on top at a point (root space): the frontmost in drawing order
+ * whose box holds the point where it can be seen, or null for the canvas. A
+ * frame inside another one is found also where it reaches out of it, and
+ * frames inside groups are found too.
+ */
+export function topFrameAt(frames: readonly OpenFrame[], point: Point): ElementId | null {
+  for (let i = frames.length - 1; i >= 0; i--) {
+    const f = frames[i]!;
+    if (holds(f.box, point) && (f.visible === null || holds(f.visible, point)))
+      return f.id;
+  }
+  return null;
+}
+
+/**
+ * The frame the user can put elements into on top at `point` (root space),
+ * or null for the canvas (`topFrameAt` over every open frame). Frames in
+ * `exclude`, and everything inside them, are passed over, so that elements
+ * being moved are never put into themselves.
  */
 export function frameAt(
-  r: Resolver,
+  doc: Y.Doc,
   point: Point,
   exclude: readonly ElementId[] = [],
 ): ElementId | null {
-  const skip = (id: ElementId): boolean => exclude.some((e) => r.isWithin(id, e));
-  let found: ElementId | null = null;
-  for (;;) {
-    const children = r.logicalChildren(found);
-    let next: ElementId | null = null;
-    for (let i = children.length - 1; i >= 0; i--) {
-      const id = children[i]!;
-      const box = frameBox(r, id);
-      if (box === null || r.isLocked(id) || skip(id)) continue;
-      if (
-        point.x >= box.x &&
-        point.x <= box.x + box.w &&
-        point.y >= box.y &&
-        point.y <= box.y + box.h
-      ) {
-        next = id;
-        break;
-      }
-    }
-    if (next === null) return found;
-    found = next;
-  }
+  const r = new Resolver(yLookup(doc));
+  return topFrameAt(openFrames(doc, r, frameIds(doc), exclude), point);
 }
 
 /** The union of the elements' bounds in `space`, or null if none has bounds. */
@@ -372,7 +471,7 @@ function planInto(
   else {
     const b = boundsOf(r, ids, null);
     if (b === null) return undefined;
-    target = frameAt(r, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, ids);
+    target = frameAt(ctx.doc, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, ids);
   }
   if (!isFrame(r, target) || !isOpenContainer(r, target)) return undefined;
   if (ids.some((id) => r.isWithin(target, id))) return undefined;

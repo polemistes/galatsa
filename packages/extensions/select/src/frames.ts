@@ -5,7 +5,8 @@
 // corner, at a fixed size on screen, so that frames without a fill or a line
 // of their own can be seen and taken. The name is a handle: a press on it
 // selects the frame and a drag moves it. Not document content: drawn as an
-// overlay, never exported and never shown by the player.
+// overlay, never exported and never shown by the player. And where a drag of
+// the selection puts it: into a frame, out of one, or where it is.
 
 import {
   FRAME_TYPE,
@@ -18,23 +19,31 @@ import { roots, yLookup } from "@galatsa/core/ydoc";
 import { messageKey, type Label } from "@galatsa/extension-api";
 import type {
   CommandContext,
+  DrawContext,
   EditorServices,
   OverlayDefinition,
 } from "@galatsa/extension-api/editing";
-import { elementName } from "@galatsa/extension-basics";
+import {
+  drawingPath,
+  elementName,
+  isFrame,
+  openFrames,
+  topFrameAt,
+  type OpenFrame,
+} from "@galatsa/extension-basics";
 import type * as Y from "yjs";
 import { selectMessages } from "./messages/index.ts";
 
 /** Height of the name above a frame, in CSS pixels. */
 export const LABEL_HEIGHT = 18;
-/** The narrowest a name can be taken, in CSS pixels, however small the frame is on screen. */
-export const LABEL_MIN_WIDTH = 48;
 /** The widest a name is drawn, in CSS pixels. */
-const LABEL_MAX_WIDTH = 320;
+export const LABEL_MAX_WIDTH = 320;
 /** Font size of the name, in CSS pixels. */
 const LABEL_FONT = 12;
-/** Frames narrower than this on screen get no name drawn (their outline only). */
-const LABEL_MIN_FRAME = 24;
+/** Space around the name's text, in CSS pixels, on each side. */
+const LABEL_PAD = 4;
+/** Frames narrower than this on screen get no name (their outline only). */
+export const LABEL_MIN_FRAME = 24;
 
 const OUTLINE = "rgba(100, 116, 139, 0.7)";
 const NAME = "#475569";
@@ -45,7 +54,7 @@ export const UNNAMED_FRAME: Label = messageKey(selectMessages, "frame.unnamed");
 /** A frame shown on screen. */
 export interface ShownFrame {
   readonly id: ElementId;
-  /** Its box in root space. */
+  /** Its box in root space, as the user sees it (a drag's preview included). */
   readonly box: Rect;
 }
 
@@ -53,180 +62,123 @@ function intersects(a: Rect, b: Rect): boolean {
   return a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h;
 }
 
-/**
- * Whether an element is a frame, read straight from its record: much
- * cheaper than resolving it, for the many elements that are not frames.
- */
-function frameTest(doc: Y.Doc): (id: ElementId) => boolean {
-  const elements = roots(doc).elements;
-  return (id) => {
-    const record = elements.get(id) as { get?(key: string): unknown } | undefined;
-    return typeof record?.get === "function" && record.get("type") === FRAME_TYPE;
-  };
+function holds(r: Rect, p: Point): boolean {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 }
 
+// ---------------------------------------------------------------------------
+// The frames on screen
+// ---------------------------------------------------------------------------
+
 /** The frames of a document, found again after each change of it. */
-const frameIds = new WeakMap<Y.Doc, { ids: ElementId[] | null }>();
+const frameIdsOf = new WeakMap<Y.Doc, { ids: ElementId[] | null }>();
 
 function framesOf(doc: Y.Doc): readonly ElementId[] {
-  let entry = frameIds.get(doc);
+  let entry = frameIdsOf.get(doc);
   if (entry === undefined) {
     const made = { ids: null as ElementId[] | null };
     doc.on("update", () => {
       made.ids = null;
     });
-    frameIds.set(doc, made);
+    frameIdsOf.set(doc, made);
     entry = made;
   }
   if (entry.ids === null) {
-    const frame = frameTest(doc);
-    entry.ids = [...roots(doc).elements.keys()].filter(frame);
+    const elements = roots(doc).elements;
+    entry.ids = [...elements.keys()].filter((id) => {
+      const record = elements.get(id) as { get?(key: string): unknown } | undefined;
+      return typeof record?.get === "function" && record.get("type") === FRAME_TYPE;
+    });
   }
   return entry.ids;
 }
 
 /**
- * The frames the user sees on screen, nested ones included: outer frames
- * before the frames inside them, so a name drawn later (and found first) is
- * that of the inner frame. Drawn in every frame on screen, so the frames are
- * found by their type alone, once per change of the document, and only they
- * are resolved.
+ * The frames the user sees on screen, nested ones included, in drawing
+ * order, back to front: a name drawn later (and found first) is that of the
+ * frame on top. Their boxes follow a drag's preview (the offset of a frame's
+ * own space is where its corner is). Drawn in every frame on screen, so the
+ * frames are found by their type alone, once per change of the document.
  */
 export function shownFrames(services: EditorServices, doc: Y.Doc): ShownFrame[] {
   const r = new Resolver(yLookup(doc));
   const view = services.camera.viewport();
-  const out: { id: ElementId; box: Rect; depth: number }[] = [];
+  const out: { id: ElementId; box: Rect; path: string[] }[] = [];
   for (const id of framesOf(doc)) {
     if (r.isGone(id)) continue;
     const size = r.get(id)?.size;
     if (size === undefined) continue;
-    const at = r.worldOrigin(id);
+    const at = services.scene.offset(id, null);
     const box = { x: at.x, y: at.y, w: size.w, h: size.h };
     if (!intersects(box, view)) continue;
-    let depth = 0;
-    for (let p = r.logicalParentOf(id); p !== null; p = r.logicalParentOf(p)) depth++;
-    out.push({ id, box, depth });
+    out.push({ id, box, path: drawingPath(r, id) });
   }
-  out.sort((a, b) => a.depth - b.depth);
+  out.sort((a, b) => {
+    const n = Math.min(a.path.length, b.path.length);
+    for (let i = 0; i < n; i++)
+      if (a.path[i] !== b.path[i]) return a.path[i]! < b.path[i]! ? -1 : 1;
+    return a.path.length - b.path.length;
+  });
   return out.map(({ id, box }) => ({ id, box }));
 }
 
-/** Where a frame's name can be taken, in root space, at a zoom (CSS pixels per unit). */
-export function labelRect(box: Rect, zoom: number): Rect {
-  const h = LABEL_HEIGHT / zoom;
-  return { x: box.x, y: box.y - h, w: Math.max(box.w, LABEL_MIN_WIDTH / zoom), h };
+// ---------------------------------------------------------------------------
+// Names
+// ---------------------------------------------------------------------------
+
+/**
+ * How wide each frame's name was drawn, in CSS pixels (the size of the text
+ * does not change with the zoom), so that a name is taken exactly where it is
+ * drawn. Until a name has been drawn, its width is estimated.
+ */
+const nameWidths = new WeakMap<Y.Doc, Map<ElementId, { name: string; px: number }>>();
+
+function widthsOf(doc: Y.Doc): Map<ElementId, { name: string; px: number }> {
+  let map = nameWidths.get(doc);
+  if (map === undefined) nameWidths.set(doc, (map = new Map()));
+  return map;
 }
 
-/** The frontmost frame whose name is under a point (root space), or null. */
+/**
+ * Where a frame's name is drawn and taken, in root space, at a zoom (CSS
+ * pixels per unit); null where no name is drawn (a frame under
+ * LABEL_MIN_FRAME pixels wide). It is the name's text with a little room,
+ * never wider than the frame on screen nor LABEL_MAX_WIDTH.
+ */
+export function labelRect(box: Rect, zoom: number, textPx: number): Rect | null {
+  const frame = box.w * zoom;
+  if (frame < LABEL_MIN_FRAME) return null;
+  const px = Math.min(textPx + 2 * LABEL_PAD, frame, LABEL_MAX_WIDTH);
+  const h = LABEL_HEIGHT / zoom;
+  return { x: box.x, y: box.y - h, w: px / zoom, h };
+}
+
+/**
+ * The width of a frame's name in CSS pixels: as last drawn for the name the
+ * frame has now, or estimated before it is drawn (a frame without a name
+ * shows a short word).
+ */
+function textWidth(doc: Y.Doc, id: ElementId): number {
+  const raw = elementName(doc, id);
+  const known = widthsOf(doc).get(id);
+  if (known !== undefined && known.name === raw) return known.px;
+  return Math.max([...raw].length, 6) * LABEL_FONT * 0.6;
+}
+
+/**
+ * The frame whose drawn name is under a point (root space), or null: the
+ * one drawn last, on top, where names overlap.
+ */
 export function labelAt(
+  doc: Y.Doc,
   frames: readonly ShownFrame[],
   point: Point,
   zoom: number,
 ): ElementId | null {
   for (let i = frames.length - 1; i >= 0; i--) {
-    const rect = labelRect(frames[i]!.box, zoom);
-    if (
-      point.x >= rect.x &&
-      point.x <= rect.x + rect.w &&
-      point.y >= rect.y &&
-      point.y <= rect.y + rect.h
-    )
-      return frames[i]!.id;
-  }
-  return null;
-}
-
-/** A frame elements can be dropped into, with the frames inside it, back to front. */
-export interface DropFrame {
-  readonly id: ElementId;
-  readonly box: Rect;
-  readonly inside: readonly DropFrame[];
-}
-
-/**
- * The frames elements being dragged can be dropped into: open (seen, not
- * locked) and not among the dragged elements or inside them, nested as in
- * the document, back to front. Worked out once when a drag starts, since the
- * document does not change during it.
- */
-export function dropFrames(doc: Y.Doc, exclude: readonly ElementId[]): DropFrame[] {
-  const r = new Resolver(yLookup(doc));
-  const skip = (id: ElementId): boolean => exclude.some((e) => r.isWithin(id, e));
-  // The frames alone, found by type, each under the frame it is seen in:
-  // walking every container's children would read every element.
-  interface Node {
-    readonly id: ElementId;
-    readonly box: Rect;
-    readonly parent: ElementId | null;
-    /** Its stacking among its siblings: the slot it is in, then its own place. */
-    readonly key: readonly string[];
-    readonly inside: Node[];
-  }
-  const nodes = new Map<ElementId, Node>();
-  for (const id of framesOf(doc)) {
-    if (r.isGone(id) || r.isLocked(id) || skip(id)) continue;
-    const envelope = r.get(id);
-    if (envelope?.size === undefined) continue;
-    const at = r.worldOrigin(id);
-    const parent = r.logicalParentOf(id);
-    const holder = r.slotIn(id, parent) ?? id;
-    const key = [r.get(holder)?.order ?? "", holder, envelope.order, id];
-    const box = { x: at.x, y: at.y, w: envelope.size.w, h: envelope.size.h };
-    nodes.set(id, { id, box, parent, key, inside: [] });
-  }
-  const top: Node[] = [];
-  for (const node of nodes.values()) {
-    // A frame inside one that cannot be dropped into is not offered either.
-    if (node.parent === null) top.push(node);
-    else nodes.get(node.parent)?.inside.push(node);
-  }
-  const compare = (a: Node, b: Node): number => {
-    for (let i = 0; i < a.key.length; i++) {
-      const x = a.key[i]!;
-      const y = b.key[i]!;
-      if (x !== y) return x < y ? -1 : 1;
-    }
-    return 0;
-  };
-  const sorted = (list: Node[]): DropFrame[] =>
-    list.sort(compare).map((n) => ({ id: n.id, box: n.box, inside: sorted(n.inside) }));
-  return sorted(top);
-}
-
-/**
- * Where a drop at a point (root space) puts elements: the innermost frame
- * that holds the point, into the frontmost at each level, or null for the
- * canvas. The same rule as the basics' `frameAt`.
- */
-export function dropTarget(frames: readonly DropFrame[], point: Point): ElementId | null {
-  let found: ElementId | null = null;
-  let level = frames;
-  for (;;) {
-    let next: DropFrame | null = null;
-    for (let i = level.length - 1; i >= 0; i--) {
-      const { box } = level[i]!;
-      if (
-        point.x >= box.x &&
-        point.x <= box.x + box.w &&
-        point.y >= box.y &&
-        point.y <= box.y + box.h
-      ) {
-        next = level[i]!;
-        break;
-      }
-    }
-    if (next === null) return found;
-    found = next.id;
-    level = next.inside;
-  }
-}
-
-/** A frame's box in root space, from the drop frames. */
-export function dropBox(frames: readonly DropFrame[], id: ElementId): Rect | null {
-  for (const frame of frames) {
-    if (frame.id === id) return frame.box;
-    const inner = dropBox(frame.inside, id);
-    if (inner !== null) return inner;
+    const { id, box } = frames[i]!;
+    const rect = labelRect(box, zoom, textWidth(doc, id));
+    if (rect !== null && holds(rect, point)) return id;
   }
   return null;
 }
@@ -238,13 +190,13 @@ export const frameOverlay: OverlayDefinition = {
   draw(ctx, context: CommandContext) {
     const zoom = context.services.camera.get().zoom;
     const px = 1 / zoom;
+    const widths = widthsOf(context.doc);
     for (const { id, box } of shownFrames(context.services, context.doc)) {
       const outline = ctx.createPath();
       outline.rect(box.x, box.y, box.w, box.h);
       ctx.stroke(outline, { color: OUTLINE, width: px, dash: [4 * px, 3 * px] });
-      if (box.w * zoom < LABEL_MIN_FRAME) continue;
-      const name = elementName(context.doc, id) || ctx.t(UNNAMED_FRAME);
-      const width = Math.min(Math.max(box.w * zoom, LABEL_MIN_WIDTH), LABEL_MAX_WIDTH);
+      const raw = elementName(context.doc, id);
+      const name = raw || ctx.t(UNNAMED_FRAME);
       const text = ctx.layoutText(
         name,
         {
@@ -253,23 +205,105 @@ export const frameOverlay: OverlayDefinition = {
           color: NAME,
           align: "left",
         },
-        width * px,
+        LABEL_MAX_WIDTH * px,
       );
-      // One line: what does not fit the width is cut off.
-      ctx.withClip(labelPath(ctx, box, zoom, width), () =>
-        ctx.drawText(text, box.x, box.y - (LABEL_HEIGHT - 3) * px),
+      widths.set(id, { name: raw, px: text.width * zoom });
+      const rect = labelRect(box, zoom, text.width * zoom);
+      if (rect === null) continue;
+      // One line: what does not fit is cut off at the frame's width.
+      ctx.withClip(rectPath(ctx, rect), () =>
+        ctx.drawText(text, box.x + LABEL_PAD * px, box.y - (LABEL_HEIGHT - 3) * px),
       );
     }
   },
 };
 
-function labelPath(
-  ctx: Parameters<OverlayDefinition["draw"]>[0],
-  box: Rect,
-  zoom: number,
-  width: number,
-) {
+function rectPath(ctx: DrawContext, r: Rect) {
   const path = ctx.createPath();
-  path.rect(box.x, box.y - LABEL_HEIGHT / zoom, width / zoom, LABEL_HEIGHT / zoom);
+  path.rect(r.x, r.y, r.w, r.h);
   return path;
+}
+
+// ---------------------------------------------------------------------------
+// Where a drag of the selection puts it
+// ---------------------------------------------------------------------------
+
+/** What a drag needs to decide where the selection goes, worked out when it starts. */
+export interface DropPlan {
+  /** The frames it can go into, in drawing order (the document does not change during a drag). */
+  readonly frames: readonly OpenFrame[];
+  /**
+   * The frame the dragged elements are in (through groups, which they stay
+   * in), or null for the canvas; undefined when they are in different ones.
+   */
+  readonly from: ElementId | null | undefined;
+  /** The centre of the selection's bounds when the drag started (root space). */
+  readonly start: Point;
+  /** The frame on top at the start centre. */
+  readonly startTarget: ElementId | null;
+  /**
+   * How far the centre must move, without crossing a frame's edge, before a
+   * selection that started outside its frame's box leaves it: half its larger
+   * side, at least a few pixels.
+   */
+  readonly reach: number;
+}
+
+/** The frame an element is in, through groups (null for the canvas). */
+function frameOf(r: Resolver, id: ElementId): ElementId | null {
+  let at = r.logicalParentOf(id);
+  while (at !== null && !isFrame(r, at)) at = r.logicalParentOf(at);
+  return at;
+}
+
+export function planDrop(
+  doc: Y.Doc,
+  moving: readonly ElementId[],
+  bounds: Rect,
+  minReach: number,
+): DropPlan {
+  const r = new Resolver(yLookup(doc));
+  const frames = openFrames(doc, r, framesOf(doc), moving);
+  const containers = new Set(moving.map((id) => frameOf(r, id)));
+  const from = containers.size === 1 ? [...containers][0]! : undefined;
+  const start = { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
+  return {
+    frames,
+    from,
+    start,
+    startTarget: topFrameAt(frames, start),
+    reach: Math.max(Math.max(bounds.w, bounds.h) / 2, minReach),
+  };
+}
+
+/**
+ * Where the selection goes when let go with its centre at `centre` (root
+ * space, the offset it is dragged by, Shift's lock included): a frame, null
+ * for the canvas, or undefined where it stays in the containers it is in.
+ * It stays unless it clearly lands elsewhere:
+ *
+ * 1. Where the frame on top under the centre is the frame it is in, it stays.
+ * 2. Where the centre has crossed a frame's edge since the drag started (the
+ *    frame on top under it is another than at the start), it goes into the
+ *    frame on top there, or out to the canvas.
+ * 3. Otherwise (it started with its centre outside its frame, over the same
+ *    frame or canvas as now), it stays, until the centre has moved `reach`
+ *    away from where it started.
+ *
+ * A selection in different frames stays unless its centre crosses a frame's
+ * edge. Groups are passed through: elements in a group in the frame stay in
+ * the group while the frame is the one under them.
+ */
+export function dropInto(plan: DropPlan, centre: Point): ElementId | null | undefined {
+  const target = topFrameAt(plan.frames, centre);
+  if (plan.from === undefined) return target !== plan.startTarget ? target : undefined;
+  if (target === plan.from) return undefined;
+  if (target !== plan.startTarget) return target;
+  const moved = Math.hypot(centre.x - plan.start.x, centre.y - plan.start.y);
+  return moved >= plan.reach ? target : undefined;
+}
+
+/** A frame's box in root space, from a drop plan. */
+export function dropBox(plan: DropPlan, id: ElementId): Rect | null {
+  return plan.frames.find((f) => f.id === id)?.box ?? null;
 }

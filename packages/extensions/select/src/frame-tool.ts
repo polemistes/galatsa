@@ -58,7 +58,7 @@ export function startFrameTool(session: ToolSession): ToolHandler {
       : rectOf(start.world, event.world);
     if (!(world.w > 0) || !(world.h > 0)) return;
     const r = new Resolver(yLookup(session.environment().doc));
-    const parent = frameAt(r, start.world);
+    const parent = frameAt(session.environment().doc, start.world);
     // The rectangle in the parent's space, and what lies wholly inside it there.
     const shift = services().scene.offset(null, parent);
     const rect = { x: world.x + shift.x, y: world.y + shift.y, w: world.w, h: world.h };
