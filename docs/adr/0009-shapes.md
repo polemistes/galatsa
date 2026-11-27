@@ -1,4 +1,4 @@
-# 0008 Shapes
+# 0009 Shapes
 
 - Status: proposed
 - Date: 2026-11-27
@@ -21,7 +21,7 @@ Galatsa needs shapes: rectangle, ellipse, triangle, line, arrow, brackets and sp
 | Growth          | Values a later version may write (a new option, a wider range) are kept and read without a report; new kinds of paint go in new keys.       |
 | Unknown kinds   | A kind from a newer version is kept and drawn as a placeholder; its style can still be changed and its keys survive.                        |
 | Tool            | One per kind; a drag shows the shape in its real style in the overlay and ends in one insert command, one undo step.                        |
-| Fields          | New optional `applies(model)` on fields (interface 1.2), so one type can offer corner rounding only to kinds with corners.                  |
+| Fields          | New optional `applies(model)` on fields (interface 1.3), so one type can offer corner rounding only to kinds with corners.                  |
 | Screenshots     | A gallery page draws every kind in the same generated cases; a Playwright test compares each kind's canvas pixels with a stored picture.    |
 
 ### One element type with a kind
@@ -106,11 +106,11 @@ A gesture (0005 section 4.7) is not used: there is no element to preview yet.
 
 Fields: fill (closed kinds only), outline colour and outline width in quick mode; corner rounding (kinds with corners), opacity and the kind in advanced mode, as 0005 section 3.9 already describes for the sketch; then one field per parameter, for the kinds that list it. The properties panel is built later; the fields are defined and tested.
 
-`FieldDefinition` gained an optional method, `applies(source)`: the editor shows a field for a selection only when it applies to every selected element. An additive change, so the interface version is now 1.2 (0005 updated).
+`FieldDefinition` gained an optional method, `applies(source)`: the editor shows a field for a selection only when it applies to every selected element. An additive change, so the interface version is now 1.3 (0005 updated).
 
 ### Changes outside the package
 
-- **`@galatsa/extension-api`**: `FieldDefinition.applies`, interface 1.2.
+- **`@galatsa/extension-api`**: `FieldDefinition.applies`, interface 1.3.
 - **`@galatsa/core`**: `setData` and `setExt` could not write `null` (a valid data value), because `checked` takes a null result for a failed read; they now wrap the value. Found by setting the fill to none; tested.
 - **`@galatsa/extension-basics`** exports `canTarget`, `canTargetAll` and `isOpenContainer`, the rules of which elements a command may act on and which containers take new elements, so other extensions' commands follow the same rules. The shape extension's editing part depends on it.
 - **The development page** (`apps/web`) loads the shape extension instead of the sketch's shapes (the other sketches stay). The sample scene's shapes are of the new type, the benchmark's lines as turned lines, and a kind the extension does not have yet (the triangle) as a rectangle until it is added. Its stored copy has a new key, so a copy of the old type is not opened again.

@@ -7,7 +7,7 @@
 // bounds, the drawing tool and its preview, the properties and the commands)
 // is the framework's, and works from this description. Adding a shape is
 // adding one file that exports a ShapeKind, and listing it in kinds/index.ts.
-// See README.md for the recipe and docs/adr/0008-shapes.md for the reasons.
+// See README.md for the recipe and docs/adr/0009-shapes.md for the reasons.
 
 import type { Label, Path, Shortcut, StrokeStyle } from "@galatsa/extension-api";
 import { messageKey } from "@galatsa/extension-api";

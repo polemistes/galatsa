@@ -3,19 +3,13 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * A port from the environment, or the default. Several working copies can then
- * run their tests at the same time without one using another's dev server
- * (which an existing server on the port would be, outside CI).
+ * Port of the bench harness dev server (bench/index.html). E2E_BENCH_PORT and
+ * E2E_WEB_PORT change the ports, so that test runs in several checkouts at once
+ * do not reuse each other's servers.
  */
-function port(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isInteger(value) && value > 0 ? value : fallback;
-}
-
-/** Port of the bench harness dev server (bench/index.html); E2E_BENCH_PORT sets another. */
-export const BENCH_PORT = port("E2E_BENCH_PORT", 5199);
-/** Port of the web app's dev server (apps/web, the editor's development page); E2E_WEB_PORT sets another. */
-export const WEB_PORT = port("E2E_WEB_PORT", 5198);
+export const BENCH_PORT = Number(process.env["E2E_BENCH_PORT"] ?? 5199);
+/** Port of the web app's dev server (apps/web, the editor's development page). */
+export const WEB_PORT = Number(process.env["E2E_WEB_PORT"] ?? 5198);
 
 /**
  * Playwright's WebKit needs the libraries of the Ubuntu release it was built
@@ -67,18 +61,24 @@ export default defineConfig({
       use: { ...devices["Desktop Firefox"] },
     },
     {
-      // The editor's development page in Firefox and WebKit too, with the shape
-      // tool and (Firefox only, until WebKit pictures are stored) the shape
-      // screenshots. Chromium runs them in the "chromium" project above.
+      // The editor's development page, the selection tool and the shape tools
+      // in Firefox and WebKit too, and (Firefox only, until WebKit pictures are
+      // stored) the shape screenshots. Chromium runs them in the "chromium"
+      // project above.
       name: "editor-firefox",
-      testMatch: ["editor.spec.ts", "shape-tool.spec.ts", "shapes-visual.spec.ts"],
+      testMatch: [
+        "editor.spec.ts",
+        "selection.spec.ts",
+        "shape-tool.spec.ts",
+        "shapes-visual.spec.ts",
+      ],
       use: { ...devices["Desktop Firefox"] },
     },
     ...(WEBKIT
       ? [
           {
             name: "editor-webkit",
-            testMatch: ["editor.spec.ts", "shape-tool.spec.ts"],
+            testMatch: ["editor.spec.ts", "selection.spec.ts", "shape-tool.spec.ts"],
             use: { ...devices["Desktop Safari"] },
           },
         ]

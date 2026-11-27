@@ -81,7 +81,10 @@ export function elementFacts(
 }
 
 /** What the user may do to an element of the document. */
-export function capabilitiesOf(ctx: CommandContext, id: ElementId): ElementCapabilities {
+export function capabilitiesOf(
+  ctx: Pick<CommandContext, "doc" | "extensions">,
+  id: ElementId,
+): ElementCapabilities {
   return ctx.extensions.capabilities(elementFacts(ctx, id));
 }
 
@@ -204,7 +207,7 @@ export class LockedError extends Error {
  * container.
  */
 export function planScale(
-  ctx: CommandContext,
+  ctx: Pick<CommandContext, "doc" | "extensions">,
   ids: readonly ElementId[],
   anchor: Point,
   factor: number,

@@ -132,7 +132,7 @@ test("the shape tools draw with the mouse, with a preview, as one undo step", as
   await page.mouse.up();
   await expect.poll(async () => (await probe(page)).shapes.length).toBe(1);
   const made = await probe(page);
-  expect(made.tool).toBe("examples.select/select");
+  expect(made.tool).toBe("galatsa.select/select");
   expect(made.undoSteps).toBe(start.undoSteps + 1);
   expect(made.shapes[0]).toMatchObject({ kind: "rect", rot: 0 });
   expect(made.shapes[0]!.w * made.zoom).toBeCloseTo(box.width * 0.2, 0);

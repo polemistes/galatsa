@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The development page: starts the editor with the shape extension and the
-// example extensions (whose shape sketch the shape extension replaces), on the
+// text and image sketches, on the
 // sample scene (the benchmark scene as a document) or, with `?scene=empty`, on
 // a new empty document.
 //
@@ -12,7 +12,7 @@
 // `window.galatsaDev` gives tests and the browser console the running program.
 
 import { EditorApp, renderEditorUi, type Editor } from "@galatsa/editor";
-import { exampleExtensions } from "@galatsa/extension-examples";
+import { imageExtension, textExtension } from "@galatsa/extension-examples";
 import { shapeExtension } from "@galatsa/extension-shape";
 import { browserLocaleStorage, createI18n, isLocale } from "@galatsa/i18n";
 import { webMessages } from "./messages/index.ts";
@@ -46,13 +46,13 @@ let app: EditorApp | null = null;
 const ready = EditorApp.start({
   root,
   i18n,
-  extensions: [
-    shapeExtension,
-    ...exampleExtensions.filter((e) => e.view.id !== "examples.shape"),
-  ],
+  // The shape extension and the text and image sketches. The shape and
+  // selection sketches are left out: the shape extension replaces the one, and
+  // the editor's own selection tool (galatsa.select) is loaded first and is
+  // the default tool.
+  extensions: [textExtension, shapeExtension, imageExtension],
   createWorker: () =>
     new Worker(new URL("./checkpoint-worker.ts", import.meta.url), { type: "module" }),
-  defaultTool: "examples.select/select",
   mode: params.get("mode") === "advanced" ? "advanced" : "quick",
   renderUi: renderEditorUi,
   onEditor: (editor) => {

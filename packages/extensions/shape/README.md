@@ -1,6 +1,6 @@
 # @galatsa/extension-shape
 
-The built-in shape extension (`galatsa.shape`). Every shape is an element of one type, `galatsa.shape/shape`, whose data names its **kind** (rectangle, ellipse, line, ...). A kind is a small object that draws an outline in the element's box; everything else comes from the framework in this package. The reasons are in [docs/adr/0008-shapes.md](../../../docs/adr/0008-shapes.md).
+The built-in shape extension (`galatsa.shape`). Every shape is an element of one type, `galatsa.shape/shape`, whose data names its **kind** (rectangle, ellipse, line, ...). A kind is a small object that draws an outline in the element's box; everything else comes from the framework in this package. The reasons are in [docs/adr/0009-shapes.md](../../../docs/adr/0009-shapes.md).
 
 | File                | What it is                                                                                        |
 | ------------------- | ------------------------------------------------------------------------------------------------- |

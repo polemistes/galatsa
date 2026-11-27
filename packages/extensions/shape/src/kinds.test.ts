@@ -313,6 +313,8 @@ describe.each(ALL.map((kind) => [kind.kind, kind] as const))(
       const session: ToolSession = {
         environment: t2.env,
         run: (id, args) => t2.host.commands.execute(id, t2.env(), args),
+        isEnabled: (id, args) => t2.host.commands.isEnabled(id, t2.env(), args),
+        extensions: t2.host,
         gesture: () => t2.host.commands.beginGesture(t2.env()),
         scale: () => 1,
         requestOverlay: () => (overlays += 1),

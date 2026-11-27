@@ -173,23 +173,45 @@ export interface RotateArgs {
   readonly rot?: number;
   /** Or an angle to add to each element's rotation. */
   readonly by?: number;
+  /**
+   * With `by`: a point in root space the elements turn about together (the
+   * centre of a selection), so each element's centre moves around it as well.
+   * Without it, each element turns about its own centre.
+   */
+  readonly about?: Point;
 }
 
 const TURN = 2 * Math.PI;
 
-function readRotate(ctx: CommandContext, args: unknown): RotateArgs | undefined {
+interface RotatePlan {
+  readonly ids: readonly ElementId[];
+  readonly rot?: number;
+  readonly by?: number;
+  readonly about?: Point;
+}
+
+function readRotate(ctx: CommandContext, args: unknown): RotatePlan | undefined {
   const ids = readIds(args);
-  const { rot, by } = (args ?? {}) as Partial<RotateArgs>;
+  const { rot, by, about } = (args ?? {}) as Partial<RotateArgs>;
   if (ids === undefined || (rot === undefined) === (by === undefined)) return undefined;
   if (!optionalNumber(rot) || !optionalNumber(by)) return undefined;
+  if (about !== undefined) {
+    if (by === undefined || about === null || typeof about !== "object") return undefined;
+    if (!isFiniteNumber(about.x) || !isFiniteNumber(about.y)) return undefined;
+  }
   if (!canTargetAll(ctx, resolve(ctx), ids, { rotate: true })) return undefined;
-  return rot !== undefined ? { ids, rot } : { ids, by: by! };
+  if (rot !== undefined) return { ids, rot };
+  return about === undefined
+    ? { ids, by: by! }
+    : { ids, by: by!, about: { x: about.x, y: about.y } };
 }
 
 /**
- * Rotates each element about the centre of its own box: to `rot`, or by `by`.
- * The stored angle is kept in [0, 2π). Refused for frames and groups, for
- * types that forbid rotating, and for elements of a missing extension.
+ * Rotates each element about the centre of its own box: to `rot`, or by `by`;
+ * with `about`, by `by` about that point, so the elements turn together. The
+ * stored angle is kept in [0, 2π). Refused for frames and groups, for types
+ * that forbid rotating, and for elements of a missing extension. One
+ * transaction.
  */
 export const rotate = defineCommand<RotateArgs, void>({
   name: "rotate",
@@ -200,13 +222,33 @@ export const rotate = defineCommand<RotateArgs, void>({
   execute(ctx, args) {
     const a = readRotate(ctx, args) ?? refuse("rotate");
     const r = resolve(ctx);
+    const cos = Math.cos(a.by ?? 0);
+    const sin = Math.sin(a.by ?? 0);
+    // An element inside another one being turned keeps its own place in the
+    // container (containers only translate, and groups and frames cannot be
+    // turned), so each id is turned on its own.
     const turns = a.ids.map((id) => {
       const angle = a.rot ?? (r.get(id)?.rot ?? 0) + a.by!;
       const turned = ((angle % TURN) + TURN) % TURN;
-      return { id, rot: turned < TURN ? turned : 0 };
+      let at: Point | undefined;
+      if (a.about !== undefined) {
+        const size = r.get(id)?.size ?? { w: 0, h: 0 };
+        const origin = r.worldOrigin(id);
+        const cx = origin.x + size.w / 2 - a.about.x;
+        const cy = origin.y + size.h / 2 - a.about.y;
+        // The centre turned about the point; the same shift in every space.
+        const dx = a.about.x + cx * cos - cy * sin - (origin.x + size.w / 2);
+        const dy = a.about.y + cx * sin + cy * cos - (origin.y + size.h / 2);
+        const local = r.localPosition(id);
+        at = { x: local.x + dx, y: local.y + dy };
+      }
+      return { id, rot: turned < TURN ? turned : 0, at };
     });
     edit(ctx.doc, () => {
-      for (const { id, rot } of turns) rotateElement(ctx.doc, id, rot);
+      for (const { id, rot, at } of turns) {
+        if (at !== undefined) moveElement(ctx.doc, id, at.x, at.y);
+        rotateElement(ctx.doc, id, rot);
+      }
     });
   },
 });

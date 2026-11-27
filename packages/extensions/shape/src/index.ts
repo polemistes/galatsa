@@ -3,7 +3,7 @@
 // @galatsa/extension-shape: the shape extension with its editing part. Shapes
 // are described as data (kind.ts); the kinds are in kinds/. A viewer imports
 // "@galatsa/extension-shape/view", which has only the viewing part. See
-// docs/adr/0008-shapes.md and README.md.
+// docs/adr/0009-shapes.md and README.md.
 
 import { Resolver, type ElementData, type ElementId, type Json } from "@galatsa/core";
 import { dataMap, edit, moveElement, resizeElement, yLookup } from "@galatsa/core/ydoc";

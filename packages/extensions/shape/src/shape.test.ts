@@ -841,6 +841,8 @@ function tool(t: ReturnType<typeof setup>, kind: string) {
   const session: ToolSession = {
     environment: t.env,
     run: (id, args) => t.host.commands.execute(id, t.env(), args),
+    isEnabled: (id, args) => t.host.commands.isEnabled(id, t.env(), args),
+    extensions: t.host,
     gesture: () => t.host.commands.beginGesture(t.env()),
     scale: () => 1,
     requestOverlay: () => (log.overlays += 1),
