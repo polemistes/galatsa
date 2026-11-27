@@ -364,12 +364,18 @@ importers:
       '@galatsa/extension-select':
         specifier: workspace:*
         version: link:../extensions/select
+      '@galatsa/extension-transitions':
+        specifier: workspace:*
+        version: link:../extensions/transitions
       '@galatsa/format':
         specifier: workspace:*
         version: link:../format
       '@galatsa/i18n':
         specifier: workspace:*
         version: link:../i18n
+      '@galatsa/player':
+        specifier: workspace:*
+        version: link:../player
       '@galatsa/renderer':
         specifier: workspace:*
         version: link:../renderer
@@ -623,6 +629,28 @@ importers:
         version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
 
   packages/i18n:
+    devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
+
+  packages/player:
+    dependencies:
+      '@galatsa/core':
+        specifier: workspace:*
+        version: link:../core
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../extension-api
+      '@galatsa/extension-transitions':
+        specifier: workspace:*
+        version: link:../extensions/transitions
+      '@galatsa/i18n':
+        specifier: workspace:*
+        version: link:../i18n
+      '@galatsa/renderer':
+        specifier: workspace:*
+        version: link:../renderer
     devDependencies:
       vitest:
         specifier: 'catalog:'

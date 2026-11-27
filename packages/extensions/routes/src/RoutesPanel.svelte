@@ -353,6 +353,12 @@
     {/if}
   {/if}
   <div class="row">
+    <button
+      type="button"
+      class="present"
+      title={t("galatsa.routes:present.hint")}
+      onclick={() => run(ROUTES.presentFromHere)}>{t("galatsa.routes:present")}</button
+    >
     <button type="button" onclick={act(() => run(ROUTES.addRoute))}
       >{t("galatsa.routes:add-route")}</button
     >

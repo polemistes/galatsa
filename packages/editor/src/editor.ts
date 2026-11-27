@@ -35,6 +35,7 @@ import type {
   EditorHost,
   EditorServices,
   Modifiers,
+  PresentationRequest,
   ToolKeyEvent,
   SpacePoint,
   ToolPointerEvent,
@@ -143,6 +144,15 @@ export interface PointerInput {
 export type EditorChange = StateChange | "tool" | "cursor" | "notice" | "text";
 
 /**
+ * Presents the editor's document: starts the player and returns how to end
+ * it, or null if it could not start. Calls `ended` when the presentation is over.
+ */
+export type Presenter = (
+  request: PresentationRequest,
+  ended: () => void,
+) => { exit(): void } | null;
+
+/**
  * A message the interface shows: a message key (of the editor's bundle, or an
  * extension's label, as importers give them), with its values.
  */
@@ -206,6 +216,8 @@ export class Editor {
   readonly live: LiveResolver;
   readonly scene: EditorScene;
   readonly renderer: CanvasRenderer;
+  /** What a second view of the document (the player, when presenting) draws images from. */
+  readonly viewing: { readonly images?: ImageSource; readonly assets: SceneAssets };
   readonly services: EditorServices;
   readonly tools: ToolController;
   /** In-place text editing (text-edit.ts, docs/adr/0011). */
@@ -222,6 +234,8 @@ export class Editor {
     null;
   #notice: EditorNotice | null = null;
   #focusCanvas: (() => void) | null = null;
+  #presenter: Presenter | null = null;
+  #presenting: { exit(): void } | null = null;
   readonly #assetStore: AssetStore | null;
   readonly #adoptAssets: ((ids: readonly AssetId[]) => Promise<AssetId[]>) | null;
   /** Imports still running (`importFiles`). */
@@ -279,10 +293,13 @@ export class Editor {
       mode: options.mode ?? "quick",
       openPanels: new Set(),
     };
-    this.renderer = new CanvasRenderer({
-      host: options.host,
+    this.viewing = {
       ...(options.images ? { images: options.images } : {}),
       assets: options.assets ?? documentAssets(doc),
+    };
+    this.renderer = new CanvasRenderer({
+      host: options.host,
+      ...this.viewing,
       t: (label: Label, values?: MessageValues) => this.i18n.t(label, values),
       background: options.background ?? "#ffffff",
       onInvalidate: () => this.invalidate(),
@@ -328,6 +345,8 @@ export class Editor {
         previewChanged: () => this.#view.follow(),
         toScreen: (point) => this.#view.toScreen(point),
         notify: (message, values) => this.#notify(message, values),
+        present: (request) => this.present(request),
+        presenting: () => this.#presenting !== null,
         text: {
           current: () => this.textEdit.current(),
           select: (index, length) => this.textEdit.select(index, length),
@@ -1127,6 +1146,41 @@ export class Editor {
     this.#focusCanvas = focus;
   }
 
+  // -------------------------------------------------------------------------
+  // Presenting (present.ts, docs/adr/0015)
+  // -------------------------------------------------------------------------
+
+  /**
+   * How the document is presented: set by the page that mounts the canvas
+   * (`mountEditor`), since presenting needs the page. Null: nowhere to present.
+   */
+  setPresenter(presenter: Presenter | null): void {
+    this.#presenter = presenter;
+  }
+
+  /** The presentation that is running (what the presenter returned), or null. */
+  get presenting(): { exit(): void } | null {
+    return this.#presenting;
+  }
+
+  /** Starts presenting the document; false if it did not start. */
+  present(request: PresentationRequest = {}): boolean {
+    if (this.#disposed || this.#presenter === null || this.#presenting !== null)
+      return false;
+    // A gesture left open would be drawn in the presentation and committed after it.
+    this.pointerCancel();
+    // Told once that it is over, also if that happens before the presenter returns.
+    let over = false;
+    const running = this.#presenter(request, () => {
+      if (over) return;
+      over = true;
+      this.#presenting = null;
+      this.focusCanvas();
+    });
+    this.#presenting = over ? null : running;
+    return this.#presenting !== null;
+  }
+
   /**
    * Runs a command the way a shortcut or a menu does: with the selection as
    * its elements (`{ ids }`); paste takes what the last copy gave, and copy
@@ -1184,6 +1238,7 @@ export class Editor {
   dispose(): void {
     if (this.#disposed) return;
     this.textEdit.end();
+    this.#presenting?.exit();
     this.tools.dispose();
     this.#disposed = true;
     this.#cancelFrame?.();

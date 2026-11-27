@@ -133,6 +133,27 @@ export interface OverlayService {
   invalidate(): void;
 }
 
+/** What to present (docs/adr/0015-presentation.md). */
+export interface PresentationRequest {
+  /** The route to play; without it, the first route. */
+  readonly route?: string | null;
+  /** The step of the route to start at (0 is the first); without it, the first. */
+  readonly step?: number;
+}
+
+/** Presenting the open document (docs/adr/0015-presentation.md). */
+export interface PresentationService {
+  /**
+   * Starts presenting the document: the editor hands it to the player, which
+   * takes the screen until the presenter ends it. Full screen is only given
+   * to a call made from a key press or a click. Returns false when it did not
+   * start (the editor has nowhere to present, or is presenting already).
+   */
+  start(request?: PresentationRequest): boolean;
+  /** Whether a presentation is running. */
+  active(): boolean;
+}
+
 /**
  * The editor's services. An open interface: the editor may add more by
  * declaration merging,
@@ -153,4 +174,5 @@ export interface EditorServices {
   readonly preview: PreviewService;
   readonly overlays: OverlayService;
   readonly notices: NoticeService;
+  readonly presentation: PresentationService;
 }

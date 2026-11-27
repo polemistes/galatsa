@@ -74,6 +74,8 @@ export const ROUTES = {
   copyStopForRoute: `${ROUTES_EXTENSION}/copy-stop-for-route`,
   setVisibility: `${ROUTES_EXTENSION}/set-visibility`,
   goToStop: `${ROUTES_EXTENSION}/go-to-stop`,
+  present: `${ROUTES_EXTENSION}/present`,
+  presentFromHere: `${ROUTES_EXTENSION}/present-from-here`,
 } as const;
 
 /** The panel's id. */
@@ -590,6 +592,68 @@ const goToStop = defineCommand<GoToArgs, void>({
   },
 });
 
+export interface PresentArgs {
+  /** The route to play; default the route shown. */
+  readonly route?: RouteId | null;
+  /** The step to start at (0 is the first); default the first. */
+  readonly step?: number;
+}
+
+function presentArgsOk(ctx: CommandContext, args: unknown): boolean {
+  if (args === undefined || args === null) return true;
+  if (!isRecord(args)) return false;
+  const { route, step } = args;
+  if (route !== undefined && route !== null && !isLiveRoute(readRoutes(ctx.doc), route))
+    return false;
+  return step === undefined || (typeof step === "number" && Number.isInteger(step));
+}
+
+/** Starts presenting through the editor's service; a command that could not start says so. */
+function present(ctx: CommandContext, route: RouteId | null, step: number): void {
+  const started = ctx.services.presentation.start({ route, step });
+  if (!started) throw new Error("The presentation did not start");
+}
+
+/**
+ * Presents the document: the route shown (or the given one), from its first
+ * stop (or the given step). Not an undo step. A document without stops is
+ * presented too, with the camera free (docs/adr/0015).
+ */
+const presentCommand = defineCommand<PresentArgs | undefined, void>({
+  name: "present",
+  label: label("present"),
+  // F5, as in other presentation programs. Not Alt with a letter (E10).
+  shortcuts: ["F5"],
+  quick: true,
+  toolbar: "panels",
+  icon: "present",
+  undoable: false,
+  enabled: (ctx, args) => presentArgsOk(ctx, args) && !ctx.services.presentation.active(),
+  execute(ctx, args) {
+    const route = args?.route ?? currentChoice(ctx.doc, readRoutes(ctx.doc)).route;
+    present(ctx, route, args?.step ?? 0);
+  },
+});
+
+/** Presents the route shown from the chosen step (from the start when none is chosen). */
+const presentFromHere = defineCommand<unknown, void>({
+  name: "present-from-here",
+  label: label("present-from-here"),
+  shortcuts: ["Shift+F5"],
+  quick: true,
+  undoable: false,
+  enabled: (ctx) => !ctx.services.presentation.active(),
+  execute(ctx) {
+    const sr = readRoutes(ctx.doc);
+    const choice = currentChoice(ctx.doc, sr);
+    const step =
+      choice.route === null || choice.entry === null
+        ? -1
+        : routeSteps(sr, choice.route).findIndex((s) => s.entry === choice.entry);
+    present(ctx, choice.route, Math.max(step, 0));
+  },
+});
+
 const togglePanel = defineCommand<unknown, void>({
   name: "toggle-panel",
   label: label("toggle-panel"),
@@ -626,6 +690,8 @@ export const routesCommands = [
   copyStopForRoute,
   setVisibilityCommand,
   goToStop,
+  presentCommand,
+  presentFromHere,
 ];
 
 /** The commands by id, so the panel can ask whether one would run (as a menu greys out entries). */

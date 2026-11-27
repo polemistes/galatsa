@@ -7,7 +7,12 @@ import { Resolver, type CameraView, type ElementId, type Rect } from "@galatsa/c
 import { yLookup } from "@galatsa/core/ydoc";
 import type * as Y from "yjs";
 import type { Mode } from "./ids.ts";
-import type { EditorServices, PreviewChanges, TextEditingState } from "./services.ts";
+import type {
+  EditorServices,
+  PresentationRequest,
+  PreviewChanges,
+  TextEditingState,
+} from "./services.ts";
 
 /** Editor services for tests, with their state open for inspection. */
 export interface TestServices extends EditorServices {
@@ -25,6 +30,8 @@ export interface TestServices extends EditorServices {
     overlayRequests: number;
     /** Messages shown to the user, oldest first. */
     notices: { message: string; values?: unknown }[];
+    /** Presentations that were started, oldest first. */
+    presentations: PresentationRequest[];
   };
 }
 
@@ -62,6 +69,7 @@ export function createTestServices(
     previews: 0,
     overlayRequests: 0,
     notices: [],
+    presentations: [],
   };
   const resolver = (): Resolver => new Resolver(yLookup(doc));
   const selectable = (r: Resolver): ElementId[] =>
@@ -174,6 +182,13 @@ export function createTestServices(
       show: (message, values) => {
         state.notices.push(values === undefined ? { message } : { message, values });
       },
+    },
+    presentation: {
+      start: (request) => {
+        state.presentations.push(request ?? {});
+        return true;
+      },
+      active: () => false,
     },
   };
 }

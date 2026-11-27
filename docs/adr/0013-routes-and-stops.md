@@ -38,6 +38,8 @@ Every command that changes the document is one undo step (0005 section 4.2), nam
 | `copy-stop-for-route`   | `{ route, entry }`         | Gives one visit a stop of its own: a copy (view, name, notes, show/hide changes, transition, ext) takes the visit's place (0001 section 6.3).                 |
 | `set-visibility`        | `{ stop, ids?, action }`   | Shows (`"show"`) or hides (`"hide"`) the elements (default: the selection) on arrival at the stop, or takes the change away (`null`).                         |
 | `go-to-stop`            | `{ stop, animate? }`       | Moves the camera to show the stop, along its transition (below). Not a step.                                                                                  |
+| `present`               | `{ route?, step? }`        | Presents the document with the player: the route shown from its first stop (`F5`). Not a step. See [0015](0015-presentation.md).                              |
+| `present-from-here`     | none                       | Presents the route shown from the chosen step (`Shift+F5`). Not a step.                                                                                       |
 
 Some details:
 
@@ -75,7 +77,7 @@ The editor remembers, per document, the route shown and the chosen step (`state.
 
 `go-to-stop` fits the stop's region to the screen, keeping its proportions and centring it, with no margin (0001 section 6.2), within the zoom range. It moves the camera along the stop's transition: the built-in transitions of `@galatsa/extension-transitions` (fly, fade, cut; a stop that names none, or a transition this extension does not know, flies), planned from the view now to the goal in the space of their lowest common ancestor so a jump deep in nested frames stays exact, and wrapped in `guardComfort` with the comfort settings from the defaults and the system's "reduce motion" setting. The editor has no cross-fade, so a fade shows the start until half way and then the goal; with reduced motion the guard makes every transition such a fade, so the camera never shows other views. The jump runs on animation frames after the command has returned (it changes only the camera) and stops as soon as anything else moves the camera, so the user can always take over; a new jump stops the last. In the end the camera is set to the goal exactly.
 
-This is for finding one's way while editing. Presenting (fullscreen, next and previous, free roaming, `breakOff`) is the player's.
+This is for finding one's way while editing. Presenting (fullscreen, next and previous, free roaming, `breakOff`) is the player's ([0015](0015-presentation.md)); the commands `present` and `present-from-here` and the panel's "Presenter" button start it.
 
 ### Changes outside the extension
 

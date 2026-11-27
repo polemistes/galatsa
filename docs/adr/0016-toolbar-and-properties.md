@@ -32,7 +32,7 @@ Two optional members are added to `CommandDefinition`:
 - `toolbar?: string`: the toolbar group the command has a button in. Commands with the same group stand together; groups come in the order their first command was registered. `registry.toolbar(mode)` lists them per mode; the editor asks `visible` and `isEnabled` when it draws.
 - `active?(ctx): boolean`: for a command that switches something on and off, whether it is on now, so its button shows as pressed. `registry.isActive(id, env)` asks it, and is false for a command without it or one that throws.
 
-Both are additive. The orders for this work were to leave `EXTENSION_API_VERSION` at 1.6 and say so here: two other packages were changing the interface at the same time, and the numbers are given out when they are merged. An extension that sets these members needs the editor of this change; at merge they belong to the next minor version.
+Both are additive and raised the interface to 1.7, together with the presentation service of [0015](0015-presentation.md).
 
 **For the packages built at the same time:** the command that puts a frame around the selection (F1-07) and the command that starts presenting (F1-14) get their buttons by setting `toolbar` (and `icon: "frame"`, `icon: "present"`, which the icon set has). The end-to-end test makes a frame through a toolbar button whose command id contains `frame`, when there is one.
 

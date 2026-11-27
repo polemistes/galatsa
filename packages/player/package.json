@@ -1,0 +1,40 @@
+{
+  "name": "@galatsa/player",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Presentation mode of Galatsa: plays routes of stops through the camera with the viewing parts of the extensions only, with free roaming, a laser pointer and presenter notes. The editor presents with it, and the standalone player is the same code",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@galatsa/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./core": {
+      "@galatsa/source": "./src/core.ts",
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*",
+    "@galatsa/extension-api": "workspace:*",
+    "@galatsa/extension-transitions": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "@galatsa/renderer": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "catalog:"
+  }
+}
