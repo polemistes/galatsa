@@ -51,7 +51,7 @@ import {
   type Ordered,
   type RandomSource,
 } from "../model/order.ts";
-import { Resolver, type Point } from "../model/resolve.ts";
+import type { Resolver, Point } from "../model/resolve.ts";
 import { isRemoved } from "../model/route.ts";
 import {
   FRAME_TYPE,
@@ -90,9 +90,9 @@ import {
   writeElement,
   writeRoute,
   writeStop,
-  yLookup,
 } from "./snapshot.ts";
 import { trackWork } from "./track.ts";
+import { currentResolver } from "./live.ts";
 
 /** Options shared by all operations. */
 export interface OpOptions {
@@ -222,8 +222,14 @@ function elementMap(doc: Y.Doc, id: ElementId): Y.Map<unknown> {
   return map;
 }
 
+/**
+ * The document as resolved now: its live resolver when it has one that is up to
+ * date, otherwise a new Resolver. Inside an operation's own transaction, the
+ * live resolver goes on showing the state from before the transaction, so a
+ * resolver taken before the first write is not disturbed by the writes.
+ */
 function resolver(doc: Y.Doc): Resolver {
-  return new Resolver(yLookup(doc));
+  return currentResolver(doc);
 }
 
 /**
