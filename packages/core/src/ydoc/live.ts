@@ -142,7 +142,17 @@ const lives = new WeakMap<Y.Doc, DocumentResolver>();
  * document as that whole batch left it, and its subscribers are called once
  * for the batch, with what the batch changed, and see that state. Until then,
  * inside a transaction and in Yjs observers and 'afterTransaction' listeners,
- * it shows the document as the previous batch left it.
+ * what it has resolved is as the previous batch left it; it reads records
+ * through the document, though, so a record it has not read yet (`get`, `ids`)
+ * already shows the new content.
+ *
+ * An operation of several batches (`addElement` creates a record in one and
+ * restores it in the next) calls the subscribers between them, in the middle
+ * of the operation. A subscriber may write to the document: what it writes is
+ * taken in after it, and the subscribers are called again. Later subscribers
+ * of the same round may then read a record (`get`) that is not yet in any
+ * report or children list. A subscriber that writes every time it is called
+ * never lets this end, as with a Yjs observer that does.
  *
  * Errors: a subscriber that throws does not keep the other subscribers, other
  * listeners of the document, or the code that made the change from going on;
@@ -158,9 +168,11 @@ export function liveResolver(doc: Y.Doc): LiveResolver {
 }
 
 /**
- * Stops keeping the document's live resolver up to date and forgets it. The
- * resolver goes on answering for the state it last took in; a later call of
- * `liveResolver` creates a new one.
+ * Stops keeping the document's live resolver up to date and forgets it; a
+ * later call of `liveResolver` creates a new one. The detached resolver keeps
+ * what it had resolved, but it reads the document itself as it is now: a
+ * record it never read (`get`, `ids`) shows its current content. Do not go on
+ * reading it.
  */
 export function detachLiveResolver(doc: Y.Doc): void {
   const live = lives.get(doc);

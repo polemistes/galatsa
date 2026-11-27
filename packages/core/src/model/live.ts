@@ -163,6 +163,8 @@ export class LiveResolver extends Resolver {
   readonly #errorHandlers = new Set<(error: unknown) => void>();
   /** Set when the cache was found inconsistent: everything is resolved anew. */
   #broken = false;
+  /** What the update running now wrote into `#resolved`, added and removed. */
+  #committed: { added: Set<ElementId>; removed: Set<ElementId> } | null = null;
 
   constructor(lookup: ElementLookup) {
     super(lookup);
@@ -244,9 +246,12 @@ export class LiveResolver extends Resolver {
    * as if every record had changed, tells the subscribers, and returns the
    * changes: every element now in the document as added or changed, every one
    * gone from it as removed. For recovering when a change could not be taken in.
+   * `before` is the set of elements the subscribers last heard of; by default,
+   * those the live resolver holds.
    */
-  protected rebuild(): ResolvedChanges {
-    const before = new Set(this.#resolved.keys());
+  protected rebuild(
+    before: ReadonlySet<ElementId> = new Set(this.#resolved.keys()),
+  ): ResolvedChanges {
     this.#resolveAll();
     const added = new Set<ElementId>();
     const changed = new Set<ElementId>();
@@ -278,17 +283,18 @@ export class LiveResolver extends Resolver {
     touched: ReadonlyMap<ElementId, ReadonlySet<string> | null>,
   ): ResolvedChanges {
     let changes: ResolvedChanges;
+    this.#committed = null;
     try {
       changes = this.#update(touched);
     } catch (error) {
       this.#reportError(error);
-      return this.rebuild();
+      return this.rebuild(this.#knownBefore());
     }
     if (this.#broken) {
       this.#reportError(
         new Error("The live resolver found its cache inconsistent and resolved anew"),
       );
-      return this.rebuild();
+      return this.rebuild(this.#knownBefore());
     }
     const count =
       changes.added.size +
@@ -402,6 +408,8 @@ export class LiveResolver extends Resolver {
     const removed = new Set<ElementId>();
     const containers = new Set<ElementId | null>();
     let drawOrder = false;
+    // A walk up meets each element at most once: elements before and after.
+    const limit = this.#resolved.size + dirty.size + 1;
     const resolvedBefore = (id: ElementId) => this.#resolved.get(id);
     const resolvedAfter = (id: ElementId) =>
       now.has(id) ? now.get(id) : this.#resolved.get(id);
@@ -418,17 +426,24 @@ export class LiveResolver extends Resolver {
         before?.gone !== after?.gone ||
         before?.order !== after?.order
       ) {
-        if (before) this.#addHolders(id, containers, resolvedBefore);
-        if (after) this.#addHolders(id, containers, resolvedAfter);
+        if (before) this.#addHolders(id, containers, resolvedBefore, limit);
+        if (after) this.#addHolders(id, containers, resolvedAfter, limit);
       }
       if (before?.gone !== after?.gone) drawOrder = true;
     }
+    if (this.#broken) return { added, changed, removed, containers, drawOrder };
+    const committed = (this.#committed = { added: new Set(), removed: new Set() });
     for (const id of dirty) {
       const before = this.#resolved.get(id);
       const after = now.get(id);
       this.#index(id, before, after);
-      if (after) this.#resolved.set(id, after);
-      else this.#resolved.delete(id);
+      if (after) {
+        if (!before) committed.added.add(id);
+        this.#resolved.set(id, after);
+      } else if (before) {
+        committed.removed.add(id);
+        this.#resolved.delete(id);
+      }
     }
     if (containers.size > 0) drawOrder = true;
     for (const container of containers) {
@@ -436,6 +451,20 @@ export class LiveResolver extends Resolver {
         changed.add(container);
     }
     return { added, changed, removed, containers, drawOrder };
+  }
+
+  /**
+   * The elements the subscribers knew of before the update running now: what
+   * the live resolver holds, without what the update added and with what it
+   * removed.
+   */
+  #knownBefore(): Set<ElementId> {
+    const known = new Set(this.#resolved.keys());
+    if (this.#committed) {
+      for (const id of this.#committed.added) known.delete(id);
+      for (const id of this.#committed.removed) known.add(id);
+    }
+    return known;
   }
 
   /** The given elements and everything below them by `children`. */
@@ -478,10 +507,11 @@ export class LiveResolver extends Resolver {
     id: ElementId,
     containers: Set<ElementId | null>,
     resolved: (id: ElementId) => Resolved | undefined,
+    limit: number,
   ): void {
     let at = resolved(id)?.parent ?? null;
     for (let steps = 0; ; steps++) {
-      if (steps > this.#resolved.size) {
+      if (steps > limit) {
         this.#broken = true;
         return;
       }
@@ -502,8 +532,11 @@ export class LiveResolver extends Resolver {
     dirty: Set<ElementId>,
     resolved: (id: ElementId) => Resolved | undefined,
   ): void {
+    // A walk up meets each element at most once: elements before and after
+    // (all elements new in this change are in `dirty`).
+    const limit = this.#resolved.size + dirty.size + 1;
     for (let at = resolved(id)?.parent ?? null, steps = 0; at !== null; steps++) {
-      if (steps > this.#resolved.size) {
+      if (steps > limit) {
         this.#broken = true;
         return;
       }

@@ -12,7 +12,8 @@ import * as Y from "yjs";
 import type { ResolvedChanges } from "../model/live.ts";
 import { Resolver } from "../model/resolve.ts";
 import { FRAME_TYPE, type DocumentSnapshot, type Element } from "../model/types.ts";
-import { tidyUp } from "./document-ops.ts";
+import { copyFragment } from "../model/fragment.ts";
+import { pasteFragment, tidyUp } from "./document-ops.ts";
 import { watchLiveResolver } from "./live-check.ts";
 import { currentResolver, detachLiveResolver, liveResolver } from "./live.ts";
 import * as ops from "./ops.ts";
@@ -334,6 +335,167 @@ describe("the live resolver and transactions that others start or break", () => 
     expect(currentResolver(doc)).toBe(live);
     expect(live.worldOrigin("X")).toEqual({ x: 60, y: 60 });
     ops.addElement(doc, shape("Y", null));
+    expect(live.get("Y")).toBeDefined();
+  });
+});
+
+describe("the live resolver and batches that bring many elements at once", () => {
+  /** The live resolver's errors; there must be none. */
+  function errorsOf(doc: Y.Doc): unknown[] {
+    const errors: unknown[] = [];
+    stops.push(liveResolver(doc).onError((e) => errors.push(String(e))));
+    return errors;
+  }
+
+  it("takes in nested groups that arrive together", () => {
+    const start = base();
+    const a = forkDoc(start, 1);
+    const b = forkDoc(start, 2);
+    const errors = errorsOf(a);
+    watch(a, "a");
+    ops.addElement(b, shape("S", null));
+    const g1 = ops.group(b, ["S"]);
+    const g2 = ops.group(b, [g1]);
+    ops.group(b, [g2]);
+    syncInto(a, b);
+    expect(errors).toEqual([]);
+  });
+
+  it("loads a document with a deleted frame into an empty document it watches", () => {
+    const source = base();
+    ops.addElement(source, frame("F", 100));
+    ops.addElement(source, shape("X", "F"));
+    ops.deleteElements(source, ["F"]);
+    const doc = new Y.Doc();
+    const errors = errorsOf(doc);
+    const reports = watch(doc, "doc");
+    Y.applyUpdate(doc, Y.encodeStateAsUpdate(source));
+    expect(errors).toEqual([]);
+    expect(union(reports, "added")).toEqual(new Set(["F", "X"]));
+  });
+
+  it("reports pasted elements as added", () => {
+    const source = base();
+    ops.addElement(source, frame("F", 100));
+    ops.addElement(source, frame("G", 10, "F"));
+    ops.addElement(source, shape("X", "G"));
+    const fragment = copyFragment(toSnapshot(source), ["F"]);
+    const doc = base();
+    ops.addElement(doc, shape("A", null));
+    const errors = errorsOf(doc);
+    watch(doc, "doc");
+    const live = liveResolver(doc);
+    // One drawing per element: created on added, updated on changed, dropped
+    // on removed.
+    const drawn = new Set<string>(live.drawOrder());
+    const updatedButNeverCreated: string[] = [];
+    stops.push(
+      live.subscribe((c) => {
+        for (const id of c.added) drawn.add(id);
+        for (const id of c.changed) if (!drawn.has(id)) updatedButNeverCreated.push(id);
+        for (const id of c.removed) drawn.delete(id);
+      }),
+    );
+    pasteFragment(doc, fragment);
+    expect(errors).toEqual([]);
+    expect(updatedButNeverCreated).toEqual([]);
+    expect([...drawn].sort()).toEqual([...live.ids()].sort());
+  });
+
+  it("reports a record removed in the same batch that brings others", () => {
+    // Another replica removes X's record (as tidy up does) and adds a deleted
+    // frame F holding G holding S; both arrive in one update.
+    const doc = base();
+    ops.addElement(doc, shape("X", null));
+    const other = forkDoc(doc, 2);
+    ops.addElement(other, frame("F", 100));
+    ops.addElement(other, frame("G", 10, "F"));
+    ops.addElement(other, shape("S", "G"));
+    ops.deleteElements(other, ["F"]);
+    other.transact(() => other.getMap("elements").delete("X"));
+    const errors = errorsOf(doc);
+    const reports = watch(doc, "doc");
+    syncInto(doc, other);
+    expect(errors).toEqual([]);
+    expect(reports.length).toBe(1);
+    expect([...reports[0]!.removed]).toEqual(["X"]);
+    expect(reports[0]!.added).toEqual(new Set(["F", "G", "S"]));
+  });
+
+  for (const how of ["an error", "an inconsistent cache"] as const) {
+    it(`reports relative to what it last reported when it resolves anew after ${how}`, () => {
+      // Something goes wrong inside the update, which then resolves anew; the
+      // report is still relative to the state before the batch: X's record is
+      // gone, F is new.
+      const doc = base();
+      ops.addElement(doc, shape("X", null));
+      const other = forkDoc(doc, 2);
+      ops.addElement(other, frame("F", 100));
+      other.transact(() => other.getMap("elements").delete("X"));
+      const live = liveResolver(doc);
+      const errors: unknown[] = [];
+      stops.push(live.onError((e) => errors.push(String(e))));
+      const reports: ResolvedChanges[] = [];
+      stops.push(live.subscribe((c) => reports.push(c)));
+      // The first time F is resolved inside the update, fail once, or find the
+      // cache inconsistent (as a walk that met a loop does).
+      const inner = live as unknown as {
+        worldOrigin: (id: string) => unknown;
+        cacheLoop: () => void;
+      };
+      const worldOrigin = inner.worldOrigin.bind(live);
+      let once = true;
+      inner.worldOrigin = (id) => {
+        if (once && id === "F") {
+          once = false;
+          if (how === "an error") throw new Error("fails once");
+          inner.cacheLoop();
+        }
+        return worldOrigin(id);
+      };
+      syncInto(doc, other);
+      expect(errors.length).toBe(1);
+      expect(reports.length).toBe(1);
+      expect([...reports[0]!.removed]).toEqual(["X"]);
+      expect([...reports[0]!.added]).toEqual(["F"]);
+      expect(live.get("F")).toBeDefined();
+    });
+  }
+
+  it("is right after a subscriber writes, also in the middle of an operation", () => {
+    // addElement is two batches (created removed, then restored): subscribers
+    // run between them. A subscriber that writes is taken in after it.
+    const doc = base();
+    ops.addElement(doc, frame("F", 100));
+    const live = liveResolver(doc);
+    const errors = errorsOf(doc);
+    let reacted = false;
+    stops.push(
+      live.subscribe((c) => {
+        if (!reacted && c.added.has("X")) {
+          reacted = true;
+          ops.addElement(doc, shape("Y", "F"));
+          ops.moveElement(doc, "X", 50, 50);
+        }
+      }),
+    );
+    ops.addElement(doc, shape("X", "F"));
+    const fresh = new Resolver(yLookup(doc));
+    expect(live.children("F")).toEqual(fresh.children("F"));
+    expect(live.worldOrigin("X")).toEqual(fresh.worldOrigin("X"));
+    expect(errors).toEqual([]);
+  });
+
+  it("after detaching, reads records it never took in as they are now", () => {
+    const doc = base();
+    ops.addElement(doc, shape("X", null));
+    const live = liveResolver(doc);
+    detachLiveResolver(doc);
+    ops.addElement(doc, shape("Y", null));
+    ops.resizeElement(doc, "X", 77, 77);
+    // What it had resolved stays; what it never read is read from the document.
+    expect(live.children(null)).toEqual(["X"]);
+    expect(live.get("X")?.size).toEqual({ w: 5, h: 5 });
     expect(live.get("Y")).toBeDefined();
   });
 });

@@ -97,6 +97,9 @@ class Ascent {
 }
 
 const LOOPED: unique symbol = Symbol("looped");
+
+/** Steps a walk down the tree takes before it starts to look for a loop. */
+const WALK_CHECK = 10_000;
 const NO_CHILDREN: readonly ElementId[] = [];
 const NO_REVISION: Revision = {};
 
@@ -244,6 +247,27 @@ export class Resolver {
     const second = walk(new Ascent());
     if (second === LOOPED) throw new Error("The resolved parents form a loop");
     return second;
+  }
+
+  /**
+   * Runs something that walks down the tree. If the walk finds a loop (only an
+   * inconsistent cache can make one), `cacheLoop` is told, and it runs once
+   * more from the start.
+   */
+  #descend<T>(run: () => T): T {
+    try {
+      return run();
+    } catch (error) {
+      if (error !== LOOPED) throw error;
+    }
+    this.cacheLoop();
+    try {
+      return run();
+    } catch (error) {
+      if (error === LOOPED)
+        throw new Error("The resolved children form a loop", { cause: error });
+      throw error;
+    }
   }
 
   /**
@@ -421,8 +445,17 @@ export class Resolver {
    */
   #walk(root: ElementId | null, enter: (id: ElementId) => boolean): void {
     const stack = [...this.children(root)].reverse();
+    // Each element is met once; one met twice means the cached children loop
+    // (see Ascent). Checked only in walks of many steps.
+    let steps = 0;
+    let seen: Set<ElementId> | null = null;
     while (stack.length > 0) {
       const id = stack.pop()!;
+      if (++steps > WALK_CHECK) {
+        seen ??= new Set();
+        if (seen.has(id)) throw LOOPED;
+        seen.add(id);
+      }
       if (!enter(id)) continue;
       const children = this.children(id);
       for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]!);
@@ -431,6 +464,10 @@ export class Resolver {
 
   /** Everything inside `id` in the effective tree, in drawing order. */
   descendants(id: ElementId): ElementId[] {
+    return this.#descend(() => this.#descendants(id));
+  }
+
+  #descendants(id: ElementId): ElementId[] {
     const out: ElementId[] = [];
     this.#walk(id, (child) => {
       out.push(child);
@@ -512,6 +549,10 @@ export class Resolver {
    * survived an earlier removal), so they and what is inside them are left out.
    */
   coverage(id: ElementId): { [id: ElementId]: string } {
+    return this.#descend(() => this.#coverage(id));
+  }
+
+  #coverage(id: ElementId): { [id: ElementId]: string } {
     const seen: { [id: ElementId]: string } = {};
     const list = (element: ElementId) => {
       Object.defineProperty(seen, element, {
@@ -579,6 +620,10 @@ export class Resolver {
    * containers are replaced by their own visible children, in their slot.
    */
   logicalChildren(parent: ElementId | null): ElementId[] {
+    return this.#descend(() => this.#logicalChildren(parent));
+  }
+
+  #logicalChildren(parent: ElementId | null): ElementId[] {
     const out: ElementId[] = [];
     this.#walk(parent, (id) => {
       if (this.isGone(id)) return this.isContainer(id);
@@ -627,6 +672,10 @@ export class Resolver {
    * children of gone containers are, in the container's slot.
    */
   drawOrder(): ElementId[] {
+    return this.#descend(() => this.#drawOrder());
+  }
+
+  #drawOrder(): ElementId[] {
     const out: ElementId[] = [];
     this.#walk(null, (id) => {
       if (!this.isGone(id)) out.push(id);
@@ -775,6 +824,10 @@ export class Resolver {
    * Gone elements other than containers have no bounds.
    */
   boundsIn(id: ElementId, space: ElementId | null): Rect | null {
+    return this.#descend(() => this.#boundsIn(id, space));
+  }
+
+  #boundsIn(id: ElementId, space: ElementId | null): Rect | null {
     if (!this.get(id)) return null;
     let result: Rect | null = null;
     const visit = (at: ElementId): boolean => {

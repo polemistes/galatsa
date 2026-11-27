@@ -45,6 +45,10 @@ class TestLive extends LiveResolver {
   rebuildNow(): ResolvedChanges {
     return this.rebuild();
   }
+  /** Drops what is cached about elements, as a defective update might. */
+  forgetOnly(ids: ReadonlySet<ElementId>): void {
+    this.forget(ids);
+  }
 }
 
 const ROOT = "(root)";
@@ -412,6 +416,22 @@ describe("the live resolver, when something goes wrong", () => {
       "Error: The live resolver found its cache inconsistent and resolved anew",
     ]);
     sameAsNew(live, lookup);
+  });
+
+  it("finds a loop in cached children instead of walking it for ever", () => {
+    // As above, but the cache is left inconsistent outside an update: X sits
+    // in the children of D, and D in the children of X.
+    const lookup = new MapLookup();
+    lookup.map.set("R", element(FRAME_TYPE, null, "a0"));
+    lookup.map.set("X", element(FRAME_TYPE, "R", "a0"));
+    lookup.map.set("D", element(FRAME_TYPE, "X", "a0"));
+    const live = new TestLive(lookup);
+    lookup.map.set("X", element(FRAME_TYPE, "D", "a0", 20));
+    live.forgetOnly(new Set(["X"]));
+    const fresh = new Resolver(lookup);
+    expect(live.descendants("X")).toEqual(fresh.descendants("X"));
+    expect(live.worldOrigin("X")).toEqual(fresh.worldOrigin("X"));
+    expect(live.drawOrder()).toEqual(fresh.drawOrder());
   });
 
   it("calls every subscriber, whatever the others do", () => {
