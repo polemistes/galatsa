@@ -3,6 +3,7 @@
 // Names and layout of a Galatsa file. Section 9.1 of
 // docs/adr/0001-document-model-and-file-format.md.
 
+import { isPreviewEntry } from "./previews.ts";
 import {
   Resolver,
   isRemoved,
@@ -22,6 +23,8 @@ export const ENTRY = {
   ydoc: "ydoc.bin",
   thumbnail: "thumbnail.png",
   assetsPrefix: "assets/",
+  /** Reduced versions of image assets, a cache (previews.ts). */
+  previewsPrefix: "previews/",
 } as const;
 
 /**
@@ -58,7 +61,8 @@ export function isKnownEntry(name: string): boolean {
     name === ENTRY.document ||
     name === ENTRY.ydoc ||
     name === ENTRY.thumbnail ||
-    (name.startsWith(ENTRY.assetsPrefix) && /^assets\/sha256-[0-9a-f]{64}$/.test(name))
+    (name.startsWith(ENTRY.assetsPrefix) && /^assets\/sha256-[0-9a-f]{64}$/.test(name)) ||
+    (name.startsWith(ENTRY.previewsPrefix) && isPreviewEntry(name))
   );
 }
 

@@ -5,3 +5,4 @@
 
 export { readGalatsaSnapshot } from "./parts.ts";
 export type { ReadOptions, SnapshotReadResult } from "./parts.ts";
+export type { AssetPreview, PreviewMediaType } from "./previews.ts";
