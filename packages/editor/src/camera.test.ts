@@ -15,8 +15,9 @@ import {
   type ElementId,
   type Point,
 } from "@galatsa/core";
-import { addElement } from "@galatsa/core/ydoc";
+import { addElement, group, reparent } from "@galatsa/core/ydoc";
 import { afterEach, describe, expect, it } from "vitest";
+import * as Y from "yjs";
 import type { Editor } from "./editor.ts";
 import { testEditor } from "./test-support.ts";
 
@@ -297,5 +298,117 @@ describe("anchoring", () => {
     editor.pan(0, 0);
     expect(editor.camera.space).toBeNull();
     expect(onScreen(editor, null, { x: 1100, y: 1100 })).toEqual(before);
+  });
+});
+
+describe("the anchor's place in the tree changes", () => {
+  const far = 2 ** 40;
+  const P = { x: 50.123456, y: 50.654321 };
+
+  /** Remote edits: a second document whose updates reach the editor's. */
+  function remoteOf(editor: Editor): Y.Doc {
+    const remote = new Y.Doc();
+    Y.applyUpdate(remote, Y.encodeStateAsUpdate(editor.doc));
+    remote.on("update", (u: Uint8Array) => Y.applyUpdate(editor.doc, u, "remote"));
+    return remote;
+  }
+
+  /** A frame 2^40 from the root, anchored in and zoomed deep. */
+  function deep(zoom = 2 ** 30) {
+    const editor = setup();
+    const f = frame(editor, far, far, 100, 100);
+    editor.services.camera.set({ space: f, cx: P.x, cy: P.y, zoom });
+    expect(editor.camera.space).toBe(f);
+    return { editor, f };
+  }
+
+  /** Two frames in an outer frame 2^40 from the root, anchored in the first. */
+  function nested() {
+    const editor = setup();
+    const outer = frame(editor, far + 0.3, far + 0.7, 10000, 10000);
+    const a = frame(editor, 10.3, 10.7, 100, 100, outer);
+    const b = frame(editor, 5000.1, 10.9, 3000, 3000, outer);
+    editor.services.camera.set({ space: a, cx: P.x, cy: P.y, zoom: 2 ** 31 });
+    expect(editor.camera.space).toBe(a);
+    return { editor, outer, a, b };
+  }
+
+  it("keeps the view when the anchor frame is grouped, and when that is undone", () => {
+    const { editor, f } = deep();
+    const other = frame(editor, far + 500, far, 10, 10);
+    const before = onScreen(editor, f, P);
+    expect(editor.run("galatsa.basics/group", { ids: [f, other] }).ok).toBe(true);
+    expect(distance(onScreen(editor, f, P), before)).toBeLessThan(1);
+    editor.undo.undo();
+    expect(distance(onScreen(editor, f, P), before)).toBeLessThan(1);
+    expect(editor.camera.zoom).toBe(2 ** 30);
+  });
+
+  it("keeps the view when a group around the anchor is dissolved, and when that is undone", () => {
+    const editor = setup();
+    const outer = frame(editor, far, far, 1000, 1000);
+    const g = addElement(editor.doc, {
+      type: GROUP_TYPE,
+      parent: outer,
+      x: 100.3,
+      y: 100.7,
+      data: {},
+    });
+    const inner = frame(editor, 50.1, 50.9, 200, 200, g);
+    const p = { x: 100.123456, y: 100.654321 };
+    editor.services.camera.set({ space: inner, cx: p.x, cy: p.y, zoom: 2 ** 32 });
+    const before = onScreen(editor, inner, p);
+    expect(editor.run("galatsa.basics/ungroup", { ids: [g] }).ok).toBe(true);
+    expect(distance(onScreen(editor, inner, p), before)).toBeLessThan(1);
+    editor.undo.undo();
+    expect(distance(onScreen(editor, inner, p), before)).toBeLessThan(1);
+  });
+
+  it("keeps the view when the anchor frame is moved into another frame", () => {
+    const { editor, a, b } = nested();
+    const before = onScreen(editor, a, P);
+    expect(editor.run("galatsa.basics/reparent", { ids: [a], target: b }).ok).toBe(true);
+    expect(distance(onScreen(editor, a, P), before)).toBeLessThan(1);
+  });
+
+  it("keeps the view when someone else moves the anchor frame into another frame", () => {
+    const { editor, a, b } = nested();
+    const remote = remoteOf(editor);
+    const before = onScreen(editor, a, P);
+    reparent(remote, a, b);
+    expect(editor.live.parentOf(a)).toBe(b);
+    expect(distance(onScreen(editor, a, P), before)).toBeLessThan(1);
+  });
+
+  it("keeps the view when someone else groups the anchor frame", () => {
+    const { editor, a } = nested();
+    const remote = remoteOf(editor);
+    const before = onScreen(editor, a, P);
+    group(remote, [a]);
+    expect(editor.live.parentOf(a)).not.toBe(null);
+    expect(distance(onScreen(editor, a, P), before)).toBeLessThan(1);
+  });
+
+  it("keeps the zoom and the view when the anchor frame is deleted far out, and after undo", () => {
+    const { editor, f } = deep();
+    const before = onScreen(editor, f, P);
+    expect(editor.run("galatsa.basics/delete", { ids: [f] }).ok).toBe(true);
+    expect(editor.camera.zoom).toBe(2 ** 30);
+    expect(distance(onScreen(editor, f, P), before)).toBeLessThan(1);
+    editor.undo.undo();
+    expect(editor.camera.zoom).toBe(2 ** 30);
+    expect(distance(onScreen(editor, f, P), before)).toBeLessThan(1);
+  });
+
+  it("keeps the zoom when the anchor frame is moved very far, and the view after undo", () => {
+    const { editor, f } = deep();
+    const before = onScreen(editor, f, P);
+    expect(editor.run("galatsa.basics/move", { ids: [f], dx: -far, dy: -far }).ok).toBe(
+      true,
+    );
+    expect(editor.camera.zoom).toBe(2 ** 30);
+    editor.undo.undo();
+    expect(editor.camera.zoom).toBe(2 ** 30);
+    expect(distance(onScreen(editor, f, P), before)).toBeLessThan(1);
   });
 });

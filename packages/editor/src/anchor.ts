@@ -152,7 +152,8 @@ export class Anchoring {
     const target = this.frameAround(view.space, { x: view.cx, y: view.cy });
     if (target === view.space) return view;
     // A gone frame still has its place in the document, so the centre can be
-    // carried out of it; an id the document does not know is read as the root.
+    // carried out of it; an id the document does not know is read as the root
+    // (the camera control carries the camera out of a purged anchor first).
     const known = view.space === null || src.known(view.space);
     const o = src.offset(known ? view.space : null, target);
     const moved: CameraView = {
@@ -161,7 +162,10 @@ export class Anchoring {
       cy: view.cy + o.y,
       zoom: view.zoom,
     };
-    if (!known || (view.space !== null && src.isGone(view.space))) return moved;
+    // A deleted frame still keeps the numbers small: the camera stays in it
+    // while the budget would break elsewhere (so undoing the delete finds the
+    // view as it was).
+    if (!known) return moved;
     if (view.zoom <= maxPreciseZoom(moved.cx, moved.cy)) return moved;
     if (view.zoom <= maxPreciseZoom(view.cx, view.cy)) return view;
     return moved;
@@ -193,37 +197,67 @@ export function pin(src: AnchorSource, space: ElementId | null): Pin | null {
 }
 
 /**
- * How far the anchor moved since `pinned`, as an offset in its space; null if
- * its chain of containers is not the same any more (moved into another
- * container, or gone from the document).
+ * The camera after the document changed under its pinned anchor: in the same
+ * view of the canvas, in the anchor's space (or, if the anchor left the
+ * document, in the nearest container of its old chain that is still there).
+ *
+ * Never through root coordinates. The containers of the old chain that are
+ * still above the anchor, in the same order, split both chains into
+ * segments; for each segment the offset across it now (`offset`, through the
+ * lowest common ancestor) is compared with the sum of the old local positions
+ * across it. Each difference is a small number computed from two nearly
+ * equal ones, so it is exact; it is how far the anchor moved relative to the
+ * top of the segment. Grouping, ungrouping or moving the anchor into another
+ * container keeps its place on the canvas, so the differences are zero (up to
+ * the rounding of the operation itself) and the view stays.
  */
-export function shiftSince(src: AnchorSource, pinned: Pin): Point | null {
-  const now = pin(src, pinned.space);
-  if (now === null || now.chain.length !== pinned.chain.length) return null;
-  let x = 0;
-  let y = 0;
-  for (let i = 0; i < now.chain.length; i++) {
-    const a = pinned.chain[i]!;
-    const b = now.chain[i]!;
-    if (a.id !== b.id) return null;
-    x += b.x - a.x;
-    y += b.y - a.y;
+export function follow(src: AnchorSource, pinned: Pin, view: CameraView): CameraView {
+  const old = pinned.chain;
+  // The anchor, or the nearest container of its old chain still in the document.
+  let k = 0;
+  while (k < old.length && !src.known(old[k]!.id)) k++;
+  let cx = view.cx;
+  let cy = view.cy;
+  for (let m = 0; m < k; m++) {
+    cx += old[m]!.x;
+    cy += old[m]!.y;
   }
-  return { x, y };
-}
-
-/**
- * The camera's centre in root space from a pinned chain: the fallback when the
- * anchor's chain changed. It loses precision far from the root, which only
- * matters when the frame being looked at deep down is moved into another
- * container or purged.
- */
-export function rootCentre(pinned: Pin, view: CameraView): Point {
-  let x = view.cx;
-  let y = view.cy;
-  for (const level of pinned.chain) {
-    x += level.x;
-    y += level.y;
+  const space = k < old.length ? old[k]!.id : null;
+  if (space === null) return { space, cx, cy, zoom: view.zoom };
+  // Its chain now, and the old chain's containers that are still in it.
+  const now: (ElementId | null)[] = [];
+  const seen = new Set<ElementId>();
+  for (let at: ElementId | null = space; at !== null; at = src.parentOf(at)) {
+    if (seen.has(at)) break;
+    seen.add(at);
+    now.push(at);
   }
-  return { x, y };
+  now.push(null);
+  const kept: { old: number; id: ElementId | null }[] = [{ old: k, id: space }];
+  let last = 0;
+  for (let i = k + 1; i < old.length; i++) {
+    const at = now.indexOf(old[i]!.id);
+    if (at > last) {
+      kept.push({ old: i, id: old[i]!.id });
+      last = at;
+    }
+  }
+  kept.push({ old: old.length, id: null });
+  let sx = 0;
+  let sy = 0;
+  for (let j = 0; j + 1 < kept.length; j++) {
+    const from = kept[j]!;
+    const to = kept[j + 1]!;
+    let ox = 0;
+    let oy = 0;
+    for (let m = from.old; m < to.old; m++) {
+      ox += old[m]!.x;
+      oy += old[m]!.y;
+    }
+    const o = src.offset(from.id, to.id);
+    sx += o.x - ox;
+    sy += o.y - oy;
+  }
+  if (sx === 0 && sy === 0 && k === 0) return view;
+  return { space, cx: cx - sx, cy: cy - sy, zoom: view.zoom };
 }

@@ -8,14 +8,19 @@
 // tools; and the hand (Space held down: a drag moves the canvas instead of
 // using the tool).
 
-import { clampZoom, type CameraView, type LiveResolver, type Point } from "@galatsa/core";
+import {
+  clampZoom,
+  maxPreciseZoom,
+  type CameraView,
+  type LiveResolver,
+  type Point,
+} from "@galatsa/core";
 import type { Cursor, SpacePoint } from "@galatsa/extension-api/editing";
 import {
   Anchoring,
+  follow,
   pin,
-  rootCentre,
   sceneAnchorSource,
-  shiftSince,
   type AnchorSource,
   type Pin,
 } from "./anchor.ts";
@@ -80,10 +85,14 @@ export class CameraControl {
   }
 
   /**
-   * The anchor (or a container above it) may have moved: shift the camera by
-   * as much, so the view stays where it is on screen. If the anchor went into
-   * another container or out of the document, the camera is carried over
-   * through root space.
+   * The anchor (or a container above it) may have moved, or gone into another
+   * container: shift the camera by as much, so the view stays where it is on
+   * screen (anchor.ts, `follow`). Never through root coordinates.
+   *
+   * When following would break the precision budget wherever the view could
+   * be anchored (the frame being looked at deep down was moved very far), the
+   * camera stays with the frame instead, and its pin is kept, so undoing the
+   * move finds the view as it was, at the same zoom.
    */
   follow(): void {
     const camera = this.#host.camera();
@@ -93,20 +102,17 @@ export class CameraControl {
       this.#host.setCamera(camera);
       return;
     }
-    const shift = shiftSince(this.#src, pinned);
-    if (shift === null) {
-      const c = rootCentre(pinned, camera);
-      this.#host.setCamera({ space: null, cx: c.x, cy: c.y, zoom: camera.zoom });
-    } else if (shift.x !== 0 || shift.y !== 0) {
-      this.#host.setCamera({
-        ...camera,
-        cx: camera.cx - shift.x,
-        cy: camera.cy - shift.y,
-      });
-    } else if (this.#src.isGone(camera.space)) {
-      // A deleted frame is no anchor any more.
-      this.#host.setCamera(camera);
+    const next = follow(this.#src, pinned, camera);
+    if (next === camera) {
+      // A deleted frame anchors only while the budget breaks elsewhere.
+      if (this.#src.isGone(camera.space)) this.#host.setCamera(camera);
+      return;
     }
+    if (next.space === camera.space) {
+      const anchored = this.#anchoring.anchor(next);
+      if (anchored.zoom > maxPreciseZoom(anchored.cx, anchored.cy)) return;
+    }
+    this.#host.setCamera(next);
   }
 
   zoomAt(point: Point, factor: number): void {
