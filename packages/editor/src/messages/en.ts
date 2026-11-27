@@ -30,4 +30,13 @@ export default {
     "“{name}” is a different presentation. Nothing was discarded. Choose the file the presentation was last saved to.",
   "problems.heading": "Something was not loaded",
   "panels.label": "Panels",
+  "nav.zoomIn": "Zoom in",
+  "nav.zoomOut": "Zoom out",
+  "nav.actualSize": "Actual size",
+  "nav.viewAll": "Show everything",
+  "nav.viewSelection": "Show the selection",
+  "nav.panLeft": "Move the view left",
+  "nav.panRight": "Move the view right",
+  "nav.panUp": "Move the view up",
+  "nav.panDown": "Move the view down",
 };

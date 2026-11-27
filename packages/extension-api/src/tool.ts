@@ -21,14 +21,34 @@ export interface Modifiers {
 export interface ToolPointerEvent {
   /** Position in CSS pixels, relative to the canvas. */
   readonly screen: Point;
-  /** The same position on the canvas, in root space (world units). */
+  /**
+   * The same position on the canvas, in root space (world units). It is
+   * exact to well under a pixel wherever |world| * zoom stays within the
+   * precision budget (docs/adr/0001, section 7); deep in a frame far from the
+   * root it is not, and tools that must be exact there use `local`.
+   */
   readonly world: Point;
+  /**
+   * The same position in the camera's own space: the frame the camera is
+   * anchored in, or the root. Exact at any zoom, because the camera keeps its
+   * numbers small there. Convert it to another space with
+   * `services.scene.offset`. The editor always gives it; it is optional so
+   * that events built by hand (tests) need not.
+   */
+  readonly local?: SpacePoint;
   readonly pointerType: "mouse" | "pen" | "touch";
   /** 0 primary, 1 middle, 2 secondary, as in DOM pointer events. */
   readonly button: number;
   /** 0 to 1; 0.5 for devices without pressure. */
   readonly pressure: number;
   readonly modifiers: Modifiers;
+}
+
+/** A point in the local space of a container (or the root, `space` null). */
+export interface SpacePoint {
+  readonly space: ElementId | null;
+  readonly x: number;
+  readonly y: number;
 }
 
 export interface ToolKeyEvent {

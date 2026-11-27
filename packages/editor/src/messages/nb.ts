@@ -30,4 +30,13 @@ export default {
     "«{name}» er en annen presentasjon. Ingenting er forkastet. Velg filen presentasjonen sist ble lagret til.",
   "problems.heading": "Noe ble ikke lastet",
   "panels.label": "Paneler",
+  "nav.zoomIn": "Zoom inn",
+  "nav.zoomOut": "Zoom ut",
+  "nav.actualSize": "Faktisk størrelse",
+  "nav.viewAll": "Vis alt",
+  "nav.viewSelection": "Vis utvalget",
+  "nav.panLeft": "Flytt utsnittet til venstre",
+  "nav.panRight": "Flytt utsnittet til høyre",
+  "nav.panUp": "Flytt utsnittet opp",
+  "nav.panDown": "Flytt utsnittet ned",
 };

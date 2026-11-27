@@ -27,19 +27,28 @@ export {
 export {
   fitCamera,
   panBy,
+  screenToCamera,
   screenToWorld,
   visibleWorld,
   worldToScreen,
   zoomAbout,
+  type Placement,
   type ScreenSize,
 } from "./camera.ts";
+export {
+  NAVIGATION,
+  NAVIGATION_EXTENSION,
+  navigationExtension,
+  PAN_STEP,
+  ZOOM_STEP,
+} from "./navigation.ts";
 export { assetImages, documentAssets, type AssetReader } from "./images.ts";
 export {
   loadExtensions,
   registerEditorMessages,
   type LoadedExtensions,
 } from "./extensions.ts";
-export { mountEditor } from "./dom.ts";
+export { mountEditor, wheelZoomFactor } from "./dom.ts";
 export {
   EditorDocument,
   type DocumentOptions,

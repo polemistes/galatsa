@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Conversions between the screen (CSS pixels of the drawing area) and the
-// canvas (root space), and the few camera moves an editor needs before the
-// real camera controls (zoom towards the pointer, panning): enough to reach
-// an element and use a tool on it.
+// Camera arithmetic: conversions between the screen (CSS pixels of the
+// drawing area), the camera's own space and root space, and the camera moves
+// (zoom about a point on screen, panning, fitting a rectangle). See
+// docs/adr/0008-camera.md.
+//
+// Everything that must stay exact at deep zoom is computed in the camera's
+// own space (the frame it is anchored in), never through root coordinates.
 
 import {
+  MAX_ZOOM,
+  MIN_ZOOM,
   clampZoom,
   zoomToFit,
   type CameraView,
@@ -82,20 +87,64 @@ export function fitCamera(
   return { space, cx, cy, zoom: clampZoom(zoom > 0 ? zoom : 1, cx, cy) };
 }
 
-/** The camera zoomed by `factor` about a point on screen, which stays where it is. */
+/** A point on screen, in the camera's own space (exact at any zoom). */
+export function screenToCamera(
+  camera: CameraView,
+  size: ScreenSize,
+  point: Point,
+): Point {
+  return {
+    x: camera.cx + (point.x - size.width / 2) / camera.zoom,
+    y: camera.cy + (point.y - size.height / 2) / camera.zoom,
+  };
+}
+
+/** Anchors views (anchor.ts) and gives offsets between spaces. */
+export interface Placement {
+  /** The view anchored where it should be (not clamped). */
+  anchor(view: CameraView): CameraView;
+  offset(from: ElementId | null, to: ElementId | null): Point;
+}
+
+/**
+ * The camera zoomed by `factor` about a point on screen, which stays where it
+ * is. With `placement`, the result is anchored where its centre is and its
+ * zoom clamped to the precision budget there; the point under the pointer is
+ * carried into the new space through the old centre, so it stays exact. When
+ * the zoom cannot change (at a limit) the camera is returned as it is, so
+ * pushing against a limit does not make it drift.
+ */
 export function zoomAbout(
   camera: CameraView,
   size: ScreenSize,
   at: Point,
   factor: number,
+  placement?: Placement,
 ): CameraView {
+  if (!(factor > 0) || !Number.isFinite(factor)) return camera;
   const dx = at.x - size.width / 2;
   const dy = at.y - size.height / 2;
   // The point under the pointer, in the camera's space.
-  const px = camera.cx + dx / camera.zoom;
-  const py = camera.cy + dy / camera.zoom;
-  const zoom = clampZoom(camera.zoom * factor, px, py);
-  return { space: camera.space, cx: px - dx / zoom, cy: py - dy / zoom, zoom };
+  let px = camera.cx + dx / camera.zoom;
+  let py = camera.cy + dy / camera.zoom;
+  const wanted = Math.min(Math.max(camera.zoom * factor, MIN_ZOOM), MAX_ZOOM);
+  let space = camera.space;
+  let centre = { x: px - dx / wanted, y: py - dy / wanted };
+  if (placement !== undefined) {
+    const placed = placement.anchor({ space, cx: centre.x, cy: centre.y, zoom: wanted });
+    if (placed.space !== space) {
+      // Through the old centre: the offset between the two spaces is computed
+      // through their lowest common ancestor, and the centre is near both.
+      const o = placement.offset(space, placed.space);
+      px = camera.cx + o.x + dx / camera.zoom;
+      py = camera.cy + o.y + dy / camera.zoom;
+      space = placed.space;
+    }
+    centre = { x: placed.cx, y: placed.cy };
+  }
+  const zoom = clampZoom(wanted, centre.x, centre.y);
+  if (zoom === camera.zoom && space === camera.space) return camera;
+  return { space, cx: px - dx / zoom, cy: py - dy / zoom, zoom };
 }
 
 /** The camera moved by a distance in screen pixels (the canvas follows the pointer). */

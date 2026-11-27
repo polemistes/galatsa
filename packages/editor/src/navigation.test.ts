@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Navigation from the keyboard and with the hand: zoom in and out with
+// Ctrl/Cmd and plus or minus on Norwegian and US keyboards, actual size, show
+// everything, show the selection, the arrow keys, and Space with a drag.
+
+import { FRAME_TYPE, MAX_ZOOM, type Rect } from "@galatsa/core";
+import { SHAPE_TYPE } from "@galatsa/extension-examples";
+import { addElement } from "@galatsa/core/ydoc";
+import { afterEach, describe, expect, it } from "vitest";
+import type { Editor } from "./editor.ts";
+import { NAVIGATION } from "./navigation.ts";
+import { key, pointer, testEditor } from "./test-support.ts";
+
+const editors: Editor[] = [];
+afterEach(() => {
+  for (const editor of editors.splice(0)) editor.dispose();
+});
+
+function setup(): Editor {
+  const { editor } = testEditor();
+  editors.push(editor);
+  return editor;
+}
+
+function shape(editor: Editor, x: number, y: number, w: number, h: number): string {
+  return addElement(editor.doc, {
+    type: SHAPE_TYPE,
+    parent: null,
+    x,
+    y,
+    size: { w, h },
+    data: {},
+  });
+}
+
+/** The rectangle of root space on screen now. */
+function onScreen(editor: Editor, r: Rect): Rect {
+  const p = editor.projection(null);
+  return {
+    x: r.x * p.scale + p.ox,
+    y: r.y * p.scale + p.oy,
+    w: r.w * p.scale,
+    h: r.h * p.scale,
+  };
+}
+
+describe("navigation from the keyboard", () => {
+  it("zooms in with Ctrl and plus on a Norwegian keyboard and Ctrl and = on a US one", () => {
+    const editor = setup();
+    // Norwegian: the + key is where - is on a US keyboard.
+    const plusNo = editor.keyDown(key("+", { ctrlKey: true, code: "Minus" }));
+    expect(plusNo).toMatchObject({ kind: "command", command: NAVIGATION.zoomIn });
+    expect(editor.camera).toEqual({ space: null, cx: 500, cy: 400, zoom: 2 });
+    editor.keyDown(key("=", { ctrlKey: true, code: "Equal" }));
+    expect(editor.camera.zoom).toBe(4);
+    // The numeric keypad.
+    editor.keyDown(key("+", { ctrlKey: true, code: "NumpadAdd" }));
+    expect(editor.camera.zoom).toBe(8);
+  });
+
+  it("zooms out with Ctrl and minus on both keyboards, and back to actual size with Ctrl+0", () => {
+    const editor = setup();
+    // Norwegian: - is right of the full stop (US /).
+    const minus = editor.keyDown(key("-", { ctrlKey: true, code: "Slash" }));
+    expect(minus).toMatchObject({ kind: "command", command: NAVIGATION.zoomOut });
+    expect(editor.camera.zoom).toBe(0.5);
+    editor.keyDown(key("-", { ctrlKey: true, code: "Minus" }));
+    expect(editor.camera.zoom).toBe(0.25);
+    editor.keyDown(key("0", { ctrlKey: true, code: "Digit0" }));
+    expect(editor.camera).toEqual({ space: null, cx: 500, cy: 400, zoom: 1 });
+  });
+
+  it("uses Cmd on macOS", () => {
+    const { editor } = testEditor({ platform: { mac: true } });
+    editors.push(editor);
+    editor.keyDown(key("+", { metaKey: true, code: "Minus" }));
+    expect(editor.camera.zoom).toBe(2);
+  });
+
+  it("stops at the zoom limit", () => {
+    const editor = setup();
+    for (let i = 0; i < 80; i++)
+      editor.keyDown(key("+", { ctrlKey: true, code: "Minus" }));
+    expect(editor.camera.zoom).toBe(MAX_ZOOM);
+  });
+
+  it("shows everything with Shift+1, and the selection with Shift+2", () => {
+    const editor = setup();
+    const a = shape(editor, 3000, 2000, 100, 50);
+    shape(editor, 5000, 2600, 400, 400);
+    // Shift+1 gives ! on both keyboards: found by place.
+    const all = editor.keyDown(key("!", { shiftKey: true, code: "Digit1" }));
+    expect(all).toMatchObject({ kind: "command", command: NAVIGATION.viewAll });
+    const both = onScreen(editor, { x: 3000, y: 2000, w: 2400, h: 1000 });
+    // It fills the width (the wider side), within the margin, centred.
+    expect(both.x).toBeGreaterThan(0);
+    expect(both.x + both.w).toBeLessThan(1000);
+    expect(both.w).toBeGreaterThan(850);
+    expect(both.x + both.w / 2).toBeCloseTo(500, 6);
+    expect(both.y + both.h / 2).toBeCloseTo(400, 6);
+
+    // Nothing selected: Shift+2 does nothing (and is still taken from the browser).
+    const before = editor.camera;
+    const none = editor.keyDown(key('"', { shiftKey: true, code: "Digit2" }));
+    expect(none).toMatchObject({
+      command: NAVIGATION.viewSelection,
+      outcome: { ok: false },
+    });
+    expect(editor.camera).toEqual(before);
+
+    editor.services.selection.set([a]);
+    editor.keyDown(key('"', { shiftKey: true, code: "Digit2" }));
+    const one = onScreen(editor, { x: 3000, y: 2000, w: 100, h: 50 });
+    expect(one.w).toBeGreaterThan(850);
+    expect(one.x + one.w / 2).toBeCloseTo(500, 6);
+    expect(one.y + one.h / 2).toBeCloseTo(400, 6);
+  });
+
+  it("shows a selection deep in a frame far from the root precisely", () => {
+    const editor = setup();
+    const far = 2 ** 40;
+    const frame = addElement(editor.doc, {
+      type: FRAME_TYPE,
+      parent: null,
+      x: far,
+      y: far,
+      size: { w: 100, h: 100 },
+      data: {},
+    });
+    const tiny = addElement(editor.doc, {
+      type: SHAPE_TYPE,
+      parent: frame,
+      x: 10.5,
+      y: 20.25,
+      size: { w: 2 ** -20, h: 2 ** -21 },
+      data: {},
+    });
+    editor.services.selection.set([tiny]);
+    expect(editor.run(NAVIGATION.viewSelection).ok).toBe(true);
+    expect(editor.camera.space).toBe(frame);
+    const p = editor.projection(frame);
+    const left = 10.5 * p.scale + p.ox;
+    const right = (10.5 + 2 ** -20) * p.scale + p.ox;
+    expect((left + right) / 2).toBeCloseTo(500, 3);
+    expect(right - left).toBeGreaterThan(850);
+  });
+
+  it("pans with the arrow keys", () => {
+    const editor = setup();
+    editor.keyDown(key("ArrowRight", { code: "ArrowRight" }));
+    expect(editor.camera.cx).toBeGreaterThan(500);
+    expect(editor.camera.cy).toBe(400);
+    editor.keyDown(key("ArrowLeft", { code: "ArrowLeft" }));
+    expect(editor.camera.cx).toBe(500);
+    editor.keyDown(key("ArrowDown", { code: "ArrowDown" }));
+    expect(editor.camera.cy).toBeGreaterThan(400);
+    editor.keyDown(key("ArrowUp", { code: "ArrowUp" }));
+    expect(editor.camera.cy).toBe(400);
+  });
+});
+
+describe("Space and a drag", () => {
+  it("drags the canvas instead of using the tool while Space is held", () => {
+    const editor = setup();
+    const id = shape(editor, 100, 100, 200, 200);
+    expect(editor.keyDown(key(" ", { code: "Space" }))).toEqual({ kind: "hand" });
+    expect(editor.cursor).toBe("grab");
+    editor.pointerDown(pointer(150, 150));
+    expect(editor.cursor).toBe("grabbing");
+    editor.pointerMove(pointer(170, 140));
+    editor.pointerUp(pointer(190, 130));
+    // The canvas followed the pointer; the shape was neither selected nor moved.
+    expect(editor.camera).toEqual({ space: null, cx: 460, cy: 420, zoom: 1 });
+    expect(editor.selection).toEqual([]);
+    expect(editor.services.scene.placement(id)).toMatchObject({ x: 100, y: 100 });
+    expect(editor.keyUp(key(" ", { code: "Space" }))).toBe(true);
+    expect(editor.cursor).toBe("default");
+    // Without Space, the tool has the pointer again.
+    editor.pointerDown(pointer(150, 150));
+    editor.pointerUp(pointer(150, 150));
+    expect(editor.selection).toEqual([id]);
+  });
+
+  it("does not take Space from a drag in progress", () => {
+    const editor = setup();
+    shape(editor, 100, 100, 200, 200);
+    editor.pointerDown(pointer(150, 150));
+    editor.pointerMove(pointer(160, 150));
+    expect(editor.keyDown(key(" ", { code: "Space" }))).toBeNull();
+    editor.pointerUp(pointer(170, 150));
+  });
+});

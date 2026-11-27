@@ -5,13 +5,21 @@
 // - The primary button (left mouse button, a pen or a finger) goes to the
 //   current tool, from down to up. The middle button drags the canvas. Other
 //   buttons (the right button, which opens a context menu) are not the tool's.
-// - One pointer at a time: while one is down, other pointers are ignored (a
-//   second finger), unless the one that is down has gone without its
-//   pointerup. That happens: a context menu, another window or the system can
-//   take a press so that its pointerup never arrives. So a pointer counts as
-//   gone when the same pointer goes down again, when it moves with no button
-//   down, or when the page no longer holds its capture; the tool's drag is then
-//   cancelled, and the new press is taken.
+// - One pointer at a time for the tool: while one is down, other pointers are
+//   ignored, unless the one that is down has gone without its pointerup. That
+//   happens: a context menu, another window or the system can take a press so
+//   that its pointerup never arrives. So a pointer counts as gone when the
+//   same pointer goes down again, when it moves with no button down, or when
+//   the page no longer holds its capture; the tool's drag is then cancelled,
+//   and the new press is taken.
+// - Two fingers hold the canvas: a second touch while a finger is down cancels
+//   the tool's drag (if the first finger had started one) and from then on the
+//   two fingers pan and pinch the view. When one is lifted, the other drags the
+//   canvas until it is lifted too; a third finger is ignored. Touch pointers
+//   are not checked for a lost capture, because browsers end them with
+//   pointercancel.
+
+import type { Point } from "@galatsa/core";
 
 /** The facts of a DOM pointer event the tracker reads. */
 export interface PointerFacts {
@@ -34,6 +42,16 @@ export type PointerAction =
   /** A mouse moving with nothing down: tools may show where they would act. */
   | { readonly kind: "hover" }
   | { readonly kind: "pan"; readonly dx: number; readonly dy: number }
+  /**
+   * Two fingers moved: the point between them went from `from` to `to`
+   * (positions as given, CSS pixels) and their distance changed by `factor`.
+   */
+  | {
+      readonly kind: "pinch";
+      readonly from: Point;
+      readonly to: Point;
+      readonly factor: number;
+    }
   /** Capture this pointer (it went down and is followed). */
   | { readonly kind: "capture" }
   /** Release the capture of this pointer. */
@@ -41,17 +59,31 @@ export type PointerAction =
 
 interface Active {
   readonly id: number;
+  readonly type: string;
   readonly pan: boolean;
+  x: number;
+  y: number;
+}
+
+interface Finger {
+  readonly id: number;
   x: number;
   y: number;
 }
 
 export class PointerTracker {
   #active: Active | null = null;
+  /** The two fingers of a pinch, while there is one. */
+  #pinch: [Finger, Finger] | null = null;
 
-  /** The pointer followed now, if any. */
+  /** The pointer followed now, if any (the first finger of a pinch). */
   get active(): number | null {
-    return this.#active?.id ?? null;
+    return this.#pinch?.[0].id ?? this.#active?.id ?? null;
+  }
+
+  /** Whether two fingers hold the canvas now. */
+  get pinching(): boolean {
+    return this.#pinch !== null;
   }
 
   /** Ends the pointer followed now without its pointerup. */
@@ -70,9 +102,28 @@ export class PointerTracker {
    * capture of the pointer followed now.
    */
   down(e: PointerFacts, activeCaptured: boolean): PointerAction[] {
+    if (this.#pinch !== null) return []; // a third finger
+    const active = this.#active;
+    if (
+      active !== null &&
+      active.type === "touch" &&
+      e.type === "touch" &&
+      active.id !== e.id
+    ) {
+      // A second finger: the two hold the canvas.
+      this.#active = null;
+      this.#pinch = [
+        { id: active.id, x: active.x, y: active.y },
+        { id: e.id, x: e.x, y: e.y },
+      ];
+      return [
+        ...(active.pan ? [] : [{ kind: "tool-cancel" } as const]),
+        { kind: "capture" },
+      ];
+    }
     const out: PointerAction[] = [];
-    if (this.#active !== null) {
-      if (this.#active.id !== e.id && activeCaptured) return []; // a second finger
+    if (active !== null) {
+      if (active.id !== e.id && activeCaptured) return []; // another pointer
       out.push(...this.#drop());
     }
     const pan = e.button === 1;
@@ -81,13 +132,27 @@ export class PointerTracker {
     // send a lostpointercapture that ends the new press.
     const kept = out.filter((a) => !(a.kind === "release" && a.id === e.id));
     out.splice(0, out.length, ...kept);
-    this.#active = { id: e.id, pan, x: e.x, y: e.y };
+    this.#active = { id: e.id, type: e.type, pan, x: e.x, y: e.y };
     out.push({ kind: "capture" });
     if (!pan) out.push({ kind: "tool-down" });
     return out;
   }
 
   move(e: PointerFacts): PointerAction[] {
+    const pinch = this.#pinch;
+    if (pinch !== null) {
+      const finger = pinch.find((f) => f.id === e.id);
+      if (finger === undefined) return [];
+      const [a, b] = pinch;
+      const from = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const before = Math.hypot(a.x - b.x, a.y - b.y);
+      finger.x = e.x;
+      finger.y = e.y;
+      const to = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const after = Math.hypot(a.x - b.x, a.y - b.y);
+      const factor = before > 0 && after > 0 ? after / before : 1;
+      return [{ kind: "pinch", from, to, factor }];
+    }
     const active = this.#active;
     if (active === null) return e.type === "mouse" ? [{ kind: "hover" }] : [];
     if (e.id !== active.id) return [];
@@ -99,10 +164,23 @@ export class PointerTracker {
       active.y = e.y;
       return [{ kind: "pan", dx, dy }];
     }
+    active.x = e.x;
+    active.y = e.y;
     return [{ kind: "tool-move" }];
   }
 
+  /** One finger of a pinch ended: the other drags the canvas. */
+  #endFinger(id: number): boolean {
+    const pinch = this.#pinch;
+    if (pinch === null || !pinch.some((f) => f.id === id)) return false;
+    const rest = pinch[0].id === id ? pinch[1] : pinch[0];
+    this.#pinch = null;
+    this.#active = { id: rest.id, type: "touch", pan: true, x: rest.x, y: rest.y };
+    return true;
+  }
+
   up(e: PointerFacts): PointerAction[] {
+    if (this.#endFinger(e.id)) return [{ kind: "release", id: e.id }];
     const active = this.#active;
     if (active === null || e.id !== active.id) return [];
     this.#active = null;
@@ -114,6 +192,7 @@ export class PointerTracker {
 
   /** The pointer was cancelled or lost its capture. */
   cancel(e: Pick<PointerFacts, "id">): PointerAction[] {
+    if (this.#endFinger(e.id)) return [];
     if (this.#active === null || e.id !== this.#active.id) return [];
     const pan = this.#active.pan;
     this.#active = null;
