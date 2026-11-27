@@ -177,14 +177,17 @@ test("a presentation made with the mouse is saved as a file and opened again", a
 
   // A text: the text tool, a click on the canvas, typing; a click elsewhere ends it.
   await button("galatsa.text/text").click();
-  await page.mouse.click(at(760, 160).x, at(760, 160).y);
+  await page.mouse.click(at(500, 120).x, at(500, 120).y);
   await expect
     .poll(() =>
       page.evaluate(() => (window as unknown as Dev).galatsaDev.editor()!.textEdit.id),
     )
     .not.toBeNull();
   await page.keyboard.type("Hello");
-  await page.mouse.click(at(1100, 620).x, at(1100, 620).y);
+  await page.mouse.click(
+    at(box.width - 60, box.height - 120).x,
+    at(box.width - 60, box.height - 120).y,
+  );
   await expect
     .poll(() =>
       page.evaluate(() => (window as unknown as Dev).galatsaDev.editor()!.textEdit.id),
@@ -194,8 +197,8 @@ test("a presentation made with the mouse is saved as a file and opened again", a
   // A rectangle, drawn with the mouse; it is selected after it is made.
   await button("galatsa.shape/rect").click();
   await expect(button("galatsa.shape/rect")).toHaveAttribute("aria-pressed", "true");
-  const from = at(420, 300);
-  const to = at(620, 440);
+  const from = at(200, 260);
+  const to = at(400, 400);
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await page.mouse.move(to.x, to.y, { steps: 6 });
