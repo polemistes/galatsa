@@ -126,7 +126,7 @@ describe("the flight", () => {
   });
 
   it("follows the smooth speed profile in the metric", () => {
-    const to: CameraView = { space: null, cx: 2000, cy: 700, zoom: 5 };
+    const to: CameraView = { space: null, cx: 1500, cy: 500, zoom: 4 };
     const motion = plan(A, to);
     const length = metricDistance(A, to, VIEWPORT.width);
     expect(motion.duration).toBeCloseTo((length / FLIGHT_SPEED) * 1000, 9);
@@ -381,7 +381,7 @@ describe("the cross-fade and the cut", () => {
 
 describe("breaking off a transition", () => {
   it("continues from the view on screen without a jump", () => {
-    const b: CameraView = { space: null, cx: 3000, cy: 0, zoom: 2 };
+    const b: CameraView = { space: null, cx: 2000, cy: 0, zoom: 2 };
     const c: CameraView = { space: null, cx: -500, cy: 800, zoom: 0.5 };
     const first = plan(A, b);
     for (const share of [0.01, 0.25, 0.5, 0.5001, 0.77, 0.999]) {
