@@ -120,7 +120,7 @@ class CanvasRenderer {
     region: { space: ElementId | null; rect: Rect },
     image: { width: number; height: number; mediaType: string },
   ): Promise<Uint8Array>;
-  beginTextEdit(id: ElementId, options: TextEditOptions): TextEditSession; // in-place editing, 0011
+  beginTextEdit(id: ElementId, options: TextEditOptions): TextEditSession; // in-place editing, 0011; the element from options.textEditing, 0015
   readonly images: ImageCache | null; // preload(), settle(), stats
   readonly stats: RenderStats; // counters of the last frame
   dispose(): void;
