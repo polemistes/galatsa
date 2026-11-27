@@ -176,6 +176,27 @@ describe("selecting", () => {
   });
 });
 
+describe("clicking empty canvas", () => {
+  it("does not select a turned element whose bounding box covers the click", () => {
+    const editor = make();
+    const a = rect(editor, 150, 150, 100, 100);
+    must(editor, BASICS.rotate, { ids: [a], rot: Math.PI / 4 });
+    editor.services.selection.set([]);
+    const bounds = editor.services.scene.bounds(a)!;
+    // The corner of the bounding box lies outside the turned square.
+    editor.pointerDown(pointer(bounds.x + 5, bounds.y + 5));
+    editor.pointerUp(pointer(bounds.x + 5, bounds.y + 5));
+    expect(editor.selection).toEqual([]);
+    // A band dragged over it still selects it.
+    drag(
+      editor,
+      { x: bounds.x + 5, y: bounds.y + 5 },
+      { x: bounds.x + 20, y: bounds.y + 20 },
+    );
+    expect(editor.selection).toEqual([a]);
+  });
+});
+
 describe("moving", () => {
   it("drags the selection as one step, with Shift along one axis", () => {
     const editor = make();

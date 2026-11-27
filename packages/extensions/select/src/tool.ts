@@ -608,6 +608,9 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       session.requestOverlay();
       switch (d.kind) {
         case "band": {
+          // A click on empty canvas is not a band: it would select what only
+          // the bounding box of a turned or round element covers.
+          if (still) return;
           const s = services();
           const r = resolver();
           const found = s.scene
