@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
-import { keyAction, type PlayerKey } from "./keys.ts";
+import { isReloadKey, keyAction, type PlayerKey } from "./keys.ts";
 import { elapsedDigits } from "./notes.ts";
 
 function key(name: string, more: Partial<PlayerKey> = {}): PlayerKey {
@@ -59,6 +59,31 @@ describe("keys of a presentation", () => {
     expect(keyAction(key("λ", { code: "KeyL" }))).toBe("laser");
     // A Latin letter counts as itself, wherever its key is.
     expect(keyAction(key("b", { code: "KeyN" }))).toBe("blank");
+  });
+});
+
+describe("keys that reload the page", () => {
+  it("are F5 with or without modifiers, Ctrl+R and Cmd+R, and the reload key", () => {
+    expect(isReloadKey(key("F5", { code: "F5" }))).toBe(true);
+    expect(isReloadKey(key("F5", { code: "F5", shiftKey: true }))).toBe(true);
+    expect(isReloadKey(key("F5", { code: "F5", ctrlKey: true }))).toBe(true);
+    expect(isReloadKey(key("r", { code: "KeyR", ctrlKey: true }))).toBe(true);
+    expect(isReloadKey(key("R", { code: "KeyR", ctrlKey: true, shiftKey: true }))).toBe(
+      true,
+    );
+    expect(isReloadKey(key("r", { code: "KeyR", metaKey: true }))).toBe(true);
+    // A keyboard without Latin letters: by the key's place.
+    expect(isReloadKey(key("к", { code: "KeyR", ctrlKey: true }))).toBe(true);
+    expect(isReloadKey(key("BrowserRefresh"))).toBe(true);
+  });
+
+  it("are not R alone, Alt+R, or the presentation's keys", () => {
+    expect(isReloadKey(key("r", { code: "KeyR" }))).toBe(false);
+    expect(isReloadKey(key("r", { code: "KeyR", altKey: true, ctrlKey: true }))).toBe(
+      false,
+    );
+    expect(isReloadKey(key("PageDown"))).toBe(false);
+    expect(isReloadKey(key("Escape"))).toBe(false);
   });
 });
 

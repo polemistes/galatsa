@@ -64,6 +64,8 @@ const EDITING_MARKS = [
   "encodeStateAsUpdate",
   "Records cannot be created",
   "CommandRegistry",
+  // The renderer's in-place text editing, which an editor passes in.
+  "DomTextEditSession",
 ];
 
 /** Marks of the editor and its interface, which a player must not carry. */
@@ -76,16 +78,22 @@ const EDITOR_MARKS = ["svelte", "galatsa-canvas", "EditorHost", "RoutesPanel", "
 const LIMIT = 100_000;
 
 /**
- * The bundles that include packages/player are over that limit (measured
- * 2026-11-27, see docs/adr/0015-presentation.md): 156 kB with the player's
- * core, and 304 kB with the whole player, which brings the renderer (95 kB
- * alone, and never part of the measured bundle before) and the translation
- * runtime. The limit is not raised here: these two ceilings are not budgets,
- * only tripwires a little above what was measured, so that growth nobody
- * noticed fails the test until the budget is decided.
+ * The bundles that include packages/player are over that limit (see
+ * docs/adr/0015-presentation.md): measured 2026-11-27 at 156 kB with the
+ * player's core, and 304 kB with the whole player, which brings the renderer
+ * (95 kB alone, and never part of the measured bundle before) and the
+ * translation runtime. The limit is not raised here: these two ceilings are
+ * not budgets, only tripwires a little above what was measured, so that
+ * growth nobody noticed fails the test until the budget is decided.
+ *
+ * Raised once since, for growth that was noticed: the renderer's text layout
+ * (F1-08, which a player needs to draw text) and the fixes after the review
+ * of F1-14 (steering a transition onto a goal that moved, the keyboard, full
+ * screen) took the whole player to 338 kB and its core to 162 kB; the
+ * renderer's in-place editing, which came with F1-08, was taken out of it.
  */
 const PLAYER_CORE_CEILING = 165_000;
-const PLAYER_CEILING = 320_000;
+const PLAYER_CEILING = 350_000;
 
 describe("viewer bundle", () => {
   it("has no Yjs, no document operations and no editing code", async () => {

@@ -24,10 +24,11 @@ import {
   type TextMeasurer,
 } from "./text.ts";
 import { DomTextEngine } from "./text-dom.ts";
-import {
-  DomTextEditSession,
-  type TextEditOptions,
-  type TextEditSession,
+import type {
+  PlacedTextEditSession,
+  TextEditFactory,
+  TextEditOptions,
+  TextEditSession,
 } from "./text-edit.ts";
 import {
   apply,
@@ -102,6 +103,11 @@ export interface RendererOptions {
   readonly fonts?: FontWaiter;
   /** Called when something changed outside render(), so the host draws again. */
   readonly onInvalidate?: () => void;
+  /**
+   * Makes the editing element of in-place text editing (`domTextEditing`).
+   * Only an editor passes it; without it there is no in-place editing.
+   */
+  readonly textEditing?: TextEditFactory;
 }
 
 /** Counters of the last frame. */
@@ -155,7 +161,7 @@ export class CanvasRenderer {
   #overlay: OverlayDraw | null = null;
   #fonts: FontWaiter | null = null;
   #textEngine: DomTextEngine | null | undefined = undefined;
-  #edit: DomTextEditSession | null = null;
+  #edit: PlacedTextEditSession | null = null;
   readonly stats: RenderStats = {
     frames: 0,
     lastFrameMs: 0,
@@ -701,10 +707,12 @@ export class CanvasRenderer {
    */
   beginTextEdit(id: ElementId, options: TextEditOptions): TextEditSession {
     const container = this.#canvas?.parentElement;
+    const make = this.#options.textEditing;
+    if (!make) throw new Error(`No in-place text editing here (element ${id})`);
     if (!container || !this.#engine())
       throw new Error(`In-place text editing needs a mounted canvas (element ${id})`);
     this.#edit?.end();
-    const session = new DomTextEditSession(
+    const session = make(
       id,
       container,
       this.#options.families ?? DEFAULT_FAMILIES,

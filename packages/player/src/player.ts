@@ -16,7 +16,7 @@ import {
 } from "@galatsa/extension-transitions";
 import type { I18n } from "@galatsa/i18n";
 import type { ImageSource, SceneAssets, SceneSource } from "@galatsa/renderer";
-import { keyAction, type KeyAction } from "./keys.ts";
+import { isReloadKey, keyAction, type KeyAction } from "./keys.ts";
 import { playerMessages } from "./messages/index.ts";
 import type { PresentationSource } from "./model.ts";
 import { openNotes, positionText, stepName, type NotesView } from "./notes.ts";
@@ -52,6 +52,8 @@ export interface PlayerOptions {
   readonly background?: string;
   /** Called once, when the presentation has ended. */
   readonly onExit?: () => void;
+  /** Whether keys are named as on a Mac; default from the browser. */
+  readonly mac?: boolean;
 }
 
 export interface MountedPlayer {
@@ -85,6 +87,9 @@ background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2);border-ra
 padding:6px 10px;cursor:pointer}
 .gp-bar button:disabled{opacity:.45;cursor:default}
 .gp-bar button[aria-pressed=true]{background:#2563eb}
+.gp-full-back{position:absolute;left:50%;top:16px;transform:translateX(-50%);font:inherit;
+font-size:16px;color:#fff;background:#2563eb;border:0;border-radius:10px;padding:12px 18px;cursor:pointer;
+box-shadow:0 4px 18px rgba(0,0,0,.5)}
 .gp-list,.gp-notes{position:absolute;top:16px;bottom:72px;overflow:auto;border-radius:10px;
 background:rgba(17,24,39,.96)}
 .gp-list{right:16px;width:min(320px,80%);padding:12px}
@@ -110,11 +115,50 @@ const ZOOM_PER_PIXEL = 0.01;
 const MAX_ZOOM_PIXELS = 25;
 const KEY_ZOOM = 1.5;
 
-/** When a presentation in this page last ended (the page's clock). */
-let lastEnd = -Infinity;
+/** Whether the browser runs on a Mac (or an iPhone or iPad), where keys have other names. */
+function onMac(): boolean {
+  const nav = (globalThis as { navigator?: { platform?: string; userAgent?: string } })
+    .navigator;
+  return /Mac|iPhone|iPad|iPod/i.test(nav?.platform ?? nav?.userAgent ?? "");
+}
 
-/** Starts a presentation in `parent`, over everything else in it. */
+/** An Escape this soon after the browser left full screen by itself was the key that made it leave. */
+const ESCAPE_ECHO_MS = 400;
+
+/**
+ * Starts a presentation in `parent`, over everything else in it. Everything
+ * else in `parent` is inert while it runs, so the keyboard stays with the
+ * presentation. If it cannot start, nothing of it stays in the page and the
+ * error is thrown.
+ */
 export function mountPlayer(parent: HTMLElement, options: PlayerOptions): MountedPlayer {
+  const doc = parent.ownerDocument;
+  const root = doc.createElement("div");
+  root.className = "galatsa-player";
+  parent.append(root);
+  // What has to be undone when the presentation ends, or fails to start.
+  const undo: Array<() => void> = [];
+  try {
+    return start(parent, root, options, undo);
+  } catch (error) {
+    for (const step of undo.splice(0).reverse()) {
+      try {
+        step();
+      } catch {
+        // The rest is still undone.
+      }
+    }
+    root.remove();
+    throw error;
+  }
+}
+
+function start(
+  parent: HTMLElement,
+  root: HTMLElement,
+  options: PlayerOptions,
+  undo: Array<() => void>,
+): MountedPlayer {
   const doc = parent.ownerDocument;
   const win = doc.defaultView ?? window;
   const { i18n } = options;
@@ -129,12 +173,31 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     into.append(node);
     return node;
   };
+  const listen = <T extends EventTarget>(
+    target: T,
+    type: string,
+    listener: (event: never) => void,
+    opts?: AddEventListenerOptions,
+  ): void => {
+    target.addEventListener(type, listener as EventListener, opts);
+    undo.push(() => target.removeEventListener(type, listener as EventListener, opts));
+  };
 
-  const root = el("div", "galatsa-player", parent);
   root.tabIndex = 0;
   root.setAttribute("role", "application");
   root.setAttribute("aria-label", t("label"));
   el("style", "", root).textContent = STYLE;
+
+  // Whatever else is in the page (the editor) is inert while presenting: it
+  // takes no keys, no focus and no clicks, so nothing can be changed there
+  // unseen, and Tab cannot take the keyboard away from the presentation.
+  for (const other of [...parent.children]) {
+    if (other === root || !(other instanceof HTMLElement) || other.inert) continue;
+    other.inert = true;
+    undo.push(() => {
+      other.inert = false;
+    });
+  }
 
   let disposed = false;
   let frame = 0;
@@ -151,12 +214,14 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     ...(options.background !== undefined ? { background: options.background } : {}),
     onInvalidate: () => kick(),
   });
+  undo.push(() => stage.dispose());
   const surface = stage.element;
 
   const motion = watchSystemReducedMotion(
     typeof win.matchMedia === "function" ? (query) => win.matchMedia(query) : undefined,
     (reduced) => presentation.setSystemReducedMotion(reduced),
   );
+  undo.push(() => motion.dispose());
   const presentation = new Presentation({
     source: options.source,
     screen: stage.screen,
@@ -185,6 +250,12 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
 
   const blank = el("div", "gp-blank", root);
   blank.hidden = true;
+  // A click or a tap lifts the black screen, and does nothing else.
+  blank.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    blank.hidden = true;
+    root.focus({ preventScroll: true });
+  });
   const dot = el("div", "gp-laser", root);
   dot.hidden = true;
   const status = el("div", "gp-status", root);
@@ -212,6 +283,7 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
   };
 
   const withKey = (label: string, key: string): string => t("with-key", { label, key });
+  const backKey = t((options.mac ?? onMac()) ? "key.backspace.mac" : "key.backspace");
   const button = (
     className: string,
     face: string,
@@ -238,12 +310,7 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
   );
   const positionButton = button("gp-position", "", withKey(t("stops"), "G"), "list");
   const nextButton = button("gp-next", "›", withKey(t("next"), "→"), "next");
-  const backButton = button(
-    "gp-back",
-    t("back"),
-    withKey(t("back"), "Backspace"),
-    "back",
-  );
+  const backButton = button("gp-back", t("back"), withKey(t("back"), backKey), "back");
   const laserButton = button(
     "gp-laser-toggle",
     t("laser"),
@@ -268,7 +335,19 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     withKey(t("fullscreen"), "F"),
     "fullscreen",
   );
-  button("gp-exit", t("exit"), withKey(t("exit"), "Esc"), "exit");
+  button("gp-exit", t("exit"), withKey(t("exit"), t("key.escape")), "exit");
+
+  // Shown when the browser left full screen without the presenter asking the
+  // presentation to (a cable, a change of screens, Escape): the presentation
+  // goes on in the window, and this takes it back.
+  const fullBack = el("button", "gp-full-back", root);
+  fullBack.type = "button";
+  fullBack.textContent = withKey(t("fullscreen.back"), "F");
+  fullBack.hidden = true;
+  fullBack.addEventListener("click", () => {
+    enterFullscreen();
+    root.focus({ preventScroll: true });
+  });
 
   // The controls show while the mouse moves, and go away when it rests.
   let idleTimer = 0;
@@ -319,13 +398,17 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     }
     const select = routesBox.querySelector("select");
     if (select !== null && state.route !== null) select.value = state.route;
-    const focused = [...stepsBox.querySelectorAll(".gp-step")].indexOf(
-      doc.activeElement as Element,
-    );
+    // The stop that had the keyboard keeps it, wherever it is in the list now.
+    const active = doc.activeElement;
+    const focused =
+      active instanceof HTMLElement && stepsBox.contains(active)
+        ? (active.dataset["entry"] ?? null)
+        : null;
     stepsBox.replaceChildren();
     state.steps.forEach((step, i) => {
       const b = el("button", "gp-step", el("li", "", stepsBox));
       b.type = "button";
+      b.dataset["entry"] = step.entry;
       b.textContent = `${i + 1}. ${stepName(t, step, i)}`;
       if (i === state.position) b.setAttribute("aria-current", "step");
       b.addEventListener("click", () => {
@@ -334,10 +417,14 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
         kick();
       });
     });
-    if (focused >= 0)
-      (stepsBox.querySelectorAll<HTMLElement>(".gp-step")[focused] ?? root).focus({
-        preventScroll: true,
-      });
+    if (focused !== null)
+      (
+        [...stepsBox.querySelectorAll<HTMLElement>(".gp-step")].find(
+          (b) => b.dataset["entry"] === focused,
+        ) ??
+        stepsBox.querySelector<HTMLElement>("[aria-current]") ??
+        root
+      ).focus({ preventScroll: true });
   };
   const openList = (): void => {
     list.hidden = false;
@@ -367,8 +454,11 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     motionButton.setAttribute("aria-pressed", String(state.reducedMotion));
     laserButton.setAttribute("aria-pressed", String(laser));
     notesButton.setAttribute("aria-pressed", String(notes !== null));
-    fullButton.setAttribute("aria-pressed", String(doc.fullscreenElement === root));
-    if (roaming && !wasRoaming && position >= 0) say(t("status.paused"));
+    const full = doc.fullscreenElement === root;
+    fullButton.setAttribute("aria-pressed", String(full));
+    if (full) fullBack.hidden = true;
+    if (roaming && !wasRoaming && position >= 0)
+      say(t("status.paused", { key: backKey }));
     wasRoaming = roaming;
     if (!list.hidden) renderList();
     notes?.update();
@@ -379,14 +469,17 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
   // ---------------------------------------------------------------------------
 
   /**
-   * Leaving full screen with the browser's own key (Escape) ends the
-   * presentation, as Escape does in a window. Not when it is our own doing:
-   * the F key, or a notes window that the browser leaves full screen for.
+   * Leaving full screen does not end the presentation: it goes on in the
+   * window. When the presentation did not ask for it (the F key, or a notes
+   * window that the browser leaves full screen for), a button to go back to
+   * full screen is shown. Escape in full screen only leaves full screen;
+   * Escape in a window ends the presentation.
    */
   let wasFull = false;
-  // Nor when a presentation in this page has just ended: it may still be on
-  // its way out of full screen, and would take this one with it.
-  let leaving = lastEnd + 1000;
+  /** Until when leaving full screen is the presentation's own doing. */
+  let leaving = -Infinity;
+  /** When the browser last left full screen by itself. */
+  let lost = -Infinity;
   const enterFullscreen = (): void => {
     try {
       void root.requestFullscreen?.()?.catch(() => {});
@@ -408,13 +501,14 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     const left = wasFull && !full;
     wasFull = full;
     if (left && win.performance.now() > leaving) {
-      exit();
-      return;
+      lost = win.performance.now();
+      fullBack.hidden = false;
     }
+    if (left && win.performance.now() <= leaving) fullBack.hidden = true;
     update();
     kick();
   };
-  doc.addEventListener("fullscreenchange", onFullscreen);
+  listen(doc, "fullscreenchange", onFullscreen);
 
   const closeNotes = (): void => {
     notes?.close();
@@ -449,6 +543,12 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     update();
   };
   const clock = win.setInterval(() => notes?.update(), 500);
+  undo.push(() => win.clearInterval(clock));
+  // The notes window goes when the page that draws it goes (reloaded, closed).
+  listen(win, "pagehide", () => {
+    notes?.close();
+    notes = null;
+  });
 
   // The screen stays on while presenting, where the browser can keep it on.
   type Lock = { release(): Promise<void> };
@@ -466,29 +566,31 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
       () => {},
     );
   };
-  doc.addEventListener("visibilitychange", keepAwake);
+  listen(doc, "visibilitychange", keepAwake);
+  undo.push(() => void lock?.release().catch(() => {}));
   keepAwake();
+
+  undo.push(() => {
+    disposed = true;
+    win.cancelAnimationFrame(frame);
+    win.clearTimeout(idleTimer);
+    win.clearTimeout(statusTimer);
+    win.clearTimeout(digitsTimer);
+    notes?.close();
+    notes = null;
+    if (doc.fullscreenElement === root) void doc.exitFullscreen?.().catch(() => {});
+  });
 
   function exit(): void {
     if (disposed) return;
     disposed = true;
-    lastEnd = win.performance.now();
-    win.cancelAnimationFrame(frame);
-    win.clearInterval(clock);
-    win.clearTimeout(idleTimer);
-    win.clearTimeout(statusTimer);
-    win.clearTimeout(digitsTimer);
-    doc.removeEventListener("keydown", onKey);
-    doc.removeEventListener("fullscreenchange", onFullscreen);
-    doc.removeEventListener("visibilitychange", keepAwake);
-    void lock?.release().catch(() => {});
-    stopWatching();
-    stopState();
-    motion.dispose();
-    notes?.close();
-    notes = null;
-    if (doc.fullscreenElement === root) void doc.exitFullscreen?.().catch(() => {});
-    stage.dispose();
+    for (const step of undo.splice(0).reverse()) {
+      try {
+        step();
+      } catch (error) {
+        console.error(error);
+      }
+    }
     root.remove();
     options.onExit?.();
   }
@@ -515,7 +617,8 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     }
     forgetDigits();
     // A black screen is lifted by the key that made it, or by any key that
-    // would move on; nothing moves behind it.
+    // would move on; nothing moves behind it. (A stop's number and Enter
+    // lifts it and goes there.)
     if (
       !blank.hidden &&
       action !== "exit" &&
@@ -577,17 +680,72 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
         break;
       }
       case "exit":
+        // Escape in full screen leaves full screen (the browser does that
+        // whatever the page does); only in a window does it end. An Escape
+        // that arrives just after the browser left full screen by itself was
+        // the key that made it leave.
+        if (doc.fullscreenElement === root) {
+          void doc.exitFullscreen?.().catch(() => {});
+          return;
+        }
+        if (win.performance.now() - lost < ESCAPE_ECHO_MS) return;
         exit();
         return;
     }
     kick();
   }
 
+  /** The clicker's keys: always the presentation's, whatever has the keyboard. */
+  const CLICKER = new Set([
+    "PageDown",
+    "PageUp",
+    "ArrowRight",
+    "ArrowLeft",
+    "ArrowDown",
+    "ArrowUp",
+    " ",
+    "Home",
+    "End",
+  ]);
+
+  /** Tab and Shift+Tab go round the presentation's own controls. */
+  const moveFocus = (back: boolean): void => {
+    const order = [
+      root,
+      ...root.querySelectorAll<HTMLElement>("button, select, [tabindex]"),
+    ].filter(
+      (node) =>
+        !(node as HTMLButtonElement).disabled &&
+        (node === root || node.getClientRects().length > 0),
+    );
+    const at = order.indexOf(doc.activeElement as HTMLElement);
+    const next =
+      at < 0 ? 0 : (at + (back ? order.length - 1 : 1)) % Math.max(order.length, 1);
+    order[next]?.focus({ preventScroll: true });
+  };
+
   function onKey(event: KeyboardEvent): void {
     if (disposed || event.isComposing) return;
+    // Nothing reloads the page in the middle of a presentation: not F5 out of
+    // habit, nor a clicker whose start button sends it.
+    if (isReloadKey(event)) {
+      event.preventDefault();
+      return;
+    }
+    const target = event.target as Element | null;
+    if (
+      event.key === "Tab" &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      (target === null || target.ownerDocument === doc)
+    ) {
+      event.preventDefault();
+      moveFocus(event.shiftKey);
+      return;
+    }
     const action = keyAction(event);
     if (action === null) return;
-    const target = event.target as Element | null;
     // The presentation has the page: its own keys, and keys that nothing has
     // (the keyboard is on the page itself). Not keys of another view.
     if (
@@ -598,48 +756,41 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
       target !== doc.documentElement
     )
       return;
-    // A control that has the keyboard keeps the keys that work it: Enter and
-    // Space press a button, the arrows and their like move in a list of
-    // choices, and a text field takes everything. In the list of stops the
-    // arrows move from stop to stop. Every other key is the presentation's,
-    // so a clicker goes on working wherever the keyboard is. Escape always
-    // ends the presentation: in full screen the browser leaves full screen
-    // on Escape whatever the page does, so it means the same everywhere.
-    const control = target?.closest?.("button, select, input, textarea") ?? null;
-    if (control !== null && action !== "exit") {
-      const key = event.key;
-      const step = control.classList.contains("gp-step");
-      if (step && (key === "ArrowDown" || key === "ArrowUp")) {
-        const items = [...list.querySelectorAll<HTMLElement>(".gp-step")];
-        items[
-          items.indexOf(control as HTMLElement) + (key === "ArrowDown" ? 1 : -1)
-        ]?.focus({ preventScroll: true });
-        event.preventDefault();
-        return;
-      }
-      const own =
-        control.localName === "button"
-          ? key === "Enter" || key === " "
-          : control.localName !== "select" ||
-            key === "Enter" ||
-            key === " " ||
-            key === "Home" ||
-            key === "End" ||
-            key.startsWith("Arrow") ||
-            key.startsWith("Page");
-      if (own) return;
-    }
-    event.preventDefault();
+    // A stop's number and Enter go to that stop, and lift a black screen.
     if (event.key === "Enter" && digits !== "") {
+      event.preventDefault();
       const index = Number(digits) - 1;
       forgetDigits();
+      blank.hidden = true;
       presentation.goTo(index);
       kick();
       return;
     }
+    // A button that has the keyboard keeps Enter, which presses it. Every
+    // other key is the presentation's: the clicker's keys (the arrows, the
+    // page keys, Space) never press a button, move in the list of stops or
+    // change the route, so a clicker goes on working wherever the keyboard
+    // is. Escape ends the presentation (in full screen it first leaves full
+    // screen, see `act`).
+    const control = target?.closest?.("button, select, input, textarea") ?? null;
+    if (control !== null && action !== "exit" && !CLICKER.has(event.key)) {
+      const own =
+        control.localName === "button"
+          ? event.key === "Enter"
+          : control.localName !== "select";
+      if (own) return;
+    }
+    event.preventDefault();
     act(action);
   }
-  doc.addEventListener("keydown", onKey);
+  listen(doc, "keydown", onKey);
+  // The keyboard stays in the presentation: focus that lands outside it (on
+  // something the page put there later) comes back.
+  listen(doc, "focusin", (event: FocusEvent) => {
+    const target = event.target;
+    if (target instanceof Node && !root.contains(target))
+      root.focus({ preventScroll: true });
+  });
 
   // ---------------------------------------------------------------------------
   // The mouse, touch and the wheel
@@ -748,17 +899,19 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
   // Start
   // ---------------------------------------------------------------------------
 
-  const stopState = presentation.subscribe(() => {
-    update();
+  undo.push(
+    presentation.subscribe(() => {
+      update();
+      kick();
+    }),
+  );
+  const stopWatching = options.watch?.((ids) => {
+    if (disposed) return;
+    stage.changed(ids);
+    presentation.documentChanged();
     kick();
   });
-  const stopWatching =
-    options.watch?.((ids) => {
-      if (disposed) return;
-      stage.changed(ids);
-      presentation.documentChanged();
-      kick();
-    }) ?? (() => {});
+  if (stopWatching) undo.push(stopWatching);
   if (options.fullscreen) enterFullscreen();
   update();
   wake();

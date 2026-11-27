@@ -41,6 +41,7 @@ export default {
   "import.choose": "Sett inn en fil …",
   "import.unsupported":
     "«{name}» kan ikke settes inn: ingen del av programmet leser filer av den typen.",
+  "present.failed": "Presentasjonen kunne ikke starte.",
   "import.failed": "«{name}» kunne ikke settes inn.",
   "import.tooLarge":
     "«{name}» ble ikke satt inn: filer større enn {size} MB kan ikke settes inn.",

@@ -74,6 +74,7 @@ export function presentEditor(
     ...(request.step !== undefined ? { step: request.step } : {}),
     view: editor.camera,
     fullscreen: true,
+    mac: editor.platform.mac,
     onExit: ended,
   });
 }

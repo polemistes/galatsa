@@ -81,3 +81,18 @@ export function keyAction(input: PlayerKey): KeyAction | null {
   if (key === " " && input.shiftKey) return "previous";
   return Object.hasOwn(BY_KEY, key) ? BY_KEY[key]! : null;
 }
+
+/**
+ * Whether a key press reloads the page in a browser: F5 (with any modifier),
+ * Ctrl+R or Cmd+R (with or without Shift), and a keyboard's own reload key.
+ * A presentation keeps these from the browser.
+ */
+export function isReloadKey(input: PlayerKey): boolean {
+  if (input.key === "F5" || input.code === "F5" || input.key === "BrowserRefresh")
+    return true;
+  return (
+    (input.ctrlKey || input.metaKey) &&
+    !input.altKey &&
+    (input.key.toLowerCase() === "r" || input.code === "KeyR")
+  );
+}
