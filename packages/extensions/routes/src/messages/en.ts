@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 export default {
+  close: "Close",
+  cancel: "Cancel",
   panel: "Routes",
   "toggle-panel": "Show or hide routes",
   route: "Route",

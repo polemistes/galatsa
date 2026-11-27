@@ -4,6 +4,8 @@
 // ".step" name the undo step a command makes, as in "Angre nytt stopp".
 
 export default {
+  close: "Lukk",
+  cancel: "Avbryt",
   panel: "Ruter",
   "toggle-panel": "Vis eller skjul ruter",
   route: "Rute",

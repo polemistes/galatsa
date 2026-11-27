@@ -218,8 +218,8 @@
     <button
       type="button"
       class="icon"
-      aria-label={t("common:action.close")}
-      title={t("common:action.close")}
+      aria-label={t("galatsa.routes:close")}
+      title={t("galatsa.routes:close")}
       onclick={() => context.services.panels.close(ROUTES_PANEL)}>×</button
     >
   </header>
@@ -227,9 +227,10 @@
   {#if model.routes.length === 0}
     <p class="hint">{t("galatsa.routes:no-routes")}</p>
   {:else}
-    <label class="field">
-      <span>{t("galatsa.routes:route")}</span>
+    <div class="field">
+      <label for="{uid}-route">{t("galatsa.routes:route")}</label>
       <select
+        id="{uid}-route"
         value={model.route ?? ""}
         onchange={(e) => chooseRoute(e.currentTarget.value)}
       >
@@ -237,18 +238,19 @@
           <option value={route.id}>{route.label}</option>
         {/each}
       </select>
-    </label>
+    </div>
     {#if model.route !== null}
       {@const route = model.route}
-      <label class="field">
-        <span>{t("galatsa.routes:route.name")}</span>
+      <div class="field">
+        <label for="{uid}-route-name">{t("galatsa.routes:route.name")}</label>
         <input
+          id="{uid}-route-name"
           type="text"
           value={model.routeName}
           onchange={(e) =>
             run(ROUTES.renameRoute, { route, name: e.currentTarget.value })}
         />
-      </label>
+      </div>
     {/if}
   {/if}
   <div class="row">
@@ -312,15 +314,15 @@
   </div>
   {#if model.existing.length > 0}
     <div class="row">
-      <label class="field grow">
-        <span>{t("galatsa.routes:existing")}</span>
-        <select bind:value={existingStop}>
+      <div class="field grow">
+        <label for="{uid}-existing">{t("galatsa.routes:existing")}</label>
+        <select id="{uid}-existing" bind:value={existingStop}>
           <option value=""></option>
           {#each model.existing as stop (stop.id)}
             <option value={stop.id}>{stop.label}</option>
           {/each}
         </select>
-      </label>
+      </div>
       <button type="button" disabled={existingStop === ""} onclick={addExisting}
         >{t("galatsa.routes:add-visit")}</button
       >
@@ -332,15 +334,16 @@
     {@const route = model.route}
     <section aria-labelledby="{uid}-stop">
       <h3 id="{uid}-stop">{t("galatsa.routes:selected-stop")}</h3>
-      <label class="field">
-        <span>{t("galatsa.routes:stop.name")}</span>
+      <div class="field">
+        <label for="{uid}-stop-name">{t("galatsa.routes:stop.name")}</label>
         <input
+          id="{uid}-stop-name"
           type="text"
           value={model.stop.name}
           onchange={(e) =>
             run(ROUTES.renameStop, { stop: chosen.stop, name: e.currentTarget.value })}
         />
-      </label>
+      </div>
       <p class="hint">
         {t("galatsa.routes:used-in", {
           count: model.usedIn,
@@ -415,15 +418,16 @@
         </ul>
       {/if}
 
-      <label class="field">
-        <span>{t("galatsa.routes:notes")}</span>
+      <div class="field">
+        <label for="{uid}-notes">{t("galatsa.routes:notes")}</label>
         <textarea
+          id="{uid}-notes"
           rows="4"
           value={model.notes}
           onchange={(e) =>
             run(ROUTES.setStopNotes, { stop: chosen.stop, text: e.currentTarget.value })}
         ></textarea>
-      </label>
+      </div>
       <div class="row">
         <button
           type="button"
@@ -455,7 +459,7 @@
       </p>
       <div class="row end">
         <button type="button" use:focusOnMount onclick={() => (deleting = null)}
-          >{t("common:action.cancel")}</button
+          >{t("galatsa.routes:cancel")}</button
         >
         <button type="button" class="danger" onclick={confirmDelete}
           >{t("galatsa.routes:delete.confirm")}</button
