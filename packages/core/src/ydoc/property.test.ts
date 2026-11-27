@@ -5,7 +5,8 @@
 // partial syncs across three replicas), see scenario.ts: the replicas converge,
 // every snapshot is valid and survives a round trip, nothing is hidden by a
 // delete that had not seen all work on it (section 5.5), and purging changes
-// nothing the user sees. For random junk written by a peer: reading stays total
+// nothing the user sees; and every replica's live resolver answers as a new
+// resolution after every transaction and reports what changed. For random junk written by a peer: reading stays total
 // and the same on every replica.
 //
 // 40 seeds of 80 steps by default; set GALATSA_FUZZ_SEEDS (and GALATSA_FUZZ_FIRST,
