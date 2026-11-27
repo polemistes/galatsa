@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The camera path of J. J. van Wijk and W. A. A. Nuij, "Smooth and efficient
-// zooming and panning" (IEEE InfoVis 2003, https://vanwijk.win.tue.nl/zoompan.pdf).
+// zooming and panning" (2003, https://vanwijk.win.tue.nl/zoompan.pdf).
 //
 // The paper measures a camera motion by how fast the image seems to move: with
 // u the position along the line between the two centres and w the width of the
