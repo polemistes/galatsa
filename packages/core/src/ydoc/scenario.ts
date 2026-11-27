@@ -419,7 +419,7 @@ export interface ScenarioOptions {
   checkpoint?: (doc: Y.Doc) => void;
   /**
    * Gives every replica a live resolver, which the operations then use, and
-   * checks it after every transaction against a new resolution of the whole
+   * checks it after every batch of transactions against a new resolution of the whole
    * document, and what it reported against what changed (default true).
    */
   live?: boolean;

@@ -7,7 +7,7 @@
 //
 // It knows nothing of Yjs. Whoever owns the document tells it which element
 // records changed and which of their keys (`update`); the Yjs binding does that
-// after every transaction (`liveResolver` in `@galatsa/core/ydoc`).
+// after every batch of transactions (`liveResolver` in `@galatsa/core/ydoc`).
 //
 // How an update works. Resolution of an element depends on its own record and
 // on other records: its stored ancestors (the effective parent, cycles), its

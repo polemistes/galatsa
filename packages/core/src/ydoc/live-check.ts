@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// A test helper: checks a document's live resolver after every transaction
+// A test helper: checks a document's live resolver after every batch of transactions
 // against a new resolution of the whole document, and checks that what it
 // reported covers everything that changed. Used by the property tests.
 

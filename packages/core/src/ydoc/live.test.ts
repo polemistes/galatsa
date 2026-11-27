@@ -4,7 +4,7 @@
 // docs/adr/0001-document-model-and-file-format.md): what it reports for local
 // changes, other replicas' updates (also out of causal order), undo and redo,
 // tidy up and loading, and how long an update takes in a large document. Every
-// case is also checked after every transaction against a new resolution of the
+// case is also checked after every batch of transactions against a new resolution of the
 // whole document (watchLiveResolver).
 
 import { afterEach, describe, expect, it } from "vitest";
