@@ -266,9 +266,10 @@ export class Resolver {
    * replaced, never changed in place, so a list handed out earlier stays as it
    * was); without one, children are looked up anew.
    */
-  protected forget(ids: ReadonlySet<ElementId>): void {
+  protected forget(forgotten: ReadonlySet<ElementId>): void {
+    const ids = new Set(forgotten);
     const touched = new Set<ElementId | null>();
-    for (const id of ids) {
+    const drop = (id: ElementId) => {
       const parent = this.#parent.get(id);
       if (parent !== undefined) touched.add(parent);
       this.#envelope.delete(id);
@@ -277,6 +278,30 @@ export class Resolver {
       this.#simpleLocal.delete(id);
       this.#deleters.delete(id);
       this.#digest.delete(id);
+    };
+    const breakers: ElementId[] = [];
+    for (const id of ids) {
+      if (this.#parent.get(id) === null) breakers.push(id);
+      drop(id);
+    }
+    // A parent cycle is resolved as a whole: the member that breaks it, asked
+    // about alone, would get its stored parent. So the other members of a cycle
+    // broken at an element in the set are forgotten with it.
+    for (const id of breakers) {
+      const members: ElementId[] = [];
+      const seen = new Set<ElementId>([id]);
+      let at = this.#validParent(id);
+      while (at !== null && !seen.has(at)) {
+        seen.add(at);
+        members.push(at);
+        at = this.#validParent(at);
+      }
+      if (at !== id) continue;
+      for (const member of members) {
+        if (ids.has(member)) continue;
+        ids.add(member);
+        drop(member);
+      }
     }
     if (!this.#indexed) {
       this.#children.clear();
@@ -286,7 +311,11 @@ export class Resolver {
     const lists = new Map<ElementId | null, ElementId[]>();
     for (const parent of touched) {
       const list = this.#children.get(parent);
-      if (list) lists.set(parent, list.filter((id) => !ids.has(id)));
+      if (list)
+        lists.set(
+          parent,
+          list.filter((id) => !ids.has(id)),
+        );
     }
     const added = new Map<ElementId | null, ElementId[]>();
     for (const id of ids) {

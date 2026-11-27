@@ -45,12 +45,13 @@ function touchedBy(
     }
     // Up to the record: the key of the record under which the change lies.
     let key: string | null = null;
-    for (let at = type as Y.AbstractType<unknown>; ; ) {
+    for (let at = type as Y.AbstractType<unknown>; ;) {
       const item = at._item;
       if (item === null || !(item.parent instanceof Y.AbstractType)) break;
       if (item.parent === elements) {
         if (item.parentSub === null) break;
-        if ((at as unknown) === type) for (const k of keys) touch(item.parentSub, k ?? "");
+        if ((at as unknown) === type)
+          for (const k of keys) touch(item.parentSub, k ?? "");
         else touch(item.parentSub, key ?? "");
         break;
       }

@@ -116,7 +116,11 @@ function sameResolved(a: Resolved, b: Resolved): boolean {
   );
 }
 
-function addTo(index: Map<ElementId, Set<ElementId>>, key: ElementId, id: ElementId): void {
+function addTo(
+  index: Map<ElementId, Set<ElementId>>,
+  key: ElementId,
+  id: ElementId,
+): void {
   let set = index.get(key);
   if (!set) index.set(key, (set = new Set()));
   set.add(id);
@@ -191,23 +195,25 @@ export class LiveResolver extends Resolver {
       if (structure) queue.push(id);
       if (worked) content.add(id);
     }
-    // Everything below a structural change, by stored parent (the effective
-    // parent and cycles follow the stored parents), in the effective tree as it
-    // was (positions, deletes, gone containers and locks are inherited; new
-    // members of a container are in the set already, their parent changed),
-    // and whatever has a position written in one of these containers (rule 3).
+    // Everything below a structural change: by stored parent, whether that
+    // parent exists or not (the effective parent is the stored parent or the
+    // root, and cycles follow the stored parents; positions, deletes, gone
+    // containers and locks are inherited down the effective tree), and whatever
+    // has a position written in one of these containers (rule 3 of section
+    // 5.3). An element that joins a container is in the set already: its parent
+    // changed.
     while (queue.length > 0) {
       const id = queue.pop()!;
       if (expanded.has(id)) continue;
       expanded.add(id);
       dirty.add(id);
       for (const child of this.#storedChildren.get(id) ?? []) queue.push(child);
-      for (const child of this.children(id)) queue.push(child);
       for (const user of this.#spaceUsers.get(id) ?? []) queue.push(user);
     }
     // Groups and gone containers above take their bounds from what is inside:
     // those above anything that changed, as the tree was.
-    for (const id of [...dirty]) this.#addBoundsHolders(id, dirty, (at) => this.#resolved.get(at));
+    for (const id of [...dirty])
+      this.#addBoundsHolders(id, dirty, (at) => this.#resolved.get(at));
 
     this.forget(dirty);
 
@@ -231,6 +237,9 @@ export class LiveResolver extends Resolver {
     const removed = new Set<ElementId>();
     const containers = new Set<ElementId | null>();
     let drawOrder = false;
+    const resolvedBefore = (id: ElementId) => this.#resolved.get(id);
+    const resolvedAfter = (id: ElementId) =>
+      now.has(id) ? now.get(id) : this.#resolved.get(id);
     for (const id of dirty) {
       const before = this.#resolved.get(id);
       const after = now.get(id);
@@ -238,19 +247,20 @@ export class LiveResolver extends Resolver {
       if (!before) added.add(id);
       else if (!after) removed.add(id);
       else if (content.has(id) || !sameResolved(before, after)) changed.add(id);
-      if (before?.parent !== after?.parent || before?.order !== after?.order) {
-        if (before) containers.add(before.parent);
-        if (after) containers.add(after.parent);
-      }
       if (
+        before?.parent !== after?.parent ||
         before?.logicalParent !== after?.logicalParent ||
         before?.gone !== after?.gone ||
         before?.order !== after?.order
       ) {
-        if (before) containers.add(before.logicalParent);
-        if (after) containers.add(after.logicalParent);
+        if (before) this.#addHolders(id, containers, resolvedBefore);
+        if (after) this.#addHolders(id, containers, resolvedAfter);
       }
       if (before?.gone !== after?.gone) drawOrder = true;
+    }
+    for (const id of dirty) {
+      const before = this.#resolved.get(id);
+      const after = now.get(id);
       this.#index(id, before, after);
       if (after) this.#resolved.set(id, after);
       else this.#resolved.delete(id);
@@ -268,6 +278,26 @@ export class LiveResolver extends Resolver {
   }
 
   /**
+   * Adds the containers whose children or logical children list `id`: its
+   * parent, and the containers above up to the first that is not gone (gone
+   * containers are transparent, section 5.5), or the root.
+   */
+  #addHolders(
+    id: ElementId,
+    containers: Set<ElementId | null>,
+    resolved: (id: ElementId) => Resolved | undefined,
+  ): void {
+    let at = resolved(id)?.parent ?? null;
+    for (;;) {
+      containers.add(at);
+      if (at === null) return;
+      const holder = resolved(at);
+      if (!holder?.gone) return;
+      at = holder.parent;
+    }
+  }
+
+  /**
    * Adds to `dirty` the groups and gone containers whose bounds depend on `id`:
    * the ancestors up to the first one that is neither.
    */
@@ -276,7 +306,7 @@ export class LiveResolver extends Resolver {
     dirty: Set<ElementId>,
     resolved: (id: ElementId) => Resolved | undefined,
   ): void {
-    for (let at = resolved(id)?.parent ?? null; at !== null; ) {
+    for (let at = resolved(id)?.parent ?? null; at !== null;) {
       const holder = resolved(at);
       if (!holder?.derived) return;
       dirty.add(at);
