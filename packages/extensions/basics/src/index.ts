@@ -2,7 +2,9 @@
 
 // The built-in basics extension: the commands every element has, whatever its
 // type (docs/adr/0005-extension-interface.md, section 12). Move, resize,
-// scale, rotate, move into another container, z-order, group and ungroup, lock
+// scale, rotate, move into another container, z-order, frames (around
+// elements, removed keeping what is in them, moving into and out of them),
+// naming (docs/adr/0014-stacking-and-frames.md), group and ungroup, lock
 // and unlock, delete, duplicate, copy and paste as fragments, undo, redo and
 // select all. Only commands: the tools, buttons and keys that run them are the
 // editor's. Each command checks what the element's type allows; elements of a
@@ -16,6 +18,7 @@ import {
 } from "@galatsa/extension-api/editing";
 import { copy, duplicate, paste } from "./clipboard.ts";
 import { API, BASICS_EXTENSION } from "./common.ts";
+import { frame, moveIntoFrame, moveOutOfFrame, removeFrame, rename } from "./frames.ts";
 import { redo, selectAll, undo } from "./history.ts";
 import { basicsMessages } from "./messages/index.ts";
 import {
@@ -42,6 +45,21 @@ export {
 } from "./common.ts";
 export { basicsMessages } from "./messages/index.ts";
 export {
+  FRAME_PADDING,
+  MAX_NAME_LENGTH,
+  elementName,
+  drawingPath,
+  frameAt,
+  frameIds,
+  openFrames,
+  topFrameAt,
+  type OpenFrame,
+  isFrame,
+  type FrameArgs,
+  type MoveIntoFrameArgs,
+  type RenameArgs,
+} from "./frames.ts";
+export {
   DUPLICATE_OFFSET,
   readFragment,
   type ReadFragmentResult,
@@ -62,6 +80,11 @@ export const BASICS = {
   sendToBack: `${BASICS_EXTENSION}/send-to-back`,
   bringForward: `${BASICS_EXTENSION}/bring-forward`,
   sendBackward: `${BASICS_EXTENSION}/send-backward`,
+  frame: `${BASICS_EXTENSION}/frame`,
+  removeFrame: `${BASICS_EXTENSION}/remove-frame`,
+  moveIntoFrame: `${BASICS_EXTENSION}/move-into-frame`,
+  moveOutOfFrame: `${BASICS_EXTENSION}/move-out-of-frame`,
+  rename: `${BASICS_EXTENSION}/rename`,
   group: `${BASICS_EXTENSION}/group`,
   ungroup: `${BASICS_EXTENSION}/ungroup`,
   lock: `${BASICS_EXTENSION}/lock`,
@@ -95,6 +118,11 @@ export const basicsExtension: EditExtension = defineEditExtension({
       sendToBackCommand,
       bringForwardCommand,
       sendBackwardCommand,
+      frame,
+      removeFrame,
+      moveIntoFrame,
+      moveOutOfFrame,
+      rename,
       group,
       ungroup,
       lock,

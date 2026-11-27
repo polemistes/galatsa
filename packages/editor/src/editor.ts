@@ -10,6 +10,7 @@
 // Node. `dom.ts` turns DOM events into those values.
 
 import {
+  FRAME_TYPE,
   type AssetId,
   type CameraView,
   type ElementId,
@@ -40,7 +41,7 @@ import type {
   SpacePoint,
   ToolPointerEvent,
 } from "@galatsa/extension-api/editing";
-import { BASICS, readFragment } from "@galatsa/extension-basics";
+import { BASICS, frameIds, openFrames, readFragment } from "@galatsa/extension-basics";
 import type { I18n, MessageValues } from "@galatsa/i18n";
 import {
   CanvasRenderer,
@@ -62,6 +63,7 @@ import {
   type ClipboardTarget,
 } from "./clipboard.ts";
 import { ContextMenu } from "./context-menu.ts";
+import { pasteTarget, type PasteTarget } from "./paste-target.ts";
 import { CameraControl } from "./camera-control.ts";
 import { screenToWorld, type ScreenSize } from "./camera.ts";
 import { documentAssets } from "./images.ts";
@@ -230,6 +232,9 @@ export class Editor {
   #cancelFrame: (() => void) | null = null;
   #cursor: Cursor = "default";
   #keymap: { mode: Mode; map: Map<Shortcut, ShortcutTarget> } | null = null;
+  /** The fragment pasted last (its roots) and what that paste made: copies, not targets. */
+  #lastPaste: { readonly roots: string; readonly ids: readonly ElementId[] } | null =
+    null;
   #clipboard: { readonly fragment: Fragment; readonly origin: ClipboardOrigin } | null =
     null;
   #notice: EditorNotice | null = null;
@@ -962,6 +967,14 @@ export class Editor {
     });
     if (outcome.ok) {
       this.dismissNotice();
+      const roots = readFragment(fragment).fragment?.roots ?? [];
+      const made = (outcome.value as { readonly ids?: readonly ElementId[] }).ids ?? [];
+      const last = this.#lastPaste;
+      const key = roots.join(" ");
+      this.#lastPaste = {
+        roots: key,
+        ids: [...(last?.roots === key ? last.ids : []), ...made],
+      };
       const assets = (outcome.value as { readonly assets?: readonly AssetId[] }).assets;
       if (assets !== undefined && assets.length > 0) void this.#adopt(assets);
     } else if (!this.host.commands.gestureActive(this.environment()))
@@ -991,54 +1004,23 @@ export class Editor {
       this.#notify("editor:paste.assetsMissing", { count: missing.length });
   }
 
-  /** A container the user can paste into: there, seen, not locked. */
-  #openContainer(id: ElementId): boolean {
-    const live = this.live;
-    return (
-      live.get(id) !== undefined &&
-      live.isContainer(id) &&
-      !live.isGone(id) &&
-      !live.isLocked(id)
-    );
-  }
-
-  /**
-   * Where a paste lands: into the container it was copied from while that is
-   * there (an element copied from a frame goes back into the frame), else on
-   * the canvas at the same place in root space; and if none of that is in
-   * view, with its centre in the middle of the view.
-   */
-  #pasteTarget(
-    raw: unknown,
-    origin: ClipboardOrigin | null,
-  ): { parent: ElementId | null; dx: number; dy: number } {
-    let parent: ElementId | null = null;
-    // What the fragment's positions need to be in the target's space.
-    let shift: Point = { x: 0, y: 0 };
-    if (origin !== null) {
-      if (origin.container !== null && this.#openContainer(origin.container))
-        parent = origin.container;
-      else shift = origin.at;
-    }
+  /** Where a paste lands: the rule of paste-target.ts (docs/adr/0014). */
+  #pasteTarget(raw: unknown, origin: ClipboardOrigin | null): PasteTarget {
     const { fragment } = readFragment(raw);
-    const bounds = fragment === null ? null : fragmentBounds(fragment);
-    if (bounds === null || this.screen.width === 0)
-      return { parent, dx: shift.x, dy: shift.y };
-    const toRoot = parent === null ? shift : this.live.offset(parent, null);
-    const x = bounds.x + toRoot.x;
-    const y = bounds.y + toRoot.y;
-    const view = this.services.camera.viewport();
-    const seen =
-      x <= view.x + view.w &&
-      view.x <= x + bounds.w &&
-      y <= view.y + view.h &&
-      view.y <= y + bounds.h;
-    if (seen) return { parent, dx: shift.x, dy: shift.y };
-    return {
-      parent,
-      dx: shift.x + view.x + view.w / 2 - (x + bounds.w / 2),
-      dy: shift.y + view.y + view.h / 2 - (y + bounds.h / 2),
-    };
+    const roots = fragment?.roots ?? [];
+    const last = this.#lastPaste;
+    const copies = last !== null && last.roots === roots.join(" ") ? last.ids : [];
+    return pasteTarget({
+      scene: this.live,
+      frameType: FRAME_TYPE,
+      frames: openFrames(this.doc, this.live, frameIds(this.doc), [...roots, ...copies]),
+      roots,
+      copies,
+      bounds: fragment === null ? null : fragmentBounds(fragment),
+      origin,
+      selection: this.selection,
+      view: this.screen.width === 0 ? null : this.services.camera.viewport(),
+    });
   }
 
   /** Where a fragment copied now comes from: its roots' container, and that container's origin. */

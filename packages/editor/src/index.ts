@@ -45,6 +45,13 @@ export {
   ZOOM_STEP,
 } from "./navigation.ts";
 export {
+  FRAMES_EXTENSION,
+  RENAME_FRAME,
+  RENAME_PANEL,
+  frameToRename,
+  framesExtension,
+} from "./rename.ts";
+export {
   assetImages,
   documentAssets,
   type AssetImagesOptions,

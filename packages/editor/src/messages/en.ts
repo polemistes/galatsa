@@ -91,4 +91,11 @@ export default {
   "properties.mixed": "Mixed",
   "properties.none": "None",
   "properties.hint": "Select something on the canvas to see and change its properties.",
+  "frames.rename": "Rename frame…",
+  "frames.panel": "Frame name",
+  "frames.name": "Name of the frame",
+  "frames.save": "Save",
+  "frames.cancel": "Cancel",
+  "frames.close": "Close",
+  "frames.none": "Select one frame to rename it.",
 };

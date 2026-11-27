@@ -28,6 +28,7 @@ import {
   type ClipboardSource,
 } from "./clipboard.ts";
 import { menuEntries, openContextMenu, type MenuClipboard } from "./context-menu.ts";
+import { RENAME_FRAME } from "./rename.ts";
 import type { Editor } from "./editor.ts";
 import { drag, key, pointer, testEditor } from "./test-support.ts";
 
@@ -597,8 +598,17 @@ describe("the keys, the clipboard and the context menu", () => {
       [BASICS.paste, true],
       [BASICS.duplicate, false],
       [BASICS.delete, false],
+      [BASICS.bringToFront, false],
+      [BASICS.bringForward, false],
+      [BASICS.sendBackward, false],
+      [BASICS.sendToBack, false],
       [BASICS.group, false],
       [BASICS.ungroup, false],
+      [BASICS.frame, false],
+      [BASICS.removeFrame, false],
+      [BASICS.moveIntoFrame, false],
+      [BASICS.moveOutOfFrame, false],
+      [RENAME_FRAME, false],
       [BASICS.selectAll, true],
     ]);
   });

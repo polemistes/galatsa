@@ -2,8 +2,9 @@
 
 // The canvas's context menu (a right click): the selection's actions with the
 // mouse until the editor shell has toolbars (docs/adr/0008-selection.md).
-// Cut, copy and paste, duplicate and delete, group and ungroup, lock and
-// unlock, select all: the basics' commands, shown when the mode offers them
+// Cut, copy and paste, duplicate and delete, the stacking order, group and
+// ungroup, frames (docs/adr/0014-stacking-and-frames.md), lock and unlock,
+// select all: the basics' commands, shown when the mode offers them
 // and greyed out when they would be refused. A right click on an element that
 // is not selected selects it first, a locked one too, so that it can be
 // unlocked: clicks with the selection tool pass over locked elements.
@@ -11,10 +12,12 @@
 // The menu's state is a store here; the interface draws it, and the page
 // supplies the clipboard actions, which need the browser (dom.ts).
 
-import type { ElementId, Point } from "@galatsa/core";
+import { FRAME_TYPE, type ElementId, type Point } from "@galatsa/core";
 import type { ContributionId, Label } from "@galatsa/extension-api";
 import { BASICS } from "@galatsa/extension-basics";
+import { labelAt, shownFrames } from "@galatsa/extension-select";
 import type { Editor } from "./editor.ts";
+import { RENAME_FRAME } from "./rename-target.ts";
 import { selectableFor } from "./services.ts";
 
 /** How far from an element a right click still hits it, in CSS pixels. */
@@ -151,18 +154,41 @@ export function menuEntries(editor: Editor, clipboard: MenuClipboard): MenuEntry
   }
   command(BASICS.duplicate, 1);
   command(BASICS.delete, 1);
-  command(BASICS.group, 2);
-  command(BASICS.ungroup, 2);
-  command(BASICS.lock, 3);
-  command(BASICS.unlock, 3);
-  command(BASICS.selectAll, 4);
+  command(BASICS.bringToFront, 2);
+  command(BASICS.bringForward, 2);
+  command(BASICS.sendBackward, 2);
+  command(BASICS.sendToBack, 2);
+  command(BASICS.group, 3);
+  command(BASICS.ungroup, 3);
+  // Frames (docs/adr/0014): around the selection, removed keeping their
+  // contents, into and out of frames, and the name.
+  command(BASICS.frame, 4);
+  command(BASICS.removeFrame, 4);
+  command(BASICS.moveIntoFrame, 4);
+  command(BASICS.moveOutOfFrame, 4);
+  command(RENAME_FRAME, 4);
+  command(BASICS.lock, 5);
+  command(BASICS.unlock, 5);
+  command(BASICS.selectAll, 6);
   return out;
 }
 
-/** The element a right click at a point on screen is on, locked ones included. */
+/**
+ * The element a right click at a point on screen is on, locked ones
+ * included; a frame's name above it counts as the frame, as it does for the
+ * selection tool (docs/adr/0014), where no element is hit there.
+ */
 export function elementForMenu(editor: Editor, point: Point): ElementId | null {
-  const hit = editor.renderer.hitTest(point.x, point.y, { tolerance: PICK });
-  return hit === null ? null : selectableFor(editor.live, hit);
+  const found = editor.renderer.hitTest(point.x, point.y, { tolerance: PICK });
+  const hit = found === null ? null : selectableFor(editor.live, found);
+  if (hit !== null && editor.live.get(hit)?.type !== FRAME_TYPE) return hit;
+  const name = labelAt(
+    editor.doc,
+    shownFrames(editor.services, editor.doc),
+    editor.screenToWorld(point),
+    editor.services.camera.get().zoom,
+  );
+  return name ?? hit;
 }
 
 /**

@@ -91,4 +91,11 @@ export default {
   "properties.mixed": "Ulike verdier",
   "properties.none": "Ingen",
   "properties.hint": "Velg noe på lerretet for å se og endre egenskapene.",
+  "frames.rename": "Gi rammen nytt navn …",
+  "frames.panel": "Navn på rammen",
+  "frames.name": "Rammens navn",
+  "frames.save": "Lagre",
+  "frames.cancel": "Avbryt",
+  "frames.close": "Lukk",
+  "frames.none": "Velg én ramme for å gi den nytt navn.",
 };

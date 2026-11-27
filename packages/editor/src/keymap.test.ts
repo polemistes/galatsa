@@ -86,6 +86,65 @@ describe("shortcut candidates", () => {
       shortcutCandidates(press("Control", "ControlLeft", { ctrlKey: true }), PC),
     ).toEqual([]);
     expect(shortcutCandidates(press("Dead", "BracketRight"), PC)).toEqual([]);
+    expect(
+      shortcutCandidates(press("Dead", "BracketRight", { shiftKey: true }), PC),
+    ).toEqual([]);
+    // With AltGr it starts a character too.
+    expect(
+      shortcutCandidates(
+        press("Dead", "BracketRight", { ctrlKey: true, altGraph: true }),
+        PC,
+      ),
+    ).toEqual([]);
+    // Windows reports AltGr as Ctrl and Alt: AltGr and a dead key names no
+    // Mod+Alt shortcut either, with or without AltGraph (F-I).
+    for (const altGraph of [true, false])
+      for (const code of ["BracketRight", "Equal"])
+        expect(
+          shortcutCandidates(
+            press("Dead", code, { ctrlKey: true, altKey: true, altGraph }),
+            PC,
+          ),
+        ).toEqual([]);
+  });
+
+  it("reaches the stacking shortcuts on a Norwegian keyboard, by place and by AltGr", () => {
+    const map = new Map(
+      [
+        ["Mod+[", "send-backward"],
+        ["Mod+]", "bring-forward"],
+        ["Mod+Shift+[", "send-to-back"],
+        ["Mod+Shift+]", "bring-to-front"],
+        ["Mod+ArrowUp", "bring-forward"],
+        ["Mod+Shift+ArrowDown", "send-to-back"],
+      ].map(([s, v]) => [platformShortcut(s!, PC)!, v!]),
+    );
+    const value = (input: KeyInput) => matchShortcut(input, PC, map)?.value;
+    // Ctrl and the two keys right of P: Å, and ¨ (a dead key).
+    expect(value(press("å", "BracketLeft", { ctrlKey: true }))).toBe("send-backward");
+    expect(value(press("Dead", "BracketRight", { ctrlKey: true }))).toBe("bring-forward");
+    expect(value(press("Å", "BracketLeft", { ctrlKey: true, shiftKey: true }))).toBe(
+      "send-to-back",
+    );
+    expect(value(press("Dead", "BracketRight", { ctrlKey: true, shiftKey: true }))).toBe(
+      "bring-to-front",
+    );
+    // Linux: Ctrl+AltGr+8 and Ctrl+AltGr+9 give the brackets themselves.
+    expect(value(press("[", "Digit8", { ctrlKey: true, altGraph: true }))).toBe(
+      "send-backward",
+    );
+    expect(value(press("]", "Digit9", { ctrlKey: true, altGraph: true }))).toBe(
+      "bring-forward",
+    );
+    // The arrow keys, on every layout.
+    expect(value(press("ArrowUp", "ArrowUp", { ctrlKey: true }))).toBe("bring-forward");
+    expect(
+      value(press("ArrowDown", "ArrowDown", { ctrlKey: true, shiftKey: true })),
+    ).toBe("send-to-back");
+    // macOS: Cmd and the key right of Å (dead there too).
+    expect(
+      matchShortcut(press("Dead", "BracketRight", { metaKey: true }), MAC, map)?.value,
+    ).toBe("bring-forward");
   });
 
   it("names plain keys and Space", () => {

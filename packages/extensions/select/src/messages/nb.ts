@@ -4,4 +4,6 @@
 
 export default {
   tool: "Velg",
+  "frame-tool": "Ramme",
+  "frame.unnamed": "Ramme",
 };

@@ -3,8 +3,14 @@
 // Moving, resizing, scaling and rotating elements. Each command writes in one
 // transaction, so a drag that ends in one of them is one document update.
 
-import { GROUP_TYPE, type ElementId, type Point } from "@galatsa/core";
-import { edit, moveElement, resizeElement, rotateElement } from "@galatsa/core/ydoc";
+import { FRAME_TYPE, GROUP_TYPE, type ElementId, type Point } from "@galatsa/core";
+import {
+  edit,
+  moveElement,
+  reparent as reparentElement,
+  resizeElement,
+  rotateElement,
+} from "@galatsa/core/ydoc";
 import {
   applyScale,
   capabilitiesOf,
@@ -14,8 +20,10 @@ import {
   type CommandContext,
 } from "@galatsa/extension-api/editing";
 import {
+  backToFront,
   canTargetAll,
   canTarget,
+  isOpenContainer,
   isFiniteNumber,
   isId,
   label,
@@ -31,19 +39,49 @@ export interface MoveArgs {
   /** Offset in world units. Containers only translate, so it is the same in every space. */
   readonly dx: number;
   readonly dy: number;
+  /**
+   * A frame or group to move them into first, or null for the canvas: a drag
+   * that ends in another container (docs/adr/0001, section 5.3). Those already
+   * seen there only move. Absent: they stay in their containers.
+   */
+  readonly target?: ElementId | null;
 }
 
-function readMove(ctx: CommandContext, args: unknown): MoveArgs | undefined {
+interface MovePlan {
+  readonly ids: ElementId[];
+  readonly dx: number;
+  readonly dy: number;
+  /** The outermost moved elements that change container, back to front. */
+  readonly into: ElementId[];
+  readonly target: ElementId | null;
+}
+
+function readMove(ctx: CommandContext, args: unknown): MovePlan | undefined {
   const ids = readIds(args);
-  const { dx, dy } = (args ?? {}) as Partial<MoveArgs>;
+  const { dx, dy, target } = (args ?? {}) as Partial<MoveArgs>;
   if (ids === undefined || !isFiniteNumber(dx) || !isFiniteNumber(dy)) return undefined;
-  if (dx === 0 && dy === 0) return undefined;
-  return canTargetAll(ctx, resolve(ctx), ids) ? { ids, dx, dy } : undefined;
+  if (target !== undefined && target !== null && !isId(target)) return undefined;
+  const r = resolve(ctx);
+  if (!canTargetAll(ctx, r, ids)) return undefined;
+  let into: ElementId[] = [];
+  if (target !== undefined) {
+    if (!isOpenContainer(r, target)) return undefined;
+    // Nothing goes into itself or into something inside it.
+    if (target !== null && ids.some((id) => r.isWithin(target, id))) return undefined;
+    into = backToFront(
+      r,
+      outermost(r, ids).filter((id) => r.logicalParentOf(id) !== target),
+    );
+  }
+  if (dx === 0 && dy === 0 && into.length === 0) return undefined;
+  return { ids, dx, dy, into, target: target ?? null };
 }
 
 /**
- * Moves elements by an offset. Elements inside another moved element move with
- * it and are not moved again. Elements of a missing extension can be moved.
+ * Moves elements by an offset, and into another container first when a
+ * target is given (a drag into or out of a frame); one undo step. Elements
+ * inside another moved element move with it and are not moved again.
+ * Elements of a missing extension can be moved.
  */
 export const move = defineCommand<MoveArgs, void>({
   name: "move",
@@ -53,6 +91,11 @@ export const move = defineCommand<MoveArgs, void>({
   enabled: (ctx, args) => readMove(ctx, args) !== undefined,
   execute(ctx, args) {
     const a = readMove(ctx, args) ?? refuse("move");
+    // A change of container keeps the place on the canvas; the move then
+    // writes positions in the new container's space (0001, section 5.3).
+    // Reparenting is one transaction per element, as it may re-key a list.
+    for (const id of a.into) reparentElement(ctx.doc, id, a.target);
+    if (a.dx === 0 && a.dy === 0) return;
     const r = resolve(ctx);
     const targets = outermost(r, a.ids).map((id) => ({ id, at: r.localPosition(id) }));
     edit(ctx.doc, () => {
@@ -113,9 +156,27 @@ export const resize = defineCommand<ResizeArgs, void>({
   enabled: (ctx, args) => readResize(ctx, args) !== undefined,
   execute(ctx, args) {
     const a = readResize(ctx, args) ?? refuse("resize");
+    // What is in a frame is placed in the frame's space, whose origin is the
+    // frame's corner: when the corner moves (a left or top handle), what is
+    // inside is moved back by as much, so it stays where it is on the canvas
+    // (docs/adr/0014). Every child in the effective tree, gone ones too, so
+    // that what comes back with an undo of a delete is in place as well.
+    const r = resolve(ctx);
+    const kept: { id: ElementId; x: number; y: number }[] = [];
+    if (a.at !== undefined && r.get(a.id)?.type === FRAME_TYPE) {
+      const was = r.localPosition(a.id);
+      const dx = a.at.x - was.x;
+      const dy = a.at.y - was.y;
+      if (dx !== 0 || dy !== 0)
+        for (const child of r.children(a.id)) {
+          const at = r.localPosition(child);
+          kept.push({ id: child, x: at.x - dx, y: at.y - dy });
+        }
+    }
     edit(ctx.doc, () => {
       if (a.at !== undefined) moveElement(ctx.doc, a.id, a.at.x, a.at.y);
       resizeElement(ctx.doc, a.id, a.w, a.h);
+      for (const child of kept) moveElement(ctx.doc, child.id, child.x, child.y);
     });
   },
 });

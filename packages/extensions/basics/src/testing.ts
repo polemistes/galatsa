@@ -218,6 +218,13 @@ const WEIGHTS: ReadonlyArray<readonly [string, number]> = [
   [BASICS.sendToBack, 2],
   [BASICS.bringForward, 2],
   [BASICS.sendBackward, 2],
+  [BASICS.frame, 3],
+  ["frame-rect", 1],
+  [BASICS.removeFrame, 2],
+  [BASICS.rename, 2],
+  [BASICS.moveIntoFrame, 2],
+  [BASICS.moveOutOfFrame, 2],
+  ["move-into", 3],
   [BASICS.group, 6],
   [BASICS.ungroup, 3],
   [BASICS.lock, 2],
@@ -259,6 +266,7 @@ export function randomCommands(
   const visible = r.drawOrder();
   const containers = visible.filter((id) => r.isContainer(id));
   const groups = visible.filter((id) => r.get(id)?.type === GROUP_TYPE);
+  const frames = visible.filter((id) => r.get(id)?.type === FRAME_TYPE);
   const locked = visible.filter((id) => r.get(id)?.locked === true);
   const anyContainer = () => (random() < 0.4 ? null : (pick(random, containers) ?? null));
   const box = () => ({
@@ -331,6 +339,69 @@ export function randomCommands(
     }
     case BASICS.ungroup:
       return [{ id: kind, args: { ids: some(random, groups, 2) } }];
+    case BASICS.frame: {
+      const first = pick(random, visible);
+      if (first === undefined) return [{ id: kind, args: { ids: [] } }];
+      const siblings = r.logicalChildren(r.logicalParentOf(first));
+      return [{ id: kind, args: { ids: some(random, siblings, 3) } }];
+    }
+    case "frame-rect": {
+      const { parent, ...rect } = box();
+      const inside = r.logicalChildren(parent);
+      return [
+        {
+          id: BASICS.frame,
+          args: { rect, parent, ids: random() < 0.5 ? [] : some(random, inside, 2) },
+        },
+      ];
+    }
+    case BASICS.removeFrame:
+      return [{ id: kind, args: { ids: some(random, frames, 2) } }];
+    case BASICS.rename:
+      return [
+        {
+          id: kind,
+          args: {
+            id: pick(random, visible),
+            name: pick(random, [
+              "",
+              "A",
+              "Ramme",
+              `Ramme ${Math.floor(random() * 100)}`,
+            ])!,
+          },
+        },
+      ];
+    case BASICS.moveOutOfFrame: {
+      // Some of what one frame holds, so that it is mostly accepted.
+      const frame = pick(random, frames);
+      const inside = frame === undefined ? [] : r.logicalChildren(frame);
+      return [
+        { id: kind, args: { ids: inside.length > 0 ? some(random, inside, 2) : ids() } },
+      ];
+    }
+    case BASICS.moveIntoFrame:
+      return [
+        {
+          id: kind,
+          args:
+            random() < 0.5
+              ? { ids: ids() }
+              : { ids: ids(), target: pick(random, frames) },
+        },
+      ];
+    case "move-into":
+      return [
+        {
+          id: BASICS.move,
+          args: {
+            ids: ids(),
+            dx: random() < 0.3 ? 0 : coordinate(random),
+            dy: 3,
+            target: anyContainer(),
+          },
+        },
+      ];
     case BASICS.unlock:
       return [{ id: kind, args: { ids: some(random, locked, 2) } }];
     case BASICS.duplicate:

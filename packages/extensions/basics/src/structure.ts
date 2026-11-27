@@ -196,29 +196,33 @@ function restackCommand(
   });
 }
 
+// Shortcuts (docs/adr/0014-stacking-and-frames.md): the brackets, as many
+// drawing programs have them, and the arrow keys, which are in the same place
+// on every keyboard layout; on a Norwegian keyboard the brackets are Ctrl with
+// the two keys right of P, or Ctrl with AltGr+8 and AltGr+9 on Linux.
 export const bringToFrontCommand = restackCommand(
   "bring-to-front",
   "front",
-  ["Mod+Shift+]"],
+  ["Mod+Shift+]", "Mod+Shift+ArrowUp"],
   true,
 );
 export const sendToBackCommand = restackCommand(
   "send-to-back",
   "back",
-  ["Mod+Shift+["],
+  ["Mod+Shift+[", "Mod+Shift+ArrowDown"],
   true,
 );
 export const bringForwardCommand = restackCommand(
   "bring-forward",
   "forward",
-  ["Mod+]"],
-  false,
+  ["Mod+]", "Mod+ArrowUp"],
+  true,
 );
 export const sendBackwardCommand = restackCommand(
   "send-backward",
   "backward",
-  ["Mod+["],
-  false,
+  ["Mod+[", "Mod+ArrowDown"],
+  true,
 );
 
 // ---------------------------------------------------------------------------

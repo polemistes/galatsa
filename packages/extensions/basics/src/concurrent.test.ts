@@ -211,7 +211,6 @@ function samePoint(a: Point, b: Point): boolean {
   return close(a.x, b.x) && close(a.y, b.y);
 }
 
-/** The state after, with every position put back that changed since the state before. */
 /**
  * Whether an element's position is converted from another space (rule 3 of
  * docs/adr/0001 section 5.3): written in a space that is neither its container
@@ -233,14 +232,123 @@ function converted(snapshot: DocumentSnapshot, r: Resolver, id: ElementId): bool
   );
 }
 
+/**
+ * The state after, with every position put back that changed since the state
+ * before. Where the step wrote an element's container as well as its position
+ * (a move into another container, which a drag makes as one step,
+ * docs/adr/0014), its container and rebase are put back with the position:
+ * the old position read under the new container would be converted from
+ * another space, which says nothing about the step.
+ */
 function withPositionsOf(after: DocumentSnapshot, before: DocumentSnapshot): Resolver {
   const elements = { ...after.elements };
   for (const [id, element] of Object.entries(after.elements)) {
     const old = Object.hasOwn(before.elements, id) ? before.elements[id] : undefined;
-    if (old && JSON.stringify(old.pos) !== JSON.stringify(element.pos))
-      elements[id] = { ...element, pos: old.pos };
+    if (!old || JSON.stringify(old.pos) === JSON.stringify(element.pos)) continue;
+    const placed =
+      old.parent !== element.parent ||
+      JSON.stringify(old.rebase ?? null) !== JSON.stringify(element.rebase ?? null);
+    elements[id] = placed
+      ? { ...element, pos: old.pos, parent: old.parent, rebase: old.rebase }
+      : { ...element, pos: old.pos };
   }
   return new Resolver(lookupFromRecord(elements));
+}
+
+/**
+ * Why an element may move on the canvas by more than the positions an undo
+ * wrote, where that is a known limitation of the model (docs/adr/0001
+ * section 13), or null. Rule 1 leaves such elements out, by name; every
+ * other move fails the test.
+ *
+ * - "cycle" (section 5.1, section 13 item 27): a container on the element's
+ *   way up is in a parent cycle, before or after the undo (an undo that
+ *   closes or ends one), which the resolver breaks at its smallest id; what
+ *   is under the break is placed through another chain of containers.
+ * - "converted" (section 13 item 16): the element, or a container on its way
+ *   up, has a position converted from another space by rule 3 of section 5.3,
+ *   before or after the undo: such positions are converted through offsets
+ *   that any change of container along the way can alter.
+ * - "nested" (section 13 item 26): the step changed the container of the
+ *   element and of a container above it.
+ */
+type Exemption = "cycle" | "converted" | "nested";
+
+function inCycle(snapshot: DocumentSnapshot, r: Resolver, id: ElementId): boolean {
+  // Up the stored parents: a stored parent that is a container and that the
+  // resolver does not take as the parent, because it lies inside the child.
+  const seen = new Set<ElementId>();
+  for (let at: ElementId | null = id; at !== null && !seen.has(at);) {
+    seen.add(at);
+    const stored: ElementId | null = snapshot.elements[at]?.parent ?? null;
+    if (stored === null) return false;
+    if (r.isContainer(stored) && r.parentOf(at) !== stored && r.isWithin(stored, at))
+      return true;
+    at = stored;
+  }
+  return false;
+}
+
+function chainOf(r: Resolver, id: ElementId): ElementId[] {
+  const out: ElementId[] = [];
+  for (
+    let at: ElementId | null = id;
+    at !== null && out.length < 4096;
+    at = r.parentOf(at)
+  )
+    out.push(at);
+  return out;
+}
+
+function exemption(
+  id: ElementId,
+  states: readonly { snapshot: DocumentSnapshot; r: Resolver }[],
+): Exemption | null {
+  if (states.some(({ snapshot, r }) => inCycle(snapshot, r, id))) return "cycle";
+  for (const { snapshot, r } of states)
+    if (chainOf(r, id).some((at) => converted(snapshot, r, at))) return "converted";
+  const [before, after] = states;
+  const changed = chainOf(after!.r, id).filter(
+    (at) =>
+      before!.snapshot.elements[at]?.parent !== after!.snapshot.elements[at]?.parent,
+  );
+  return changed.length > 1 ? "nested" : null;
+}
+
+/** How often rule 1 left an element out, and why (for a debugger or a print while investigating). */
+const exemptions: Record<Exemption, number> = { cycle: 0, converted: 0, nested: 0 };
+
+/** The keys that place an element, in a container and on the canvas. */
+const PLACE_KEYS = new Set(["pos", "parent", "rebase", "order"]);
+
+/** For each element, the place keys a step wrote, with their values before it. */
+function placeKeysOf(
+  own: readonly StepValue[],
+): Map<ElementId, Map<string, string | undefined>> {
+  const out = new Map<ElementId, Map<string, string | undefined>>();
+  for (const v of own) {
+    if (!PLACE_KEYS.has(v.key)) continue;
+    const keys = out.get(v.id) ?? new Map<string, string | undefined>();
+    keys.set(v.key, v.old);
+    out.set(v.id, keys);
+  }
+  return out;
+}
+
+/**
+ * Puts an element's place keys back to their values before a step. False
+ * where a key had none (only a rebase may be missing; the element was then
+ * made by the step, and has no place before it).
+ */
+function restorePlace(
+  element: Record<string, unknown>,
+  keys: ReadonlyMap<string, string | undefined>,
+): boolean {
+  for (const [key, old] of keys) {
+    if (old === undefined && key !== "rebase") return false;
+    element[key] = old === undefined ? null : JSON.parse(old);
+  }
+  return true;
 }
 
 /** Runs undo or redo for `me`, checking rules 1 to 4 against `other`. */
@@ -266,13 +374,50 @@ function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): b
   const snap1 = toSnapshot(me.doc);
   const r1 = new Resolver(lookupFromRecord(snap1.elements));
   const back = withPositionsOf(snap1, snap0);
+  const states = [
+    { snapshot: snap0, r: r0 },
+    { snapshot: snap1, r: r1 },
+  ];
   for (const id of seen) {
     if (r.isGone(id)) continue;
-    if (converted(snap0, r0, id) || converted(snap1, r1, id)) continue;
-    expect(
-      samePoint(r0.worldOrigin(id), back.worldOrigin(id)),
+    if (samePoint(r0.worldOrigin(id), back.worldOrigin(id))) continue;
+    const why = exemption(id, states);
+    if (why !== null) {
+      exemptions[why] += 1;
+      continue;
+    }
+    expect.fail(
       `${id} moved on the canvas by something other than a position the step wrote`,
-    ).toBe(true);
+    );
+  }
+  // 1b. An element whose container and position the step wrote ends where
+  // the step found it (its keys as they were before the step, the rest as
+  // now), or stays where it is (an undo finished with a rebase that keeps its
+  // place, docs/adr/0001 section 10). withPositionsOf says nothing about it.
+  for (const [id, keys] of placeKeysOf(own)) {
+    if (!keys.has("pos") || !keys.has("parent") || r.isGone(id) || !seen.includes(id))
+      continue;
+    const element = snap1.elements[id];
+    if (element === undefined) continue;
+    const restored = { ...element } as Record<string, unknown>;
+    if (!restorePlace(restored, keys)) continue;
+    const expected = new Resolver(
+      lookupFromRecord({
+        ...snap1.elements,
+        [id]: restored as unknown as typeof element,
+      }),
+    );
+    const now = r1.worldOrigin(id);
+    if (samePoint(now, expected.worldOrigin(id)) || samePoint(now, r0.worldOrigin(id)))
+      continue;
+    const why = exemption(id, [...states, { snapshot: snap1, r: expected }]);
+    if (why !== null) {
+      exemptions[why] += 1;
+      continue;
+    }
+    expect.fail(
+      `${id}, moved into or out of a container by the step, is not back in place`,
+    );
   }
   // 2. What the other user deleted stays deleted.
   for (const id of deleted)
@@ -284,10 +429,33 @@ function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): b
     expect(by.has(mine), `${id} gone by ${[...by].join(",")}`).toBe(true);
   }
   // 4. The undo is done (when Yjs undid this very step and did not skip it),
-  // except what would bring back something deleted by someone else.
+  // except what would bring back something deleted by someone else, or hide
+  // what the user sees under someone else's delete: the undo manager keeps
+  // such a change of container back (docs/adr/0001 section 10; the second
+  // since docs/adr/0014).
+  // Judged on the state before the undo (its revisions), with the element
+  // placed as it was before the step.
+  const heldBack = new Set<ElementId>();
+  for (const [id, keys] of placeKeysOf(own)) {
+    const element = snap0.elements[id];
+    if (element === undefined) continue;
+    const restored = { ...element } as Record<string, unknown>;
+    if (!restorePlace(restored, keys)) continue;
+    const hypothetical = new Resolver(
+      lookupFromRecord({
+        ...snap0.elements,
+        [id]: restored as unknown as typeof element,
+      }),
+    );
+    const inside = [id, ...r0.descendants(id)].filter((at) => r0.get(at) !== undefined);
+    const revives = inside.some((at) => r0.isDeleted(at) && !hypothetical.isDeleted(at));
+    const hides = inside.some((at) => !r0.isDeleted(at) && hypothetical.isDeleted(at));
+    if (revives || hides) heldBack.add(id);
+  }
   if (stack.length === size - 1)
     for (const v of own) {
       if (r0.isDeleted(v.id) && r.isDeleted(v.id)) continue;
+      if (heldBack.has(v.id) && PLACE_KEYS.has(v.key)) continue;
       const item = entry(v.map, v.key);
       const now = item && !item.deleted ? json(item) : undefined;
       expect(now !== v.value || now === v.old, `${v.label} not taken back`).toBe(true);
@@ -375,6 +543,44 @@ describe("two users undoing concurrently", () => {
     expect(a.resolver().worldOrigin(x)).toEqual({ x: 10, y: 50 });
     expect(b.resolver().worldOrigin(x)).toEqual({ x: 10, y: 50 });
   });
+
+  for (const command of [BASICS.frame, BASICS.group])
+    it(`undoing ${command === BASICS.frame ? "a frame around elements" : "a grouping"} after the other user deleted their container does not hide them by that delete (docs/adr/0014)`, () => {
+      for (const clients of [
+        [1, 2],
+        [2, 1],
+      ] as const) {
+        const { a, b, sync } = pair(clients);
+        const c = a.frame(0, 0, 500, 500);
+        const x = a.shape(10, 10, 10, 10, c);
+        const y = a.shape(40, 10, 10, 10, c);
+        const made = a.must<ElementId>(command, { ids: [x, y] });
+        sync();
+        // B deletes the container, seeing what is in it; A, not yet aware,
+        // moves the new frame or group, so it and what is in it survive.
+        b.must(BASICS.delete, { ids: [c] });
+        a.must(BASICS.move, { ids: [made], dx: 5, dy: 0 });
+        sync();
+        expect(a.resolver().isGone(x)).toBe(false);
+        // A undoes the move, then the frame or grouping.
+        a.must(BASICS.undo);
+        a.must(BASICS.undo);
+        sync();
+        for (const t of [a, b]) {
+          const r = t.resolver();
+          for (const id of [x, y]) {
+            // Gone only by A's own undo (the frame's creation taken back), or
+            // still seen (a dissolved group).
+            if (r.isGone(id)) expect([...removers(t, id)]).toEqual([a.doc.clientID]);
+            else expect(r.isDeleted(id)).toBe(false);
+          }
+        }
+        // A's redo brings them back as they were.
+        a.must(BASICS.redo);
+        sync();
+        for (const id of [x, y]) expect(b.resolver().isGone(id)).toBe(false);
+      }
+    });
 
   it("an undo after receiving the other user's delete of the element leaves it deleted", () => {
     const { a, b, sync } = pair();

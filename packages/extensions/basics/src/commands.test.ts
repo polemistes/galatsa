@@ -69,7 +69,8 @@ describe("the basics extension", () => {
       ]),
     );
     expect(quick).not.toContain(BASICS.lock);
-    expect(quick).not.toContain(BASICS.bringForward);
+    expect(quick).toContain(BASICS.bringForward);
+    expect(quick).toContain(BASICS.frame);
     const { map, conflicts } = t.host.commands.shortcuts("advanced");
     expect(conflicts).toEqual([]);
     expect(map.get("Mod+z")).toBe(BASICS.undo);

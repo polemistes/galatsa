@@ -18,6 +18,11 @@
 //   scaled, and groups and frames are not rotated.
 // - Arrow keys nudge the selection by one screen pixel (Shift: ten); Escape
 //   with nothing to cancel clears the selection.
+// - Frames (docs/adr/0014-stacking-and-frames.md): a frame's name above it
+//   takes the frame; a click on its background selects it and a drag moves
+//   it, as any element; with Shift, a drag on its background draws a band
+//   among what is in it. A drag of the selection let go over a frame moves
+//   it into the frame, and let go outside its frame moves it out.
 
 import { Resolver, type ElementId, type Point, type Rect } from "@galatsa/core";
 import { yLookup } from "@galatsa/core/ydoc";
@@ -33,7 +38,16 @@ import {
   type ToolPointerEvent,
   type ToolSession,
 } from "@galatsa/extension-api/editing";
-import { BASICS } from "@galatsa/extension-basics";
+import { BASICS, isFrame } from "@galatsa/extension-basics";
+import {
+  dropBox,
+  dropInto,
+  labelAt,
+  planDrop,
+  shownFrames,
+  type DropPlan,
+  type ShownFrame,
+} from "./frames.ts";
 import {
   CORNERS,
   SIDES,
@@ -76,6 +90,11 @@ const MIN_SIZE = 2;
 export const ROTATE_STEP = Math.PI / 12;
 /** Arrow keys nudge by this much, with Shift by ten times as much. */
 const NUDGE = 1;
+/**
+ * A selection that starts with its centre outside its frame leaves it once
+ * the centre has moved half its larger side, and at least this far (CSS px).
+ */
+const DROP_REACH = 24;
 
 const COLOR = "#2563eb";
 const HANDLE_FILL = "#ffffff";
@@ -107,12 +126,22 @@ type Drag =
       readonly clicked: ElementId | null;
       gesture: Gesture | null;
       offset: Point;
+      /** Where the selection can go, worked out when the drag starts. */
+      plan: DropPlan | null;
+      /** The container a drop here moves them into; undefined: they stay where they are. */
+      target: ElementId | null | undefined;
     }
   | {
       readonly kind: "band";
       readonly start: ToolPointerEvent;
       current: Point;
       readonly add: boolean;
+      /**
+       * A band drawn with Shift from a frame's background selects among what
+       * is in the frame, adding to the selection; a Shift-click there (no
+       * drag) adds or removes the frame.
+       */
+      readonly within?: ElementId;
     }
   | {
       readonly kind: "corner";
@@ -165,6 +194,10 @@ function bandRect(a: Point, b: Point): Rect {
     w: Math.abs(b.x - a.x),
     h: Math.abs(b.y - a.y),
   };
+}
+
+function touches(a: Rect, b: Rect): boolean {
+  return a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h;
 }
 
 /** The resize command's arguments. */
@@ -353,7 +386,34 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       clicked,
       gesture: null,
       offset: { x: 0, y: 0 },
+      plan: null,
+      target: undefined,
     };
+  };
+
+  // The frames on screen, for their names, worked out again when the
+  // document or the camera changes.
+  let shown: {
+    readonly doc: number;
+    readonly camera: unknown;
+    readonly frames: readonly ShownFrame[];
+  } | null = null;
+  const framesShown = (): readonly ShownFrame[] => {
+    const camera = services().camera.get();
+    if (shown === null || shown.doc !== docVersion || shown.camera !== camera)
+      shown = { doc: docVersion, camera, frames: shownFrames(services(), doc) };
+    return shown.frames;
+  };
+
+  /**
+   * The frame whose name is under a point, where nothing but a frame's
+   * background (or nothing) is hit there: an element on top of a name wins.
+   */
+  const nameUnder = (point: Point, hit: ElementId | null): ElementId | null => {
+    const r = resolver();
+    if (hit !== null && !isFrame(r, hit)) return null;
+    const id = labelAt(doc, framesShown(), point, zoom());
+    return id === null || r.isLocked(id) ? null : id;
   };
 
   // -------------------------------------------------------------------------
@@ -368,6 +428,17 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     if (d.gesture === null) {
       if (far < CLICK_SLOP) return;
       d.gesture = session.gesture();
+      const scene = services().scene;
+      const bounds = union(
+        d.items.map((i) => scene.bounds(i.id)).filter((b): b is Rect => b !== null),
+      );
+      if (bounds !== null)
+        d.plan = planDrop(
+          doc,
+          d.items.map((item) => item.id),
+          bounds,
+          DROP_REACH / zoom(),
+        );
       setCursor("move");
     }
     let dx = event.world.x - d.start.world.x;
@@ -377,6 +448,17 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       else dx = 0;
     }
     d.offset = { x: dx, y: dy };
+    // Let go here, the selection stays in its frame unless its centre,
+    // moved by the same offset (Shift's lock included), clearly lands
+    // elsewhere (docs/adr/0014, dropInto).
+    const into =
+      d.plan === null
+        ? undefined
+        : dropInto(d.plan, { x: d.plan.start.x + dx, y: d.plan.start.y + dy });
+    if (into !== d.target) {
+      d.target = into;
+      session.requestOverlay();
+    }
     const changes: Record<ElementId, { x: number; y: number }> = {};
     for (const { id, at } of d.items) changes[id] = { x: at.x + dx, y: at.y + dy };
     d.gesture.preview(changes);
@@ -463,9 +545,25 @@ export function startSelectTool(session: ToolSession): ToolHandler {
   };
 
   /** The preview of a resize: the corner in the element's own parent space. */
-  const resizePreview = (args: ResizeResult): PreviewChanges => ({
-    [args.id]: { x: args.px, y: args.py, w: args.w, h: args.h },
-  });
+  const resizePreview = (args: ResizeResult): PreviewChanges => {
+    const changes: Record<ElementId, { x: number; y: number; w?: number; h?: number }> = {
+      [args.id]: { x: args.px, y: args.py, w: args.w, h: args.h },
+    };
+    // What is in a frame stays where it is on the canvas when the frame's
+    // corner moves, as the resize command keeps it (docs/adr/0014).
+    const r = resolver();
+    if (isFrame(r, args.id)) {
+      const was = r.localPosition(args.id);
+      const dx = args.px - was.x;
+      const dy = args.py - was.y;
+      if (dx !== 0 || dy !== 0)
+        for (const child of r.children(args.id)) {
+          const at = r.localPosition(child);
+          changes[child] = { x: at.x - dx, y: at.y - dy };
+        }
+    }
+    return changes;
+  };
 
   const rotateTo = (
     d: Extract<Drag, { kind: "rotate" }>,
@@ -511,7 +609,8 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       f !== null &&
       f.move &&
       (hit === null ? insideBox(f.box, event.world) : f.ids.includes(hit));
-    setCursor(hit !== null || overSelection ? "move" : "default");
+    const overName = nameUnder(event.world, hit) !== null;
+    setCursor(hit !== null || overSelection || overName ? "move" : "default");
   };
 
   /** Follows the pointer during a drag. */
@@ -558,8 +657,26 @@ export function startSelectTool(session: ToolSession): ToolHandler {
           return;
         }
       }
-      const hit = s.scene.elementAt(event.world, PICK / zoom());
+      const found = s.scene.elementAt(event.world, PICK / zoom());
+      // A frame's name above it is a handle: it takes the frame, whatever
+      // else is behind it (an element on top of the name wins).
+      const name = nameUnder(event.world, found);
+      const hit = name ?? found;
+      /** The press is on a frame's background (not its name, nor an element in it). */
+      const background = hit !== null && name === null && isFrame(resolver(), hit);
       if (event.modifiers.shift) {
+        // On a frame's background, a drag draws a band among what is in the
+        // frame, adding to the selection; a click adds or removes the frame.
+        if (background) {
+          drag = {
+            kind: "band",
+            start: event,
+            current: event.world,
+            add: true,
+            within: hit,
+          };
+          return;
+        }
         if (hit !== null) {
           s.selection.set(
             selection.includes(hit)
@@ -571,8 +688,20 @@ export function startSelectTool(session: ToolSession): ToolHandler {
         drag = { kind: "band", start: event, current: event.world, add: true };
         return;
       }
+      const already = hit !== null && selection.includes(hit);
+      // Between the elements of a selection, on the background of a frame
+      // they are in, the selection is moved, as on the canvas.
+      if (
+        background &&
+        !already &&
+        f !== null &&
+        f.move &&
+        insideBox(f.box, event.world)
+      ) {
+        startMove(event, f.ids, null);
+        return;
+      }
       if (hit !== null) {
-        const already = selection.includes(hit);
         const ids = already ? selection : [hit];
         if (!already) s.selection.set(ids);
         if (session.isEnabled(BASICS.move, { ids: [...ids], dx: 1, dy: 0 }))
@@ -614,14 +743,30 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       session.requestOverlay();
       switch (d.kind) {
         case "band": {
+          const s = services();
+          // A Shift-click on a frame's background adds or removes the frame.
           // A click on empty canvas is not a band: it would select what only
           // the bounding box of a turned or round element covers.
-          if (still) return;
-          const s = services();
+          if (still) {
+            const id = d.within;
+            if (id !== undefined) {
+              const now = s.selection.get();
+              s.selection.set(
+                now.includes(id) ? now.filter((other) => other !== id) : [...now, id],
+              );
+            }
+            return;
+          }
           const r = resolver();
-          const found = s.scene
-            .elementsIn(bandRect(d.start.world, event.world), "touching")
-            .filter((id) => !r.isLocked(id));
+          const rect = bandRect(d.start.world, event.world);
+          const found = (
+            d.within === undefined
+              ? s.scene.elementsIn(rect, "touching")
+              : r.logicalChildren(d.within).filter((id) => {
+                  const b = s.scene.bounds(id);
+                  return b !== null && touches(rect, b);
+                })
+          ).filter((id) => !r.isLocked(id));
           s.selection.set(d.add ? [...s.selection.get(), ...found] : found);
           return;
         }
@@ -634,6 +779,7 @@ export function startSelectTool(session: ToolSession): ToolHandler {
             ids: [...d.ids],
             dx: d.offset.x,
             dy: d.offset.y,
+            ...(d.target !== undefined ? { target: d.target } : {}),
           });
           break;
         case "corner":
@@ -709,6 +855,15 @@ export function startSelectTool(session: ToolSession): ToolHandler {
         ctx.fill(path, "rgba(37, 99, 235, 0.08)");
         ctx.stroke(path, { color: COLOR, width: px, dash: [4 * px, 4 * px] });
         return;
+      }
+      // The frame a drop would move the selection into.
+      if (drag?.kind === "move" && drag.target !== undefined && drag.target !== null) {
+        const box = drag.plan === null ? null : dropBox(drag.plan, drag.target);
+        if (box !== null) {
+          const path = ctx.createPath();
+          path.rect(box.x, box.y, box.w, box.h);
+          ctx.stroke(path, { color: COLOR, width: 2 * px });
+        }
       }
       // While a handle or the selection is dragged, the editor's outline
       // follows the preview; the handles come back when it ends.

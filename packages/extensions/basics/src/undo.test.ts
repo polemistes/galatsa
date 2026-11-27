@@ -156,7 +156,12 @@ function scenario(seed: number, count = COMMANDS, checks = false) {
       commands.forEach((command, i) => {
         const outcome = outcomes[i]!;
         log.push(`${command.id} ${outcome.ok ? "ok" : outcome.reason}`);
-        if (outcome.ok) succeeded.set(command.id, (succeeded.get(command.id) ?? 0) + 1);
+        if (outcome.ok) {
+          // A move into another container counts apart from a plain move.
+          const target = Object.hasOwn((command.args ?? {}) as object, "target");
+          const key = command.id === BASICS.move && target ? MOVE_INTO : command.id;
+          succeeded.set(key, (succeeded.get(key) ?? 0) + 1);
+        }
         // Nothing fails half-way: a command is either refused or runs.
         if (!outcome.ok) expect(outcome.reason).toBe("disabled");
       });
@@ -193,6 +198,18 @@ function redoSteps(history: History, count: number): void {
   for (let i = 0; i < count; i++) expect(history.step(BASICS.redo)).toBe(true);
 }
 
+/** How a move into another container (a drag into or out of a frame) is counted. */
+const MOVE_INTO = "move with a target";
+/** The frame commands of docs/adr/0014, which the scenarios must run successfully. */
+const FRAME_COMMANDS = [
+  BASICS.frame,
+  BASICS.removeFrame,
+  BASICS.rename,
+  BASICS.moveIntoFrame,
+  BASICS.moveOutOfFrame,
+  MOVE_INTO,
+] as const;
+
 describe("a thousand random commands", () => {
   const runs = [
     ...SEEDS.map((seed) => ({ seed, commands: COMMANDS, checks: false })),
@@ -214,6 +231,14 @@ describe("a thousand random commands", () => {
         BASICS.undo,
       ])
         expect(succeeded.get(id) ?? 0, id).toBeGreaterThan(0);
+      // And the frame commands (docs/adr/0014), a fair number of times in a
+      // full run (a short run, every step checked, may miss one): seeds 1 to
+      // 12 ran each 5 to 38 times in 1,000 commands.
+      if (commands >= 1000)
+        for (const id of FRAME_COMMANDS)
+          expect(succeeded.get(id) ?? 0, id).toBeGreaterThanOrEqual(
+            Math.floor(commands / 250),
+          );
 
       withSeed(seed + 1000, () => {
         const undone = undoAll(history, t);

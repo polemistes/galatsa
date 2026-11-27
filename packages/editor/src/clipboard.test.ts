@@ -188,7 +188,7 @@ describe("where a paste lands", () => {
     expect(world(editor, editor.selection[0]!)).toEqual({ x: 420, y: 320, parent: null });
   });
 
-  it("brings what was copied out of sight inside a frame to the middle of the view", () => {
+  it("brings what was copied out of sight inside a frame to the middle of the view, on the canvas there", () => {
     const editor = make();
     const frame = must<ElementId>(editor, INSERT_FRAME, {
       x: 4000,
@@ -205,7 +205,9 @@ describe("where a paste lands", () => {
     expect(world(editor, editor.selection[0]!)).toEqual({
       x: 450,
       y: 350,
-      parent: frame,
+      // Not into the frame it came from, out of view: it would show where
+      // the frame is not (docs/adr/0014).
+      parent: null,
     });
   });
 });
