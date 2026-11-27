@@ -282,4 +282,36 @@ describe("editor core", () => {
     expect(outcome.ok).toBe(false);
     expect(toSnapshot(editor.doc).elements).toEqual(before.elements);
   });
+
+  it("takes no input while input is off, and cancels a drag in progress", () => {
+    const { editor } = make();
+    const shape = (
+      editor.run<string>("examples.shape/insert", {
+        kind: "rect",
+        x: 100,
+        y: 100,
+        w: 100,
+        h: 100,
+      }) as { value: string }
+    ).value;
+    editor.pointerDown(pointer(150, 150));
+    editor.pointerMove(pointer(250, 150));
+    expect(editor.scene.localPosition(shape)).toEqual({ x: 200, y: 100 });
+    // The document starts closing: the drag is cancelled, nothing is written.
+    editor.setInputEnabled(false);
+    expect(editor.scene.preview.size).toBe(0);
+    editor.pointerUp(pointer(250, 150));
+    expect(editor.live.localPosition(shape)).toEqual({ x: 100, y: 100 });
+    expect(editor.keyDown(key("z", { ctrlKey: true }))).toBeNull();
+    expect(editor.keyDown(key("r"))).toBeNull();
+    const camera = editor.camera;
+    editor.pan(10, 10);
+    expect(editor.camera).toEqual(camera);
+    drag(editor, { x: 400, y: 400 }, { x: 500, y: 500 });
+    expect(shapes(editor)).toEqual([shape]);
+    editor.setInputEnabled(true);
+    expect(editor.keyDown(key("z", { ctrlKey: true }))).toMatchObject({
+      command: BASICS.undo,
+    });
+  });
 });

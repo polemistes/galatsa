@@ -29,7 +29,7 @@ import {
   type WorkerLike,
 } from "@galatsa/storage";
 import { mountEditor } from "./dom.ts";
-import { EditorDocument } from "./document.ts";
+import { acceptsInput, EditorDocument } from "./document.ts";
 import { Editor } from "./editor.ts";
 import { loadExtensions } from "./extensions.ts";
 import { assetImages } from "./images.ts";
@@ -225,6 +225,7 @@ export class EditorApp {
         this.#set({ conflicts: this.#loaded.conflicts[created.mode] });
     });
     this.#stopDocument = doc.subscribe((state) => {
+      created.setInputEnabled(acceptsInput(state.phase));
       if (state.phase === "closed" && this.#state.document === doc) {
         this.#closeEditor();
         this.#set({ phase: "closed", editor: null });

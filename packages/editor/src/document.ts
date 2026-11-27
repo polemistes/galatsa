@@ -75,6 +75,11 @@ export function statusMessage(
   return null;
 }
 
+/** Whether the canvas takes input: not while closing, nor while the offer to save is shown. */
+export function acceptsInput(phase: DocumentPhase): boolean {
+  return phase === "open";
+}
+
 /** How long closing waits for changes that are only waiting for their turn. */
 const FLUSH_WAIT_MS = 5000;
 
@@ -227,35 +232,45 @@ export class EditorDocument {
    * or `keepOpen`.
    */
   async close(): Promise<DocumentPhase> {
-    if (this.#state.phase === "closed" || this.#state.phase === "closing")
-      return this.#state.phase;
+    if (this.#state.phase !== "open" || this.#state.savingFile) return this.#state.phase;
     this.#set({ phase: "closing" });
-    let status = this.session.status;
-    if (status.problem === null && status.pending) {
-      await Promise.race([
-        this.session.flush().catch(() => false),
-        new Promise((resolve) => setTimeout(resolve, FLUSH_WAIT_MS)),
-      ]);
-      status = this.session.status;
-    }
-    if (
-      status.problem !== null ||
-      status.pending ||
-      (this.#state.volatile && status.unsavedToFile)
-    ) {
-      this.#set({ phase: "offer-save", status });
+    try {
+      let status = this.session.status;
+      if (status.problem === null && status.pending) {
+        await Promise.race([
+          this.session.flush().catch(() => false),
+          new Promise((resolve) => setTimeout(resolve, FLUSH_WAIT_MS)),
+        ]);
+        status = this.session.status;
+      }
+      if (
+        status.problem !== null ||
+        status.pending ||
+        (this.#state.volatile && status.unsavedToFile)
+      ) {
+        this.#set({ phase: "offer-save", status });
+        return "offer-save";
+      }
+      const result = await this.session.close();
+      if (!result.ok) {
+        this.#set({
+          phase: "offer-save",
+          notices: [...this.#state.notices, result.problem],
+        });
+        return "offer-save";
+      }
+      this.#closed();
+      return "closed";
+    } catch (error) {
+      console.error(error);
+      this.#set({ phase: "offer-save" });
       return "offer-save";
+    } finally {
+      // Whatever went wrong, the user is not left at "closing": the offer to
+      // save as a file is the safe way on.
+      if ((this.#state.phase as DocumentPhase) === "closing")
+        this.#set({ phase: "offer-save" });
     }
-    const result = await this.session.close();
-    if (!result.ok) {
-      this.#set({
-        phase: "offer-save",
-        notices: [...this.#state.notices, result.problem],
-      });
-      return "offer-save";
-    }
-    this.#closed();
-    return "closed";
   }
 
   /**
@@ -274,11 +289,22 @@ export class EditorDocument {
     return this.#state.phase;
   }
 
-  /** After the offer: closes although not everything is stored. */
+  /**
+   * After the offer: closes although not everything is stored. Only from the
+   * offer, and not while a save to a file is running.
+   */
   async closeAnyway(): Promise<void> {
+    if (this.#state.phase !== "offer-save" || this.#state.savingFile) return;
     this.#set({ phase: "closing" });
-    await this.session.close({ evenIfUnstored: true });
-    this.#closed();
+    try {
+      await this.session.close({ evenIfUnstored: true });
+      this.#closed();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      if ((this.#state.phase as DocumentPhase) === "closing")
+        this.#set({ phase: "offer-save" });
+    }
   }
 
   /** After the offer: goes back to editing. */

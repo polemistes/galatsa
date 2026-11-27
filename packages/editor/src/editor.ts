@@ -158,6 +158,7 @@ export class Editor {
   #clipboard: Fragment | null = null;
   #disposed = false;
   #version = 0;
+  #inputEnabled = true;
 
   constructor(options: EditorOptions) {
     const doc = options.doc;
@@ -413,11 +414,13 @@ export class Editor {
 
   /** Zooms by `factor` about a point on screen. */
   zoomAt(point: Point, factor: number): void {
+    if (!this.#inputEnabled) return;
     this.services.camera.set(zoomAbout(this.#state.camera, this.screen, point, factor));
   }
 
   /** Moves the canvas by a distance in screen pixels. */
   pan(dx: number, dy: number): void {
+    if (!this.#inputEnabled) return;
     this.services.camera.set(panBy(this.#state.camera, dx, dy));
   }
 
@@ -452,15 +455,33 @@ export class Editor {
     };
   }
 
+  /**
+   * Whether the canvas takes input (pointer, keys, wheel). The program turns
+   * it off while a document closes or offers to be saved as a file; a drag in
+   * progress is then cancelled.
+   */
+  setInputEnabled(enabled: boolean): void {
+    if (enabled === this.#inputEnabled) return;
+    this.#inputEnabled = enabled;
+    if (!enabled) this.tools.pointerCancel();
+  }
+
+  get inputEnabled(): boolean {
+    return this.#inputEnabled;
+  }
+
   pointerDown(e: PointerInput): void {
+    if (!this.#inputEnabled) return;
     this.tools.pointerDown(this.#toolPointer(e));
   }
 
   pointerMove(e: PointerInput): void {
+    if (!this.#inputEnabled) return;
     this.tools.pointerMove(this.#toolPointer(e));
   }
 
   pointerUp(e: PointerInput): void {
+    if (!this.#inputEnabled) return;
     this.tools.pointerUp(this.#toolPointer(e));
   }
 
@@ -481,6 +502,7 @@ export class Editor {
       modifiers: this.#modifiers(input),
       repeat: input.repeat ?? false,
     };
+    if (!this.#inputEnabled) return null;
     if (this.tools.keyDown(toolEvent)) return { kind: "tool-key" };
     const match = matchShortcut(input, this.platform, this.#keymapFor().map);
     if (match === undefined) return null;
@@ -497,6 +519,7 @@ export class Editor {
   }
 
   keyUp(input: KeyInput): boolean {
+    if (!this.#inputEnabled) return false;
     return this.tools.keyUp({
       key: input.key,
       modifiers: this.#modifiers(input),

@@ -12,7 +12,7 @@ import {
   type MemoryStore,
 } from "@galatsa/storage";
 import { describe, expect, it, vi } from "vitest";
-import { EditorDocument, statusMessage } from "./document.ts";
+import { acceptsInput, EditorDocument, statusMessage } from "./document.ts";
 import { registerEditorMessages } from "./extensions.ts";
 import { testI18n } from "./test-support.ts";
 
@@ -131,6 +131,65 @@ describe("closing a document", () => {
     expect(doc.state.phase).toBe("open");
     expect(session.closed).toBe(false);
     await session.close({ evenIfUnstored: true });
+  });
+
+  it("is not left at 'closing' when the store's close fails, and can close again", async () => {
+    const { storage, i18n } = setup();
+    const session = await storage.create();
+    const doc = new EditorDocument(session, { i18n, warnOnUnload: false });
+    const realClose = session.close.bind(session);
+    let fail = true;
+    session.close = (options) =>
+      fail ? Promise.reject(new Error("store gone")) : realClose(options);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await doc.close()).toBe("offer-save");
+    expect(doc.state.phase).toBe("offer-save");
+    // Closing anyway fails too: back to the offer, not stuck.
+    await doc.closeAnyway();
+    expect(doc.state.phase).toBe("offer-save");
+    error.mockRestore();
+    fail = false;
+    doc.keepOpen();
+    expect(await doc.close()).toBe("closed");
+  });
+
+  it("closes anyway only from the offer, and not while a file is being saved", async () => {
+    const { store, storage, i18n } = setup();
+    const session = await storage.create();
+    let finishWrite: () => void = () => {};
+    const doc = new EditorDocument(session, {
+      i18n,
+      pickTarget: async (name) => ({
+        name,
+        canRead: false,
+        read: () => Promise.reject(new Error("no")),
+        write: () => new Promise<void>((resolve) => (finishWrite = resolve)),
+      }),
+      warnOnUnload: false,
+    });
+    // Not from "open".
+    await doc.closeAnyway();
+    expect(session.closed).toBe(false);
+    await session.flush();
+    store.failWrites(1_000_000, "full");
+    addBox(session.doc);
+    expect(await doc.close()).toBe("offer-save");
+    const saving = doc.saveAsFile();
+    await vi.waitFor(() => expect(doc.state.savingFile).toBe(true));
+    await doc.closeAnyway();
+    expect(session.closed).toBe(false);
+    expect(await doc.close()).toBe("offer-save");
+    finishWrite();
+    await saving;
+    await doc.closeAnyway();
+    expect(doc.state.phase).toBe("closed");
+  });
+
+  it("lets the canvas take input only while the document is open", () => {
+    expect(acceptsInput("open")).toBe(true);
+    expect(acceptsInput("closing")).toBe(false);
+    expect(acceptsInput("offer-save")).toBe(false);
+    expect(acceptsInput("closed")).toBe(false);
   });
 
   it("names the file after the title, or 'Untitled presentation'", async () => {
