@@ -10,7 +10,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { WEB_PORT } from "./playwright.config.ts";
 
-const URL = `http://localhost:${WEB_PORT}/?lang=en&fresh`;
+const URL = `http://localhost:${WEB_PORT}/?lang=en&scene=bench&fresh`;
 const SHAPE = "galatsa.shape/shape";
 
 interface Probe {

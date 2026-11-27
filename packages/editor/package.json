@@ -39,6 +39,7 @@
   },
   "devDependencies": {
     "@galatsa/extension-examples": "workspace:*",
+    "@galatsa/extension-shape": "workspace:*",
     "@galatsa/extension-text": "workspace:*",
     "svelte-check": "4.7.8",
     "typescript": "6.0.3",

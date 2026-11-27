@@ -1,8 +1,9 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!--
-  The open document: its save status and the storage layer's notices, saving
-  as a file, closing, and the offer to save as a file before a document with
-  unstored changes is closed (docs/adr/0006, section 7.1).
+  The open document: its save status and the storage layer's notices, and
+  the offer to save as a file before a document with unstored changes is
+  closed (docs/adr/0006, section 7.1). Saving as a file is in the toolbar
+  (docs/adr/0016); in a browser, a presentation is closed with its tab.
 -->
 <script lang="ts">
   import type { I18n } from "@galatsa/i18n";
@@ -17,7 +18,6 @@
   const watched = $derived(new Watched(doc, () => doc.state));
   const state = $derived(watched.current);
   const status = $derived(state.status);
-  const busy = $derived(state.phase !== "open" || state.savingFile);
 
   const statusLine = $derived.by(() => {
     const message = statusMessage(state);
@@ -41,12 +41,6 @@
 
 <div class="bar">
   <span role="status" class="galatsa-save-status">{statusLine}</span>
-  <button type="button" disabled={busy} onclick={() => void doc.saveAsFile()}>
-    {t("editor:action.saveAsFile")}
-  </button>
-  <button type="button" disabled={busy} onclick={() => void doc.close()}>
-    {t("editor:action.close")}
-  </button>
 </div>
 
 {#if state.phase === "offer-save"}
@@ -82,7 +76,7 @@
 <style>
   .bar {
     position: absolute;
-    left: 8px;
+    left: calc(var(--galatsa-stage-left, 0px) + 8px);
     bottom: 8px;
     max-width: calc(100% - 16px);
     display: flex;
@@ -97,8 +91,9 @@
   }
   .notices {
     position: absolute;
-    left: 8px;
-    top: 8px;
+    left: calc(50% + var(--galatsa-stage-left, 0px) / 2);
+    bottom: 56px;
+    transform: translateX(-50%);
     max-width: min(36rem, calc(100% - 16px));
     display: flex;
     flex-direction: column;

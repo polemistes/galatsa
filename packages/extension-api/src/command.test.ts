@@ -285,6 +285,68 @@ describe("command registry", () => {
     expect(quick.map.get("Mod+t")).toBe("t/move");
     expect(quick.conflicts).toEqual([]);
   });
+
+  it("lists toolbar buttons per mode by group, and says whether a toggle is on", () => {
+    const d = makeDoc("quick");
+    const host = new EditorHost();
+    const command = (name: string, toolbar?: string, quick = true) =>
+      defineCommand<undefined, void>({
+        name,
+        label: "common:a",
+        quick,
+        ...(toolbar !== undefined ? { toolbar } : {}),
+        execute: () => {},
+      });
+    host.load([
+      {
+        view: { id: "b", version: "1.0.0", api: EXTENSION_API_VERSION },
+        contributes: {
+          commands: [
+            command("one", "edit"),
+            command("none"),
+            command("two", "view"),
+            command("three", "edit"),
+            command("advanced", "view", false),
+            defineCommand<undefined, void>({
+              name: "toggle",
+              label: "common:a",
+              quick: true,
+              toolbar: "view",
+              undoable: false,
+              active: (ctx) => ctx.services.panels.isOpen("b/panel"),
+              execute: (ctx) => ctx.services.panels.open("b/panel"),
+            }),
+            defineCommand<undefined, void>({
+              name: "broken",
+              label: "common:a",
+              active: () => {
+                throw new Error("broken");
+              },
+              execute: () => {},
+            }),
+          ],
+        },
+      },
+    ]);
+    const ids = (mode: Mode) =>
+      host.commands
+        .toolbar(mode)
+        .map(({ group, commands }) => [group, commands.map((c) => c.id)]);
+    expect(ids("quick")).toEqual([
+      ["edit", ["b/one", "b/three"]],
+      ["view", ["b/two", "b/toggle"]],
+    ]);
+    expect(ids("advanced")).toEqual([
+      ["edit", ["b/one", "b/three"]],
+      ["view", ["b/two", "b/advanced", "b/toggle"]],
+    ]);
+    expect(host.commands.isActive("b/toggle", d.env())).toBe(false);
+    host.commands.execute("b/toggle", d.env());
+    expect(host.commands.isActive("b/toggle", d.env())).toBe(true);
+    expect(host.commands.isActive("b/one", d.env())).toBe(false);
+    expect(host.commands.isActive("b/broken", d.env())).toBe(false);
+    expect(host.commands.isActive("b/unknown", d.env())).toBe(false);
+  });
 });
 
 describe("gestures", () => {

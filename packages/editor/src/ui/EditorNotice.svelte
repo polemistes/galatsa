@@ -23,8 +23,8 @@
 <style>
   div {
     position: absolute;
-    left: 50%;
-    top: 8px;
+    left: calc(50% + var(--galatsa-stage-left, 0px) / 2);
+    top: calc(var(--galatsa-stage-top, 0px) + 8px);
     transform: translateX(-50%);
     max-width: min(32rem, calc(100% - 16px));
     padding: 8px 12px;

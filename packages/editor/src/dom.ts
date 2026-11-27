@@ -125,7 +125,7 @@ async function imageFilesOf(
 }
 
 /** The file input's `accept`: the media types and extensions the importers read. */
-function acceptFor(editor: Editor): string {
+export function acceptFor(editor: Editor): string {
   const out = new Set<string>();
   for (const importer of editor.host.importers(editor.mode)) {
     for (const type of importer.definition.fileTypes) {

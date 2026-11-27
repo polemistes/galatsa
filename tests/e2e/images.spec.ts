@@ -429,6 +429,15 @@ async function canvasPng(page: Page): Promise<Buffer> {
 test("an image, a cropped image and the crop tool look as stored", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 500 });
   await start(page);
+  // The canvas 800 by 500, beside the toolbar and the properties (docs/adr/0016).
+  const canvasSize = () =>
+    page.evaluate(() => {
+      const canvas = document.querySelector<HTMLElement>(".galatsa-canvas")!;
+      return { w: canvas.clientWidth, h: canvas.clientHeight };
+    });
+  const shown = await canvasSize();
+  await page.setViewportSize({ width: 1600 - shown.w, height: 1000 - shown.h });
+  await expect.poll(canvasSize).toEqual({ w: 800, h: 500 });
   await page.evaluate(async () => {
     const dev = window as unknown as Dev;
     const editor = dev.galatsaDev.editor()!;

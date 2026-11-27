@@ -75,6 +75,7 @@ export default defineConfig({
         "routes.spec.ts",
         "images.spec.ts",
         "text-*.spec.ts",
+        "shell.spec.ts",
       ],
       use: { ...devices["Desktop Firefox"] },
     },

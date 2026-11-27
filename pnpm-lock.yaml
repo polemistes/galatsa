@@ -386,6 +386,9 @@ importers:
       '@galatsa/extension-examples':
         specifier: workspace:*
         version: link:../extensions/examples
+      '@galatsa/extension-shape':
+        specifier: workspace:*
+        version: link:../extensions/shape
       '@galatsa/extension-text':
         specifier: workspace:*
         version: link:../extensions/text

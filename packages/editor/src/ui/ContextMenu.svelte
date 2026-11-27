@@ -35,9 +35,14 @@
     const parent = element.offsetParent as HTMLElement | null;
     const width = parent?.clientWidth ?? Infinity;
     const height = parent?.clientHeight ?? Infinity;
+    // The menu's place is given on the canvas, which lies beside the
+    // toolbar and the properties (docs/adr/0016).
+    const style = parent === null ? null : getComputedStyle(parent);
+    const left = parseFloat(style?.getPropertyValue("--galatsa-stage-left") ?? "") || 0;
+    const top = parseFloat(style?.getPropertyValue("--galatsa-stage-top") ?? "") || 0;
     place = {
-      left: Math.max(0, Math.min(current.x, width - element.offsetWidth - 4)),
-      top: Math.max(0, Math.min(current.y, height - element.offsetHeight - 4)),
+      left: Math.max(left, Math.min(current.x + left, width - element.offsetWidth - 4)),
+      top: Math.max(top, Math.min(current.y + top, height - element.offsetHeight - 4)),
     };
     element.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus();
   });

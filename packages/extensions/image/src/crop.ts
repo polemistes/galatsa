@@ -188,6 +188,7 @@ export function cropTool(parts: CropToolParts): ToolDefinition {
     label: parts.label,
     ...(parts.shortcuts ? { shortcuts: parts.shortcuts } : {}),
     quick: true,
+    icon: "crop",
     cursor: "default",
     start(session) {
       const services = () => session.environment().services;

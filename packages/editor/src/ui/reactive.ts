@@ -32,6 +32,47 @@ export class Watched<T> {
   }
 }
 
+/** What the editor's change store needs of the editor. */
+interface ChangingEditor extends Store {
+  readonly doc: {
+    on(event: "update", listener: () => void): void;
+    off(event: "update", listener: () => void): void;
+  };
+  readonly undo: {
+    on(event: UndoEvent, listener: () => void): void;
+    off(event: UndoEvent, listener: () => void): void;
+  };
+}
+
+type UndoEvent = "stack-item-added" | "stack-item-popped" | "stack-cleared";
+
+const UNDO_EVENTS: readonly UndoEvent[] = [
+  "stack-item-added",
+  "stack-item-popped",
+  "stack-cleared",
+];
+
+/**
+ * A store that tells of every change the toolbar and the properties panel
+ * show: the editor's own (selection, tool, mode, panels, text editing), the
+ * document's (values, what can be done) and the undo stacks'.
+ */
+export function editorChanges(editor: ChangingEditor): Store {
+  return {
+    subscribe(listener) {
+      const changed = (): void => listener();
+      const stop = editor.subscribe(changed);
+      editor.doc.on("update", changed);
+      for (const event of UNDO_EVENTS) editor.undo.on(event, changed);
+      return () => {
+        stop();
+        editor.doc.off("update", changed);
+        for (const event of UNDO_EVENTS) editor.undo.off(event, changed);
+      };
+    },
+  };
+}
+
 /** Translations that a template reads reactively: text changes with the language. */
 export function translator(i18n: I18n): (key: string, values?: MessageValues) => string {
   const language = new Watched(i18n, () => i18n.version);
