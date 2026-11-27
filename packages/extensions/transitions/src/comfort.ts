@@ -6,7 +6,12 @@
 // setting is read through a matchMedia function the caller passes in.
 
 import type { Json } from "@galatsa/core";
-import { DEFAULT_COMFORT, messageKey, type ComfortSettings, type Label } from "@galatsa/extension-api";
+import {
+  DEFAULT_COMFORT,
+  messageKey,
+  type ComfortSettings,
+  type Label,
+} from "@galatsa/extension-api";
 import { transitionMessages } from "./messages/index.ts";
 
 /**
@@ -76,7 +81,11 @@ export function readComfortPreferences(value: Json): ComfortPreferences {
       BOUNDS.maxFlightDuration,
       d.maxFlightDuration,
     ),
-    durationScale: readNumber(value["durationScale"], BOUNDS.durationScale, d.durationScale),
+    durationScale: readNumber(
+      value["durationScale"],
+      BOUNDS.durationScale,
+      d.durationScale,
+    ),
   };
 }
 
@@ -91,7 +100,9 @@ export function resolveComfort(
   presenterReducedMotion: boolean | null = null,
 ): ComfortSettings {
   const fromPreference =
-    preferences.motion === "system" ? systemReducedMotion : preferences.motion === "reduce";
+    preferences.motion === "system"
+      ? systemReducedMotion
+      : preferences.motion === "reduce";
   return {
     reducedMotion: presenterReducedMotion ?? fromPreference,
     maxFlightZoomRatio: preferences.maxFlightZoomRatio,

@@ -21,7 +21,9 @@ function distance(a: CameraView, b: CameraView, width = W, rho = RHO): number {
   const wa = width / a.zoom;
   const wb = width / b.zoom;
   const d = Math.hypot(b.cx - a.cx, b.cy - a.cy);
-  return (2 * Math.asinh(Math.hypot(rho * rho * d, wb - wa) / (2 * Math.sqrt(wa * wb)))) / rho;
+  return (
+    (2 * Math.asinh(Math.hypot(rho * rho * d, wb - wa) / (2 * Math.sqrt(wa * wb)))) / rho
+  );
 }
 
 /**
@@ -46,7 +48,9 @@ function paperPath(u0: number, w0: number, u1: number, w1: number, rho: number) 
 }
 
 function finite(view: CameraView): boolean {
-  return Number.isFinite(view.cx) && Number.isFinite(view.cy) && Number.isFinite(view.zoom);
+  return (
+    Number.isFinite(view.cx) && Number.isFinite(view.cy) && Number.isFinite(view.zoom)
+  );
 }
 
 /**

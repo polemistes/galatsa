@@ -73,16 +73,20 @@ describe("resolving comfort", () => {
     expect(resolveComfort(prefs, false)).toEqual(DEFAULT_COMFORT);
     expect(resolveComfort(prefs, true).reducedMotion).toBe(true);
     // The user's own setting wins over the system's.
-    expect(resolveComfort({ ...prefs, motion: "reduce" }, false).reducedMotion).toBe(true);
+    expect(resolveComfort({ ...prefs, motion: "reduce" }, false).reducedMotion).toBe(
+      true,
+    );
     expect(resolveComfort({ ...prefs, motion: "allow" }, true).reducedMotion).toBe(false);
     // The presenter's toggle during a presentation wins over both.
     expect(resolveComfort(prefs, false, true).reducedMotion).toBe(true);
-    expect(resolveComfort({ ...prefs, motion: "reduce" }, true, false).reducedMotion).toBe(
-      false,
-    );
+    expect(
+      resolveComfort({ ...prefs, motion: "reduce" }, true, false).reducedMotion,
+    ).toBe(false);
     expect(resolveComfort(prefs, true, null).reducedMotion).toBe(true);
     // The limits come from the preferences.
-    expect(resolveComfort({ ...prefs, maxFlightDistance: 2 }, false).maxFlightDistance).toBe(2);
+    expect(
+      resolveComfort({ ...prefs, maxFlightDistance: 2 }, false).maxFlightDistance,
+    ).toBe(2);
   });
 });
 
@@ -91,7 +95,8 @@ describe("the system's reduce motion setting", () => {
     const listeners = new Set<() => void>();
     const list = {
       matches: initial,
-      addEventListener: (_type: "change", listener: () => void) => listeners.add(listener),
+      addEventListener: (_type: "change", listener: () => void) =>
+        listeners.add(listener),
       removeEventListener: (_type: "change", listener: () => void) =>
         listeners.delete(listener),
     };
@@ -113,7 +118,9 @@ describe("the system's reduce motion setting", () => {
   it("is read and followed as it changes", () => {
     const media = fakeMedia(true);
     const seen: boolean[] = [];
-    const watch = watchSystemReducedMotion(media.matchMedia, (reduced) => seen.push(reduced));
+    const watch = watchSystemReducedMotion(media.matchMedia, (reduced) =>
+      seen.push(reduced),
+    );
     expect(media.queries).toEqual([REDUCED_MOTION_QUERY]);
     expect(REDUCED_MOTION_QUERY).toBe("(prefers-reduced-motion: reduce)");
     expect(watch.reduced()).toBe(true);
@@ -133,9 +140,12 @@ describe("the system's reduce motion setting", () => {
     });
     expect(watch.reduced()).toBe(false);
     watch.dispose();
-    const broken = watchSystemReducedMotion(() => {
-      throw new Error("no media queries here");
-    }, () => {});
+    const broken = watchSystemReducedMotion(
+      () => {
+        throw new Error("no media queries here");
+      },
+      () => {},
+    );
     expect(broken.reduced()).toBe(false);
     broken.dispose();
   });

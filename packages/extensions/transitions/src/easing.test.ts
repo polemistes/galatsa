@@ -39,7 +39,8 @@ describe("smooth progress", () => {
     expect(smoothProgress(0.4)).toBeCloseTo(1 / 6 + 0.15 * (4 / 3), 14);
     // Inside the ramp: (4/3) * (p / 2 - (0.25 / (2 pi)) sin(pi p / 0.25)).
     const p = 0.1;
-    const expected = (4 / 3) * (p / 2 - (0.25 / (2 * Math.PI)) * Math.sin((Math.PI * p) / 0.25));
+    const expected =
+      (4 / 3) * (p / 2 - (0.25 / (2 * Math.PI)) * Math.sin((Math.PI * p) / 0.25));
     expect(smoothProgress(p)).toBeCloseTo(expected, 14);
   });
 
@@ -62,7 +63,10 @@ describe("smooth progress", () => {
     // A ramp of half the time has no steady part: the speed is a raised cosine
     // over the whole time, 1 - cos(2 pi p), and the distance p - sin(2 pi p) / (2 pi).
     for (const p of [0.1, 0.3, 0.5, 0.8]) {
-      expect(smoothProgress(p, 0.5)).toBeCloseTo(p - Math.sin(2 * Math.PI * p) / (2 * Math.PI), 14);
+      expect(smoothProgress(p, 0.5)).toBeCloseTo(
+        p - Math.sin(2 * Math.PI * p) / (2 * Math.PI),
+        14,
+      );
       expect(smoothSpeed(p, 0.5)).toBeCloseTo(1 - Math.cos(2 * Math.PI * p), 14);
     }
     // No ramp is constant speed.

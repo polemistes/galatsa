@@ -86,7 +86,9 @@ function cutTo(to: CameraView): CameraMotion {
  */
 export function flightDuration(length: number, durationScale: number): number {
   if (!(length > 0)) return 0;
-  return Math.max(MIN_FLIGHT_DURATION, (length / FLIGHT_SPEED) * 1000) * scaleOf(durationScale);
+  return (
+    Math.max(MIN_FLIGHT_DURATION, (length / FLIGHT_SPEED) * 1000) * scaleOf(durationScale)
+  );
 }
 
 /**
@@ -135,7 +137,9 @@ export function planFade(
  * comfort settings ask for one, or a cut when there is nothing to show between
  * them (the same view, or a view that is not usable).
  */
-export function planFlight(request: Omit<TransitionRequest<unknown>, "options">): CameraMotion {
+export function planFlight(
+  request: Omit<TransitionRequest<unknown>, "options">,
+): CameraMotion {
   const { from, to, comfort, viewport } = request;
   if (!isUsable(from) || !isUsable(to) || sameView(from, to)) return cutTo(to);
   if (comfort.reducedMotion || exceedsFlightLimits(from, to, viewport, comfort))
@@ -152,7 +156,10 @@ export function planFlight(request: Omit<TransitionRequest<unknown>, "options">)
       // so both ends keep their precision and the flight back is the same
       // flight backwards.
       if (time <= duration / 2)
-        return { kind: "view", view: path.at(path.length * smoothProgress(time / duration)) };
+        return {
+          kind: "view",
+          view: path.at(path.length * smoothProgress(time / duration)),
+        };
       return {
         kind: "view",
         view: path.atFromEnd(path.length * smoothProgress((duration - time) / duration)),
@@ -187,7 +194,9 @@ export const fade = defineTransition<null>({
   quick: true,
   read: () => null,
   plan: ({ from, to, comfort }) =>
-    isUsable(from) && isUsable(to) ? planFade(from, to, comfort.durationScale) : cutTo(to),
+    isUsable(from) && isUsable(to)
+      ? planFade(from, to, comfort.durationScale)
+      : cutTo(to),
 });
 
 /** Show the goal at once. No options. */

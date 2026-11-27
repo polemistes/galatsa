@@ -28,7 +28,6 @@ import {
   flightDuration,
   fly,
   MIN_FLIGHT_DURATION,
-  planFlight,
   restingView,
   transitionsExtension,
 } from "./transitions.ts";
@@ -58,7 +57,9 @@ function viewsOf(frame: MotionFrame): CameraView[] {
 }
 
 function isFinite(view: CameraView): boolean {
-  return Number.isFinite(view.cx) && Number.isFinite(view.cy) && Number.isFinite(view.zoom);
+  return (
+    Number.isFinite(view.cx) && Number.isFinite(view.cy) && Number.isFinite(view.zoom)
+  );
 }
 
 /** Only the start and the goal are ever shown. */
@@ -102,11 +103,15 @@ describe("the flight", () => {
     const zoom = plan(A, { space: null, cx: 0, cy: 0, zoom: 4 });
     expect(zoom.duration).toBeCloseTo(1307.0108579580628, 9);
     // Slower when the viewer asks for it.
-    const slow = plan(A, { space: null, cx: 0, cy: 0, zoom: 4 }, {
-      ...DEFAULT_COMFORT,
-      durationScale: 2,
-    });
-    expect(slow.duration).toBeCloseTo(2614.0217159161256, 9);
+    const slow = plan(
+      A,
+      { space: null, cx: 0, cy: 0, zoom: 4 },
+      {
+        ...DEFAULT_COMFORT,
+        durationScale: 2,
+      },
+    );
+    expect(slow.duration).toBeCloseTo(2 * 1307.0108579580628, 9);
     // A short move still takes half a second, so it is not abrupt.
     expect(plan(A, { space: null, cx: 1, cy: 0, zoom: 1 }).duration).toBe(500);
     expect(flightDuration(0, 1)).toBe(0);
@@ -143,7 +148,9 @@ describe("the flight", () => {
       const expected =
         length *
         (smoothProgress(t2 / motion.duration) - smoothProgress(t1 / motion.duration));
-      expect(Math.abs(step - expected), `step ${i}`).toBeLessThan(1e-7 * expected + 1e-12);
+      expect(Math.abs(step - expected), `step ${i}`).toBeLessThan(
+        1e-7 * expected + 1e-12,
+      );
       peak = Math.max(peak, step / (t2 - t1));
     }
     // Never faster than one metric unit per second.
@@ -259,7 +266,10 @@ describe("the limits of a flight", () => {
     const patient = { ...DEFAULT_COMFORT, maxFlightDuration: 5000 };
     expect(plan(A, to, patient).frame(2000).kind).toBe("view");
     expect(
-      exceedsFlightLimits(A, at(1000), VIEWPORT, { ...DEFAULT_COMFORT, durationScale: 4 }),
+      exceedsFlightLimits(A, at(1000), VIEWPORT, {
+        ...DEFAULT_COMFORT,
+        durationScale: 4,
+      }),
     ).toBe(false);
   });
 
@@ -295,7 +305,10 @@ describe("reduced motion", () => {
     [A, at(1000)],
     [A, { space: null, cx: 0, cy: 0, zoom: 4 }],
     [A, { space: null, cx: 5e5, cy: 0, zoom: 2 ** 20 }],
-    [{ space: "f", cx: 1, cy: 1, zoom: 2 ** 30 }, { space: "f", cx: 1, cy: 1.5, zoom: 2 ** -30 }],
+    [
+      { space: "f", cx: 1, cy: 1, zoom: 2 ** 30 },
+      { space: "f", cx: 1, cy: 1.5, zoom: 2 ** -30 },
+    ],
   ];
 
   it("shows nothing but the start and the goal, in every frame of every transition", () => {
@@ -361,8 +374,13 @@ describe("the cross-fade and the cut", () => {
     expect(slow.duration).toBe(1400);
     // The same view needs no cross-fade.
     expect(
-      fade.plan({ from: A, to: { ...A }, options: null, comfort: DEFAULT_COMFORT, viewport: VIEWPORT })
-        .duration,
+      fade.plan({
+        from: A,
+        to: { ...A },
+        options: null,
+        comfort: DEFAULT_COMFORT,
+        viewport: VIEWPORT,
+      }).duration,
     ).toBe(0);
   });
 
