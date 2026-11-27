@@ -151,8 +151,8 @@ export function applyTextEdit(ytext: Y.Text, change: TextEdit): number {
       at += part.length;
     }
   });
-  // Enter at the very end of text without a final "\n" (older or foreign
-  // text): that "\n" would only end the last paragraph, so add the new one.
+  // Enter at the very end of text without a final "\n" (made by an importer
+  // or a test): that "\n" would only end the last paragraph, so add the new one.
   if (parts.length > 1 && at === ytext.length && !after.text.endsWith("\n"))
     ytext.insert(at, "\n", { ...nullOf(chars), ...nullParagraph(), ...paragraph });
   return at;
