@@ -14,7 +14,7 @@
 // turned off, so that only the text is compared.
 
 import { expect, test, type Page } from "@playwright/test";
-import { frames, openEmpty, type DevEditor } from "./text-support.ts";
+import { frames, openEmpty, type Dev, type DevEditor } from "./text-support.ts";
 
 const TEXT =
   "Bold and italic words with Galatsa, wrapping nicely along.\n" +
@@ -103,7 +103,7 @@ test("text looks the same while it is edited, at zoom 0.1, 1, 8 and 40", async (
   const surface = page.locator(".galatsa-canvas");
   const box = (await surface.boundingBox())!;
   const id = await page.evaluate((text) => {
-    const editor = window.galatsaDev!.editor() as DevEditor;
+    const editor = (window as unknown as Dev).galatsaDev.editor() as DevEditor;
     const outcome = editor.run("galatsa.text/insert", {
       x: 0,
       y: 0,
@@ -143,18 +143,21 @@ test("text looks the same while it is edited, at zoom 0.1, 1, 8 and 40", async (
   ] as const) {
     await page.evaluate(
       ([z, x, y]) =>
-        (window.galatsaDev!.editor() as DevEditor).services.camera.set({
-          space: null,
-          cx: x,
-          cy: y,
-          zoom: z,
-        }),
+        ((window as unknown as Dev).galatsaDev.editor() as DevEditor).services.camera.set(
+          {
+            space: null,
+            cx: x,
+            cy: y,
+            zoom: z,
+          },
+        ),
       [zoom, cx, cy] as const,
     );
     await frames(page);
     const drawn = await page.screenshot({ clip });
     await page.evaluate(
-      (elementId) => (window.galatsaDev!.editor() as DevEditor).editText(elementId),
+      (elementId) =>
+        ((window as unknown as Dev).galatsaDev.editor() as DevEditor).editText(elementId),
       id,
     );
     await expect(page.locator(".galatsa-text-edit")).toBeFocused();
@@ -172,7 +175,9 @@ test("text looks the same while it is edited, at zoom 0.1, 1, 8 and 40", async (
     await page.keyboard.press("Escape");
     await expect(page.locator(".galatsa-text-edit")).toHaveCount(0);
     await page.evaluate(() =>
-      (window.galatsaDev!.editor() as DevEditor).services.selection.set([]),
+      (
+        (window as unknown as Dev).galatsaDev.editor() as DevEditor
+      ).services.selection.set([]),
     );
   }
   expect(errors).toEqual([]);

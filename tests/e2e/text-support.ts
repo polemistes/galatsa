@@ -45,10 +45,9 @@ export interface DevEditor {
   editText(id: string): boolean;
 }
 
-declare global {
-  interface Window {
-    galatsaDev?: { editor(): unknown };
-  }
+/** What the development page puts on `window` (apps/web/src/main.ts). */
+export interface Dev {
+  readonly galatsaDev: { editor(): unknown };
 }
 
 /** Opens the development page on an empty document and waits for the editor. */
@@ -59,9 +58,13 @@ export async function openEmpty(page: Page): Promise<string[]> {
     if (message.type() === "error") errors.push(message.text());
   });
   await page.goto(EMPTY);
-  await page.waitForFunction(() => Boolean(window.galatsaDev?.editor()), null, {
-    timeout: 90_000,
-  });
+  await page.waitForFunction(
+    () => Boolean((window as unknown as Partial<Dev>).galatsaDev?.editor()),
+    null,
+    {
+      timeout: 90_000,
+    },
+  );
   await page.evaluate(() => document.fonts.ready);
   await expect(page.locator(".galatsa-canvas")).toBeVisible();
   return errors;
@@ -78,7 +81,7 @@ export async function textState(page: Page): Promise<{
   selection: readonly string[];
 }> {
   return page.evaluate((type) => {
-    const editor = window.galatsaDev!.editor() as DevEditor;
+    const editor = (window as unknown as Dev).galatsaDev.editor() as DevEditor;
     const texts = [...editor.live.ids()]
       .filter((id) => !editor.live.isGone(id) && editor.live.get(id)?.type === type)
       .map((id) => {
@@ -104,7 +107,7 @@ export async function textState(page: Page): Promise<{
 /** The shared text of a text box as a delta. */
 export async function delta(page: Page, id: string): Promise<unknown[]> {
   return page.evaluate((elementId) => {
-    const editor = window.galatsaDev!.editor() as DevEditor;
+    const editor = (window as unknown as Dev).galatsaDev.editor() as DevEditor;
     return editor.doc.getMap("elements").get(elementId).get("data").get("text").toDelta();
   }, id);
 }
