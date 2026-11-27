@@ -25,6 +25,7 @@ import {
 import {
   apply,
   elementMatrix,
+  intersection,
   invert,
   spaceMap,
   spaceMatrix,
@@ -344,10 +345,12 @@ export class CanvasRenderer {
       return map;
     };
     const host = this.#host;
-    const visit = (container: Container, map: SpaceMap): void => {
+    const visit = (container: Container, map: SpaceMap, clip?: Rect): void => {
       this.stats.containersVisited++;
       const s = map.scale;
-      const rect = grow(visibleRect(map, widthPx, heightPx, CULL_MARGIN));
+      const view = grow(visibleRect(map, widthPx, heightPx, CULL_MARGIN));
+      const rect = clip ? intersection(view, clip) : view;
+      if (!rect) return;
       for (const node of tree.visibleChildren(container, rect, 0.5 / s)) {
         if (node.kind === "element") {
           const m = elementMatrix(map, node.x, node.y, node.w, node.h, node.rot);
@@ -368,7 +371,7 @@ export class CanvasRenderer {
           if (data["clip"] === true) {
             state.save();
             if (paintPath(state, outline, m, { kind: "clip" }, view))
-              visit(node.container!, inner);
+              visit(node.container!, inner, { x: 0, y: 0, w: node.w, h: node.h });
             state.restore();
           } else visit(node.container!, inner);
           if (typeof data["stroke"] === "string")

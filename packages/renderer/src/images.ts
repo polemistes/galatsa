@@ -383,6 +383,8 @@ export class ImageCache {
 
   /** Call at the end of each frame: starts decodes for what this frame wanted. */
   endFrame(): void {
+    // Versions that stood in for others while those loaded may now be idle.
+    if (this.#bytes > this.#budget) this.#evict();
     for (const [slot, want] of this.#wants) {
       if (want.frame < this.#frame - 1) this.#wants.delete(slot);
     }
