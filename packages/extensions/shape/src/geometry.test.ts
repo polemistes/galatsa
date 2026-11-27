@@ -12,6 +12,7 @@ import {
   PlacedPath,
   RecordingPath,
 } from "./geometry.ts";
+import { polygon } from "./outline.ts";
 
 const TAU = 2 * Math.PI;
 
@@ -176,5 +177,81 @@ describe("placed paths", () => {
         }
       }
     }
+  });
+});
+
+describe("polygons with rounded corners", () => {
+  it("make the same outline as a rounded rectangle", () => {
+    const round = new RecordingPath();
+    round.roundRect(0, 0, 100, 50, 12);
+    const poly = new RecordingPath();
+    polygon(
+      poly,
+      [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 50 },
+        { x: 0, y: 50 },
+      ],
+      12,
+    );
+    const a = flatten(round.ops, 0.001).lines;
+    const b = flatten(poly.ops, 0.001).lines;
+    expect(b[0]!.closed).toBe(true);
+    for (const [from, to] of [
+      [a, b],
+      [b, a],
+    ] as const)
+      for (const line of from)
+        for (let i = 0; i < line.points.length; i += 2)
+          expect(outlineDistance(to, line.points[i]!, line.points[i + 1]!)).toBeLessThan(
+            0.01,
+          );
+  });
+
+  it("round every corner of a triangle within its edges, either way round", () => {
+    for (const points of [
+      [
+        { x: 50, y: 0 },
+        { x: 100, y: 80 },
+        { x: 0, y: 80 },
+      ],
+      [
+        { x: 0, y: 80 },
+        { x: 100, y: 80 },
+        { x: 50, y: 0 },
+      ],
+    ]) {
+      const p = new RecordingPath();
+      polygon(p, points, 1000);
+      const { lines } = flatten(p.ops, 0.01);
+      const box = extent(lines)!;
+      // Rounded corners stay inside the sharp triangle.
+      expect(box.x).toBeGreaterThan(0);
+      expect(box.y).toBeGreaterThan(0);
+      expect(box.x + box.w).toBeLessThan(100);
+      expect(box.y + box.h).toBeLessThanOrEqual(80 + 1e-9);
+      expect(insideFill(lines, 50, 50)).toBe(true);
+      // The outline is one smooth run: no point far from the one before.
+      const pts = lines[0]!.points;
+      for (let i = 2; i < pts.length; i += 2)
+        expect(Math.hypot(pts[i]! - pts[i - 2]!, pts[i + 1]! - pts[i - 1]!)).toBeLessThan(
+          60,
+        );
+    }
+  });
+
+  it("are plain lines without a radius", () => {
+    const p = new RecordingPath();
+    polygon(
+      p,
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 0, y: 10 },
+      ],
+      0,
+    );
+    expect(p.ops).toEqual([["M", 0, 0], ["L", 10, 0], ["L", 0, 10], ["Z"]]);
   });
 });

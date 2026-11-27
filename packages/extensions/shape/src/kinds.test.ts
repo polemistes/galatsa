@@ -121,6 +121,12 @@ describe.each(ALL.map((kind) => [kind.kind, kind] as const))(
         .find((r) => r.id === `galatsa.shape/${kind.kind}`);
       expect(tool !== undefined).toBe(kind.quick ?? true);
       expect(t.host.commands.shortcuts("advanced").conflicts).toEqual([]);
+      // No two tools share a key, nor take the keys of the text and selection
+      // tools of the development page.
+      if (kind.shortcut !== undefined) {
+        const others = ALL.filter((k) => k !== kind).map((k) => k.shortcut);
+        expect([...others, "t", "v"]).not.toContain(kind.shortcut);
+      }
     });
 
     it("draws every gallery case from valid data, with an outline that stays in the bounds", () => {

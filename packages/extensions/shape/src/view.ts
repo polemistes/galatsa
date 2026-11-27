@@ -19,6 +19,7 @@ import { kindTable, readShape, type KindTable, type ShapeModel } from "./model.t
 
 export * from "./kind.ts";
 export * from "./model.ts";
+export * from "./outline.ts";
 export { SHAPE_KINDS } from "./kinds/index.ts";
 export { shapeMessages } from "./messages/index.ts";
 export { drawShape, hitShape, shapeBounds, placedContext } from "./draw.ts";
