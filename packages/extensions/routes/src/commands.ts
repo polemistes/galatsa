@@ -53,6 +53,7 @@ import {
   viewOfCamera,
   type StopsAndRoutes,
 } from "./model.ts";
+import { isStopSpeed, transitionForSpeed, type StopSpeed } from "./speed.ts";
 import { choose, currentChoice } from "./state.ts";
 
 export { ROUTES_EXTENSION };
@@ -71,6 +72,7 @@ export const ROUTES = {
   deleteStop: `${ROUTES_EXTENSION}/delete-stop`,
   renameStop: `${ROUTES_EXTENSION}/rename-stop`,
   setStopNotes: `${ROUTES_EXTENSION}/set-stop-notes`,
+  setStopSpeed: `${ROUTES_EXTENSION}/set-stop-speed`,
   updateStopView: `${ROUTES_EXTENSION}/update-stop-view`,
   copyStopForRoute: `${ROUTES_EXTENSION}/copy-stop-for-route`,
   setVisibility: `${ROUTES_EXTENSION}/set-visibility`,
@@ -470,6 +472,31 @@ const setStopNotes = defineCommand<NotesArgs, void>({
   },
 });
 
+export interface SpeedArgs extends StopArgs {
+  /** How the camera comes into the stop (speed.ts). */
+  readonly speed: StopSpeed;
+}
+
+/**
+ * Sets how the camera comes into a stop: the route's default, a calm, normal
+ * or fast flight, or a cross-fade (speed.ts). Stored in the stop's
+ * `transition`; one undo step, and none when nothing changes.
+ */
+const setStopSpeed = defineCommand<SpeedArgs, void>({
+  name: "set-stop-speed",
+  label: label("set-stop-speed"),
+  undoLabel: label("set-stop-speed.step"),
+  quick: true,
+  enabled: (ctx, args) =>
+    stopRecordOk(ctx, args) && isStopSpeed((args as SpeedArgs).speed),
+  execute(ctx, { stop, speed }) {
+    const transition = transitionForSpeed(speed);
+    const old = readRoutes(ctx.doc).stops[stop]!.transition;
+    if (JSON.stringify(old) === JSON.stringify(transition)) return;
+    edit(ctx.doc, () => setStopTransition(ctx.doc, stop, transition));
+  },
+});
+
 /** Points the stop at the rectangle the camera shows now. */
 const updateStopView = defineCommand<StopArgs, void>({
   name: "update-stop-view",
@@ -704,6 +731,7 @@ export const routesCommands = [
   deleteStop,
   renameStopCommand,
   setStopNotes,
+  setStopSpeed,
   updateStopView,
   copyStopForRoute,
   setVisibilityCommand,

@@ -30,7 +30,9 @@ import {
   routeShapes,
   routesExtension,
   routesUsing,
+  speedOfTransition,
   textChange,
+  transitionForSpeed,
   viewOfCamera,
   type AddedStop,
   type JumpEnvironment,
@@ -620,6 +622,44 @@ describe("after the review", () => {
     expect(t.editor.services.panels.isOpen(ROUTES_PANEL)).toBe(true);
     t.editor.keyDown({ ...key, key: "R", shiftKey: true });
     expect(t.editor.services.panels.isOpen(ROUTES_PANEL)).toBe(false);
+  });
+});
+
+describe("the speed into a stop", () => {
+  it("is stored in the stop's transition, each choice one undo step", () => {
+    const t = setup();
+    const added = t.must<AddedStop>(ROUTES.addStopFromView);
+    const transition = () => readRoutes(t.doc).stops[added.stop]!.transition;
+    expect(transition()).toBe(null);
+    expect(speedOfTransition(transition())).toBe("default");
+    for (const speed of ["calm", "fast", "normal", "fade", "default"] as const) {
+      if (speed !== "default" || transition() !== null)
+        oneStep(t, ROUTES.setStopSpeed, { stop: added.stop, speed });
+      expect(speedOfTransition(transition())).toBe(speed);
+    }
+    expect(transitionForSpeed("calm")).toEqual({
+      type: "galatsa.transitions/fly",
+      options: { speed: "calm" },
+    });
+    expect(transitionForSpeed("fade")).toEqual({
+      type: "galatsa.transitions/fade",
+      options: null,
+    });
+    // The same choice again changes nothing and makes no undo step.
+    const depth = t.editor.undo.undoStack.length;
+    t.must(ROUTES.setStopSpeed, { stop: added.stop, speed: "default" });
+    expect(t.editor.undo.undoStack.length).toBe(depth);
+    // A choice the panel does not offer, or a stop that is not there, is refused.
+    expect(
+      t.editor.isEnabled(ROUTES.setStopSpeed, { stop: added.stop, speed: "warp" }),
+    ).toBe(false);
+    expect(t.editor.isEnabled(ROUTES.setStopSpeed, { stop: "gone", speed: "calm" })).toBe(
+      false,
+    );
+    // A transition the panel does not offer (a cut) is shown as "other".
+    expect(speedOfTransition({ type: "galatsa.transitions/cut", options: null })).toBe(
+      "other",
+    );
   });
 });
 

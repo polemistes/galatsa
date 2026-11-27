@@ -31,6 +31,7 @@
     routesUsing,
     type StopsAndRoutes,
   } from "./model.ts";
+  import { speedOfTransition, STOP_SPEEDS, type StopSpeed } from "./speed.ts";
   import { choose, currentChoice, watchChoice } from "./state.ts";
   import { translator } from "./translate.ts";
 
@@ -132,6 +133,7 @@
       visits,
       visibility,
       notes,
+      speed: stop === null ? "default" : speedOfTransition(stop.transition),
     };
   });
 
@@ -477,6 +479,26 @@
             )}>{t("galatsa.routes:copy-stop-for-route")}</button
           >
         {/if}
+      </div>
+
+      <div class="field">
+        <label for="{uid}-speed">{t("galatsa.routes:speed")}</label>
+        <select
+          id="{uid}-speed"
+          value={model.speed}
+          onchange={(e) =>
+            run(ROUTES.setStopSpeed, {
+              stop: chosen.stop,
+              speed: (e.currentTarget as HTMLSelectElement).value as StopSpeed,
+            })}
+        >
+          {#each STOP_SPEEDS as speed (speed)}
+            <option value={speed}>{t(`galatsa.routes:speed.${speed}`)}</option>
+          {/each}
+          {#if model.speed === "other"}
+            <option value="other" disabled>{t("galatsa.routes:speed.other")}</option>
+          {/if}
+        </select>
       </div>
 
       <h4>{t("galatsa.routes:visibility")}</h4>

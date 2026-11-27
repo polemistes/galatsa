@@ -324,6 +324,41 @@ test("routes and stops through the panel, each action one undo step", async ({
   await expect(dialog).toHaveCount(0);
   expect((await routes(page)).routes).toEqual([[viewStop, frameStop], [frameStop]]);
 
+  // The speed into the chosen stop: each choice is stored in the stop's
+  // transition, as one undo step; Default takes it back to the route's.
+  const transitions = () =>
+    withEditor(
+      page,
+      (editor) =>
+        Object.values(
+          editor.doc.getMap("stops").toJSON() as Record<string, { transition: unknown }>,
+        )
+          .map((stop) => stop.transition)
+          .filter((transition) => transition !== null),
+      null,
+    );
+  const speed = panel.getByLabel("Speed into the stop");
+  await expect(speed).toHaveValue("default");
+  expect(await transitions()).toEqual([]);
+  const speedSteps = (await routes(page)).undoSteps;
+  await speed.selectOption({ label: "Calm" });
+  await expect
+    .poll(transitions)
+    .toEqual([{ type: "galatsa.transitions/fly", options: { speed: "calm" } }]);
+  expect((await routes(page)).undoSteps).toBe(speedSteps + 1);
+  await speed.selectOption({ label: "Fast" });
+  await expect
+    .poll(transitions)
+    .toEqual([{ type: "galatsa.transitions/fly", options: { speed: "fast" } }]);
+  await speed.selectOption({ label: "Fade (no flight)" });
+  await expect
+    .poll(transitions)
+    .toEqual([{ type: "galatsa.transitions/fade", options: null }]);
+  await expect(speed).toHaveValue("fade");
+  await speed.selectOption({ label: "Default" });
+  await expect.poll(transitions).toEqual([]);
+  expect((await routes(page)).undoSteps).toBe(speedSteps + 4);
+
   // Notes typed and then, from the notes field, Delete stop and Delete anyway:
   // the notes are saved (one step), the stop leaves both routes (one step),
   // and Ctrl+Z, with no click on the canvas, brings it back to both.

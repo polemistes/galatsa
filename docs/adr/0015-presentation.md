@@ -77,6 +77,22 @@ The transition played on the way to a stop is that stop's own (0001 section 6.1)
 
 Time is passed in with every call. The state of the camera is a function of what was asked and when, which is what makes "no input gives a jump" testable.
 
+### The speed into a stop
+
+The users asked to choose, per stop, how fast the camera flies into it (E12). The routes panel offers, for the chosen stop, "Speed into the stop": **Default**, **Calm**, **Normal**, **Fast** and **Fade (no flight)**. The choice is stored in the stop's `transition` (0001 section 6.1) by the command `galatsa.routes/set-stop-speed` (one undo step, none when nothing changes): Default is `null` (the route's default, today a normal flight), Calm, Normal and Fast are the built-in fly transition with the option `{ speed: "calm" | "normal" | "fast" }` (Normal without options), and Fade is the built-in fade. A transition the panel does not offer (a cut, another extension's) is shown as "Other" and left alone until a choice is made.
+
+The fly transition reads its option (`readFlightSpeed`; anything else is normal) and scales the speed of the whole flight: the peak speed and with it the speed profile's start and slowing down, which keep their shape, so the path is the same and only the time along it changes (`FLIGHT_SPEEDS`). The numbers, Claude's choice:
+
+| Choice | Factor | Peak speed (units of van Wijk and Nuij per second) | Mean speed | Duration                |
+| ------ | ------ | -------------------------------------------------- | ---------- | ----------------------- |
+| Calm   | 0.7    | 0.60                                               | 0.45       | about 1.4 times normal  |
+| Normal | 1      | 0.85                                               | 0.64       | as before               |
+| Fast   | 1.4    | 1.19                                               | 0.89       | about 0.71 times normal |
+
+Fast is, on average over the flight, as fast as the users in the experiment of van Wijk and Nuij ([the paper](https://vanwijk.win.tue.nl/zoompan.pdf), as read in 0005 section 7) chose for a constant speed on a notebook (0.90, standard deviation 0.43), which the normal speed was set below because an audience in front of a large screen did not choose the speed (0005 section 7); so Fast is the fastest that is known to be comfortable to watch, not faster. Calm is as much slower as Fast is faster (1 / 1.4 ≈ 0.71). The shortest flight stays half a second at Fast and Normal, so a small move is not abrupt, and is longer at Calm (500 / 0.7 ≈ 714 ms).
+
+The comfort settings win: with reduced motion every transition is still a cross-fade, a flight beyond the flight limits is still a cross-fade (the limits are measured at normal speed, as before, so the choice of speed does not change which moves fly), and a viewer who has slowed transitions down (`durationScale` above 1) never gets a flight faster than normal, so Fast is then Normal; Calm is always allowed. Breaking a flight off (`breakOff`) brakes within the same time whatever its speed.
+
 ### What a stop shows and hides
 
 A stop's changes are applied on arrival and add up from the start of the route (`hiddenAt`), so a jump gives the same picture as walking there. While the camera flies, what the last stop showed stays, and the changes of the goal appear when it arrives. In a cross-fade each of the two views is drawn with its own state, so what the goal shows fades in with it. If a cross-fade is broken off, a view that has been on screen keeps what it showed until the camera has come to rest (the first state a view was given in a chain of broken-off transitions counts), so nothing appears or disappears in a half-transparent picture. Several builds at one view are consecutive stops with the same view: the transition between them has no length, so the change is a cut.
@@ -153,7 +169,8 @@ Rejected for now: a presenter view inside the same window (the audience would se
 
 - **`@galatsa/extension-api`.** `PresentationService`, `PresentationRequest` and `EditorServices.presentation` are added, and `createTestServices` records the presentations started (`state.presentations`). The addition is additive. **`EXTENSION_API_VERSION` was left at 1.6 on purpose while other packages change the interface at the same time; it must be raised to 1.7 for this addition when they are merged.**
 - **`@galatsa/editor`.** `Editor.setPresenter`, `present`, `presenting` and `viewing` (the image source and asset sizes a second view of the document draws from), the two service functions, `present.ts`, one line in `mountEditor`, and the built-in transitions in `loadExtensions`. New dependencies on `@galatsa/player` and `@galatsa/extension-transitions`.
-- **`@galatsa/extension-routes`.** The two commands, their texts, and the button.
+- **`@galatsa/extension-routes`.** The two commands, their texts, and the button; the command `set-stop-speed`, `speed.ts` and the panel's field "Speed into the stop" (E12).
+- **`@galatsa/extension-transitions`.** The fly transition takes the option `{ speed }` (`FlightSpeed`, `FLIGHT_SPEEDS`, `readFlightSpeed`; `flightDuration` and `planFlight` take the speed). Without options it flies as before.
 - **`@galatsa/renderer`.** In-place text editing (F1-08) is passed in by the editor (`RendererOptions.textEditing`, `domTextEditing`), so a renderer in a player does not carry the editing code. The editor passes it; nothing else changes for it.
 - **`tests/e2e/playwright.config.ts`.** The new test file in the Firefox and WebKit projects.
 
@@ -196,6 +213,7 @@ To be put to the users ("brukeratferd, Claudes valg"):
 19. While presenting, F5, Ctrl+R and Cmd+R do nothing, and the editor under the player is inert.
 20. A goal that moves while the camera is on its way is steered onto: always for a new screen size, and for a move by the document below half a screen; the correction is spread over what is left of the transition, at least 400 ms.
 21. Backspace is called "Tilbake" in Norwegian and "delete"/"slett" on a Mac in the tooltips.
+22. The speed into a stop (E12): the five choices and their names, the factors 0.7, 1 and 1.4, the longer shortest flight at Calm, and Fast being no faster than Normal for a viewer who has slowed transitions down (see "The speed into a stop").
 
 ## Known limitations
 
