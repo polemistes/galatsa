@@ -8,16 +8,21 @@
 // tried in order:
 //
 // 1. By the character the key gives (`KeyboardEvent.key`), with the modifiers.
-//    AltGr is not a modifier of the shortcut: where the system reports it as
-//    AltGraph, Alt is left out, and on Windows, which reports AltGr as Ctrl and
-//    Alt together, both are. So "Mod+[" on a Norwegian keyboard is
-//    Ctrl+AltGr+8 where the system tells Ctrl and AltGr apart (Linux, macOS has
-//    no AltGr), as the character [ suggests.
+//    AltGr is not a modifier of the shortcut, and is never read as Ctrl+Alt:
+//    where the system reports it as AltGraph, Alt is left out, and on Windows,
+//    which reports AltGr as Ctrl and Alt together, both are (see isAltGr). So
+//    "Mod+[" on a Norwegian keyboard is Ctrl+AltGr+8 where the system tells
+//    Ctrl and AltGr apart (Linux; macOS has no AltGr), as the character [
+//    suggests.
 // 2. By the key's place on the keyboard (`KeyboardEvent.code`), named as on a
-//    US keyboard, for punctuation and digits only. So Mod+Shift+] works on a US
-//    keyboard, where Shift+] gives "}", and Mod+[ is reachable on keyboards
-//    where [ needs AltGr (Windows) or sits elsewhere: Ctrl and the key right of
-//    P (Å on a Norwegian keyboard). Letters are not matched by place: Ctrl+Z
+//    US keyboard, for punctuation and digits only, and only where the
+//    character cannot name the shortcut: where the key gives a letter on this
+//    layout, or Shift changed the character. So Mod+Shift+] works on a US
+//    keyboard, where Shift+] gives "}", and Mod+[ is reachable as Ctrl and the
+//    key right of P (Å on a Norwegian keyboard). A character of its own wins:
+//    Ctrl and + on a Norwegian keyboard is Mod++, never the Mod+- of that
+//    key's place on a US keyboard, and a character AltGr gave ({ on AltGr+7)
+//    never falls back to the digit. Letters are not matched by place: Ctrl+Z
 //    on a French keyboard is the key marked Z, not the one where Z is on a US
 //    keyboard.
 // 3. On macOS with Option, by place for letters too, because Option changes the
@@ -131,14 +136,15 @@ export function shortcutCandidates(input: KeyInput, platform: Platform): Shortcu
     input.key === "Unidentified"
   )
     return [];
-  // AltGr is reported as AltGraph, and on Windows also as Ctrl and Alt together.
-  const altGr = input.altGraph && !platform.mac;
+  const altGr = isAltGr(input, platform);
+  // What AltGr adds is not a modifier of the shortcut: on Windows it comes as
+  // Ctrl and Alt together, elsewhere as AltGraph alone.
   const alt = input.altKey && !altGr;
   const ctrl = input.ctrlKey && !(altGr && input.altKey);
-  const raw = {
-    mod: platform.mac ? input.metaKey : input.ctrlKey,
+  const mods = {
+    mod: platform.mac ? input.metaKey : ctrl,
     ctrl: platform.mac ? input.ctrlKey : false,
-    alt: input.altKey,
+    alt,
     shift: input.shiftKey,
     meta: platform.mac ? false : input.metaKey,
   };
@@ -148,25 +154,42 @@ export function shortcutCandidates(input: KeyInput, platform: Platform): Shortcu
   };
   // 1. By character. Space is named "Space" rather than " ".
   const key = input.key === " " ? "Space" : input.key;
-  add(
-    spell(
-      {
-        mod: platform.mac ? input.metaKey : ctrl,
-        ctrl: platform.mac ? input.ctrlKey : false,
-        alt,
-        shift: input.shiftKey,
-        meta: platform.mac ? false : input.metaKey,
-      },
-      key,
-    ),
-  );
-  // 2. By place, punctuation and digits, as on a US keyboard.
+  add(spell(mods, key));
+  // 2. By place, punctuation and digits, as on a US keyboard: only where the
+  //    character cannot name the shortcut itself. That is where the key gives
+  //    a letter on this layout (Å right of P on a Norwegian keyboard), or where
+  //    Shift changed the character (Shift+] gives "}" on a US keyboard). Not
+  //    for a character AltGr gave ({ or @ on a digit key), and not for a
+  //    character of its own (Ctrl and + on a Norwegian keyboard is Mod++, not
+  //    the Mod+- of the key's place on a US keyboard).
   const us = US_KEYS[input.code];
-  if (us !== undefined) add(spell(raw, us));
+  if (us !== undefined && !altGr && (isLetter(input.key) || input.shiftKey))
+    add(spell(mods, us));
   // 3. macOS with Option: letters by place.
   if (platform.mac && input.altKey && /^Key[A-Z]$/.test(input.code))
-    add(spell(raw, input.code.slice(3).toLowerCase()));
+    add(spell(mods, input.code.slice(3).toLowerCase()));
   return out;
+}
+
+/** A letter of any script (å, я), not punctuation, a digit or a symbol. */
+function isLetter(key: string): boolean {
+  return [...key].length === 1 && /\p{L}/u.test(key);
+}
+
+/**
+ * Whether AltGr made this key press's character, on Windows and Linux.
+ * Browsers report AltGr as AltGraph, and on Windows also as Ctrl and Alt
+ * together; some report only Ctrl and Alt. A press with Ctrl and Alt counts as
+ * AltGr when it gave a character that is not a letter or a digit ({, @, €),
+ * and as a real Ctrl+Alt when it gave a plain letter or digit (AltGr would have
+ * given another character, or none).
+ */
+function isAltGr(input: KeyInput, platform: Platform): boolean {
+  if (platform.mac) return false;
+  const single = [...input.key].length === 1;
+  const plain = single && /^[\p{L}\p{N}]$/u.test(input.key);
+  if (input.ctrlKey && input.altKey) return single && !plain;
+  return input.altGraph;
 }
 
 /** The first of a key press's candidates that `map` has, with what it maps to. */
