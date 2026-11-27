@@ -1,0 +1,29 @@
+{
+  "name": "@galatsa/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Galatsa in the browser. For now a development page that starts the editor on the benchmark scene",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@galatsa/bench": "workspace:*",
+    "@galatsa/core": "workspace:*",
+    "@galatsa/editor": "workspace:*",
+    "@galatsa/extension-examples": "workspace:*",
+    "@galatsa/format": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "@galatsa/storage": "workspace:*",
+    "yjs": "13.6.33"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "svelte": "5.57.3",
+    "vite": "catalog:"
+  }
+}

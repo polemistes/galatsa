@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Runs the editor's end-to-end test (tests/e2e/editor.spec.ts) in Chromium,
+# Firefox and WebKit. Playwright's WebKit needs the libraries of the Ubuntu
+# release it was built for, which GitHub's Ubuntu runners have.
+
+name: editor-e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  editor:
+    name: editor (Chromium, Firefox, WebKit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The same pinned actions as check.yml.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install the browsers and their system libraries
+        run: pnpm --filter @galatsa/e2e exec playwright install --with-deps chromium firefox webkit
+
+      # CI=true (set by GitHub) adds the editor-webkit project.
+      - name: Run the editor test
+        run: pnpm --filter @galatsa/e2e exec playwright test editor.spec.ts --project=chromium --project=editor-firefox --project=editor-webkit

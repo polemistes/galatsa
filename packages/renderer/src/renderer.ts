@@ -5,7 +5,7 @@
 // and the interface.
 
 import type { CameraView, ElementId, Point, Rect } from "@galatsa/core";
-import type { ElementBox, Label, ViewHost } from "@galatsa/extension-api";
+import type { DrawContext, ElementBox, Label, ViewHost } from "@galatsa/extension-api";
 import type { MessageValues } from "@galatsa/i18n";
 import { CanvasState, type Canvas2D } from "./canvas.ts";
 import { CanvasDrawContext, detailFor, type FrameCounters } from "./draw-context.ts";
@@ -104,11 +104,22 @@ export interface RenderStats {
   imagesIncomplete: boolean;
 }
 
+/**
+ * Draws above the document, after everything else, in screen space: CSS pixels
+ * of the drawing area, (0, 0) at its top-left corner. `ctx.scale` is device
+ * pixels per CSS pixel. An editor draws its tool previews and the selection
+ * here, projecting from the document through the camera itself; so the
+ * overlay does not depend on which space the camera is anchored in.
+ */
+export type OverlayDraw = (ctx: DrawContext) => void;
+
 /** The drawing target of one frame. */
 interface Target {
   readonly state: CanvasState;
   readonly viewport: Viewport;
   readonly camera: CameraView;
+  /** Drawn above the document (frames on screen only, never in renderRegion). */
+  readonly overlay?: OverlayDraw | null;
 }
 
 const DEFAULT_CAMERA: CameraView = { space: null, cx: 0, cy: 0, zoom: 1 };
@@ -127,6 +138,7 @@ export class CanvasRenderer {
   #canvas: HTMLCanvasElement | null = null;
   #state: CanvasState | null = null;
   #unmount: (() => void) | null = null;
+  #overlay: OverlayDraw | null = null;
   readonly stats: RenderStats = {
     frames: 0,
     lastFrameMs: 0,
@@ -277,6 +289,16 @@ export class CanvasRenderer {
     this.#options.onInvalidate?.();
   }
 
+  /**
+   * Sets what is drawn above the document in each frame on screen, in screen
+   * space (see OverlayDraw; null for nothing). renderRegion never draws it. A function that
+   * throws is left out of that frame; its error goes to `reportError` where the
+   * platform has one.
+   */
+  setOverlay(draw: OverlayDraw | null): void {
+    this.#overlay = draw;
+  }
+
   /** Sets the camera for the next frame. */
   setCamera(camera: CameraView): void {
     this.#camera = camera;
@@ -287,7 +309,15 @@ export class CanvasRenderer {
     const state = this.#state;
     if (!state) return;
     const start = performance.now();
-    this.#draw({ state, viewport: this.#viewport, camera: this.#camera }, this.stats);
+    this.#draw(
+      {
+        state,
+        viewport: this.#viewport,
+        camera: this.#camera,
+        overlay: this.#overlay,
+      },
+      this.stats,
+    );
     this.stats.frames++;
     this.stats.lastFrameMs = performance.now() - start;
   }
@@ -405,6 +435,21 @@ export class CanvasRenderer {
       }
     };
     visit(tree.root, mapFor(null));
+    if (target.overlay) {
+      // Screen space: CSS pixels, so one unit is devicePixelRatio device pixels.
+      const ratio = viewport.devicePixelRatio;
+      dc.begin({ a: ratio, b: 0, c: 0, d: ratio, e: 0, f: 0 }, ratio, "full");
+      state.save();
+      try {
+        target.overlay(dc);
+      } catch (error) {
+        const report = (globalThis as { reportError?: (error: unknown) => void })
+          .reportError;
+        if (typeof report === "function") report(error);
+      } finally {
+        state.restore();
+      }
+    }
     images?.endFrame();
     state.identity();
     stats.fillText = counters.fillText;

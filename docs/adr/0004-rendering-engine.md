@@ -104,6 +104,7 @@ class CanvasRenderer {
   applyChanges(ids: Iterable<ElementId>, source?: SceneSource): void;
   imagesChanged(assets: Iterable<string>): void; // bytes arrived, changed or went away: ask again
   setCamera(camera: CameraView): void; // centre and zoom in a container's space
+  setOverlay(draw: ((ctx: DrawContext) => void) | null): void; // drawn above the document, in CSS pixels of the screen
   render(): void; // one frame, in the host's animation frame
   hitTest(
     x: number,
@@ -188,7 +189,7 @@ WebKitGTK 2.54.3 under Xvfb (no graphics card, so not representative in absolute
 - **Known limitations, left to later work:**
   - Text at deep zoom on long lines: each line is drawn from its start, so far into a long line the canvas gets a large translation, and above a font size of 1,024 device pixels the rest of the scale goes into the matrix; horizontal clipping of lines is part of the full text layout. So are text that reaches outside its box and the bounds that follow from it.
   - The smallest version of each image is never freed, and an image with only one stored version (the original) is decoded in full; both belong with storing the versions with the document.
-  - Previews of gestures drawn by the renderer are not in the interface yet; they come with the editor.
+  - Previews of gestures: settled with the editor ([0007](0007-editor-foundation.md)). The editor lays a gesture's preview over the document in the scene source it hands the renderer, and tells the renderer which ids to read again, so the renderer needed nothing for it. Tool overlays (a rubber band, the outline of a shape being drawn) and the selection outline needed a place to draw: `setOverlay(draw)`, added then, is called after the document in every frame on screen, with the renderer's drawing context in screen space (CSS pixels of the drawing area; `ctx.scale` is device pixels per CSS pixel); `renderRegion` never draws it, and a function that throws is left out of that frame (`overlay.test.ts`). Screen space keeps the overlay independent of the space the camera is anchored in: the editor projects what it draws from the document through the camera itself, with the same offsets between spaces as the renderer.
   - The font ladder makes a line's width change by up to 0.5 % at a ladder step (measured: Chromium 0.17 %, Firefox 0.5 %). Accepted.
 - **Text cost outside `render()` in WebKitGTK.** With the font ladder, WebKitGTK still rasterises glyphs anew for each frame of a zoom, because the size on screen changes; under Xvfb (no GPU) that cost appears after `render()`, in the browser's painting. Drawing glyphs at the ladder size while the camera moves (and at the exact size when it stops) would let it reuse them, at the price of text that is up to 9 % off its size during motion. Not tried; decide after the measurement with a graphics card.
 - **Rich text.** Mixed styles within a text box, right-to-left text and full Unicode line breaking are the expensive part of owning text layout. To be evaluated first: letting the browser lay the text out in a hidden element at the reference size, reading the line boxes from it, and drawing those lines on the canvas. That would give the browser's line breaking and bidirectional text without a layout library. Not verified.

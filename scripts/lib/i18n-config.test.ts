@@ -18,6 +18,7 @@ describe("readI18nConfig", () => {
     expect(isUiFile("index.html", config)).toBe(true);
     expect(isUiFile("src/model.ts", config)).toBe(false);
     expect(isUiFile("src/Toolbar.test.tsx", config)).toBe(false);
+    expect(isUiFile("src/ui/Toolbar.svelte", config)).toBe(true);
     expect(config.messages).toBe("src/messages");
     expect(config.messagesExplicit).toBe(false);
   });
@@ -39,6 +40,7 @@ describe("readI18nConfig", () => {
 
   it("knows which packages are user interface packages", () => {
     expect(isUiPackage({}, ["src/App.tsx"])).toBe(true);
+    expect(isUiPackage({}, ["src/ui/Status.svelte"])).toBe(true);
     expect(isUiPackage({}, ["src/App.test.tsx", "src/model.ts"])).toBe(false);
     expect(isUiPackage({ devDependencies: { "@galatsa/i18n": "workspace:*" } }, [])).toBe(
       true,

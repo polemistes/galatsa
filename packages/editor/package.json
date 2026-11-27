@@ -1,0 +1,45 @@
+{
+  "name": "@galatsa/editor",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Galatsa editor: one document with its undo history, the renderer, tools, the keyboard map, editor services for extensions, storage flows and the Svelte interface over the canvas",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@galatsa/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": [
+    "**/*.svelte",
+    "**/*.css"
+  ],
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*",
+    "@galatsa/extension-api": "workspace:*",
+    "@galatsa/extension-basics": "workspace:*",
+    "@galatsa/format": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "@galatsa/renderer": "workspace:*",
+    "@galatsa/storage": "workspace:*",
+    "svelte": "5.57.3",
+    "yjs": "13.6.33"
+  },
+  "devDependencies": {
+    "@galatsa/extension-examples": "workspace:*",
+    "svelte-check": "4.7.8",
+    "typescript": "6.0.3",
+    "vitest": "catalog:"
+  }
+}

@@ -412,6 +412,26 @@ describe("references", () => {
     ]);
   });
 
+  it("reads the scripts, styles and element paths of Svelte components", () => {
+    const text = [
+      '<script lang="ts">',
+      '  import Status from "./Status.svelte";',
+      '  import { t } from "../../server/t.ts";',
+      "</script>",
+      '<img src="../../server/logo.png" alt="" />',
+      "<img src={logo} alt={label} />",
+      "<style>",
+      '  @import "../../server/theme.css";',
+      "</style>",
+    ].join("\n");
+    expect(referencesOf("src/ui/Bar.svelte", text).map((r) => r.specifier)).toEqual([
+      "../../server/logo.png",
+      "./Status.svelte",
+      "../../server/t.ts",
+      "../../server/theme.css",
+    ]);
+  });
+
   it("reads HTML attributes with > inside quotes, and unquoted values", () => {
     const text = [
       '<script type="module" data-note="a>b" src="../server/b.ts"></script>',
@@ -826,8 +846,21 @@ describe("checkNodeRunnable", () => {
     const problems = checkNodeRunnable([bench, format, editor]);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain(
-      "@galatsa/editor (packages/editor) has .tsx or .jsx files",
+      "@galatsa/editor (packages/editor) has .tsx, .jsx or .svelte files",
     );
+  });
+
+  it("rejects Svelte components reachable from bench", () => {
+    const bench = pkg("bench", {
+      name: "@galatsa/bench",
+      dependencies: { "@galatsa/editor": "workspace:*" },
+    });
+    const editor = pkg(
+      "packages/editor",
+      { name: "@galatsa/editor" },
+      { "src/ui/Status.svelte": "" },
+    );
+    expect(checkNodeRunnable([bench, editor])).toHaveLength(1);
   });
 
   it("accepts bench when nothing it reaches has .tsx outside tests", () => {

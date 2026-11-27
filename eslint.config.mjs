@@ -3,6 +3,7 @@
 import { fileURLToPath } from "node:url";
 import { includeIgnoreFile } from "@eslint/compat";
 import js from "@eslint/js";
+import svelte from "eslint-plugin-svelte";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
@@ -20,6 +21,19 @@ export default tseslint.config(
     files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
     languageOptions: {
       globals: globals.node,
+    },
+  },
+  // Svelte components (the editor's interface): Svelte's own rules, with
+  // TypeScript in their <script lang="ts"> blocks, in a browser.
+  ...svelte.configs.recommended,
+  {
+    files: ["**/*.svelte", "**/*.svelte.ts", "**/*.svelte.js"],
+    languageOptions: {
+      globals: globals.browser,
+      parserOptions: {
+        parser: tseslint.parser,
+        extraFileExtensions: [".svelte"],
+      },
     },
   },
   {

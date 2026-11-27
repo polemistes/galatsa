@@ -29,6 +29,7 @@ const STYLES: ReadonlyMap<string, CommentStyle> = new Map([
   [".rs", "line"],
   [".css", "block"],
   [".html", "html"],
+  [".svelte", "html"],
 ]);
 
 /** Extensions whose files may start with a "#!" line. */

@@ -23,7 +23,7 @@
 
 ## Imports and other references
 
-The check reads every script (`.ts`, `.tsx`, `.js` and the like), stylesheet (`.css`, `.scss`, `.less` and the like) and HTML file of the package:
+The check reads every script (`.ts`, `.tsx`, `.js` and the like), stylesheet (`.css`, `.scss`, `.less` and the like) HTML file and Svelte component (its `<script>` and `<style>` blocks and element paths) of the package:
 
 - imports, `export ... from`, `import()` and `require()`;
 - `@import`, `@use` and `url()` in stylesheets, `@font-face` sources included, CSS Modules' `composes: ... from "..."` and `@value ... from "..."`, and Tailwind's `@config`, `@plugin`, `@reference` and `@source`;
@@ -61,11 +61,11 @@ Every Vite and Vitest config in the workspace contains the AGPL guard from `vite
 - A config with plugins of its own wraps its settings in `workspaceConfig()`, which joins the plugin lists. A `plugins` key after the spread would replace the guard:
 
   ```ts
-  import react from "@vitejs/plugin-react";
+  import { svelte } from "@sveltejs/vite-plugin-svelte";
   import { defineConfig } from "vite";
   import { workspaceConfig } from "../../vite.shared.ts";
 
-  export default defineConfig(workspaceConfig({ plugins: [react()] }));
+  export default defineConfig(workspaceConfig({ plugins: [svelte()] }));
   ```
 
 - The workspace check loads every `vite.config.*` and `vitest.config.*` file with Vite, as `vite build` would, plus every file a package script passes to `vite --config`, and fails if the guard is missing or changed. It does not matter how the config is written, only what it amounts to.
@@ -135,7 +135,7 @@ Node can run `.ts` files directly. To load workspace packages from source, pass 
 node --conditions=@galatsa/source src/main.ts
 ```
 
-Put this in a `package.json` script (see `bench/package.json`). Node cannot load `.tsx` or `.jsx` files, so code that Node runs (the root's `scripts/` and `bench`) must not depend on a package that has them; the workspace check enforces this. Test files (`*.test.tsx`) do not count, because Node never loads them from another package.
+Put this in a `package.json` script (see `bench/package.json`). Node cannot load `.tsx`, `.jsx` or `.svelte` files, so code that Node runs (the root's `scripts/` and `bench`) must not depend on a package that has them; the workspace check enforces this. Test files (`*.test.tsx`) do not count, because Node never loads them from another package.
 
 ## Headers
 
@@ -148,6 +148,6 @@ User interface text never appears in code; it comes from message files. `pnpm ch
 - Put the package's text in `src/messages/nb.ts` and `src/messages/en.ts` (default export: key to message text, same keys in both), and create the bundle in `src/messages/index.ts` with `defineMessages("<namespace>", { nb, en })` from `@galatsa/i18n`. Extensions use their extension id as the namespace.
 - Look text up with `i18n.translator(bundle)` or `i18n.t("namespace:key", values)`.
 - The message files are exactly `src/messages/<language>.ts` for each interface language; other files in the folder are not catalogs. `defineMessages()` belongs in `src/messages/index.ts`, with the catalogs imported from those files. A bundle written by hand (`{ namespace: "editor", messages: { nb, en } }`) fails the check, because its languages would never be compared.
-- User interface code is checked for hard-coded text. In a package that has `.tsx` or `.jsx` files or declares `@galatsa/i18n`, that is every script under `src/`, plus HTML pages; in other packages, `.tsx`, `.jsx` and HTML files. A package can list its own globs in its `package.json`, with `!` to leave files out: `"galatsa": { "i18n": { "uiFiles": ["src/**", "!src/model/**"] } }`. The other settings (`messages`, `textAttributes`, `textCalls`) are described in `scripts/lib/i18n-config.ts`.
+- User interface code is checked for hard-coded text. In a package that has `.tsx`, `.jsx` or `.svelte` files or declares `@galatsa/i18n`, that is every script and Svelte component under `src/`, plus HTML pages; in other packages, `.tsx`, `.jsx`, `.svelte` and HTML files. Svelte components are parsed with `svelte/compiler`: text in the markup and text attributes as in JSX, and the scripts and markup expressions with the script rules; write `<!-- i18n-ignore: reason -->` in markup. A package can list its own globs in its `package.json`, with `!` to leave files out: `"galatsa": { "i18n": { "uiFiles": ["src/**", "!src/model/**"] } }`. The other settings (`messages`, `textAttributes`, `textCalls`) are described in `scripts/lib/i18n-config.ts`.
 - Names are a guess. For names that hold text only by their ending (`errorMessage`, `plainText`, `sortDescription`), a value that looks like a code is not reported: one ASCII word without spaces that is all lower case (`"ascending"`), all upper case (`"ENOENT"`), camelCase, or has a digit or one of `/ _ . : + = # @ -` (`"text/plain"`, `"en-US"`). A capitalised word (`"Save"`), text with a space and text with letters outside ASCII are reported. In the fixed text places (JSX text, `title`, `aria-label`, `textContent` and so on) every value with a letter is reported. Text that is only a URL or an e-mail address is never reported, and neither is the content of `<style>` and `<script>`.
 - Text that must not be translated (a product name, a code sample) is marked with `// i18n-ignore: <reason>` on the line or alone on the line above (`{/* i18n-ignore: <reason> */}` in JSX, `<!-- i18n-ignore: <reason> -->` in HTML). Only comments count, not the same words in a string.
