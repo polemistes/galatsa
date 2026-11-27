@@ -22,7 +22,9 @@
 //    key right of P (Å on a Norwegian keyboard). A character of its own wins:
 //    Ctrl and + on a Norwegian keyboard is Mod++, never the Mod+- of that
 //    key's place on a US keyboard, and a character AltGr gave ({ on AltGr+7)
-//    never falls back to the digit. Letters are not matched by place: Ctrl+Z
+//    never falls back to the digit. A dead key with Mod (¨ right of Å on a
+//    Norwegian keyboard) is matched by place, so Mod+] is Ctrl and that key.
+//    Letters are not matched by place: Ctrl+Z
 //    on a French keyboard is the key marked Z, not the one where Z is on a US
 //    keyboard.
 // 3. On macOS with Option, by place for letters too, because Option changes the
@@ -130,12 +132,7 @@ function spell(
 
 /** The shortcuts a key press may stand for, most likely first. */
 export function shortcutCandidates(input: KeyInput, platform: Platform): Shortcut[] {
-  if (
-    MODIFIER_KEYS.has(input.key) ||
-    input.key === "Dead" ||
-    input.key === "Unidentified"
-  )
-    return [];
+  if (MODIFIER_KEYS.has(input.key) || input.key === "Unidentified") return [];
   const altGr = isAltGr(input, platform);
   // What AltGr adds is not a modifier of the shortcut: on Windows it comes as
   // Ctrl and Alt together, elsewhere as AltGraph alone.
@@ -152,6 +149,15 @@ export function shortcutCandidates(input: KeyInput, platform: Platform): Shortcu
   const add = (s: Shortcut | undefined): void => {
     if (s !== undefined && !out.includes(s)) out.push(s);
   };
+  // A dead key gives no character. With Mod it names its place, as on a US
+  // keyboard: Ctrl and the key right of Å on a Norwegian keyboard (¨, a dead
+  // key) is Mod+], as Ctrl and Å is Mod+[. Alone, or with AltGr, it names
+  // nothing: it is the start of a character being typed.
+  if (input.key === "Dead") {
+    const us = US_KEYS[input.code];
+    if (us !== undefined && mods.mod && !altGr) add(spell(mods, us));
+    return out;
+  }
   // 1. By character. Space is named "Space" rather than " ".
   const key = input.key === " " ? "Space" : input.key;
   add(spell(mods, key));

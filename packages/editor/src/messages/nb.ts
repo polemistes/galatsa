@@ -57,4 +57,9 @@ export default {
   "nav.panRight": "Flytt utsnittet til høyre",
   "nav.panUp": "Flytt utsnittet opp",
   "nav.panDown": "Flytt utsnittet ned",
+  "frames.rename": "Gi rammen nytt navn …",
+  "frames.panel": "Navn på rammen",
+  "frames.name": "Rammens navn",
+  "frames.save": "Lagre",
+  "frames.none": "Velg én ramme for å gi den nytt navn.",
 };

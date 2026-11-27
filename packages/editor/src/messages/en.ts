@@ -57,4 +57,9 @@ export default {
   "nav.panRight": "Move the view right",
   "nav.panUp": "Move the view up",
   "nav.panDown": "Move the view down",
+  "frames.rename": "Rename frame…",
+  "frames.panel": "Frame name",
+  "frames.name": "Name of the frame",
+  "frames.save": "Save",
+  "frames.none": "Select one frame to rename it.",
 };

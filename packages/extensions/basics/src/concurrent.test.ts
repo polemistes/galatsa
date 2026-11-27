@@ -211,7 +211,6 @@ function samePoint(a: Point, b: Point): boolean {
   return close(a.x, b.x) && close(a.y, b.y);
 }
 
-/** The state after, with every position put back that changed since the state before. */
 /**
  * Whether an element's position is converted from another space (rule 3 of
  * docs/adr/0001 section 5.3): written in a space that is neither its container
@@ -233,12 +232,23 @@ function converted(snapshot: DocumentSnapshot, r: Resolver, id: ElementId): bool
   );
 }
 
+/**
+ * The state after, with every position put back that changed since the state
+ * before. Where the step wrote an element's container as well as its position
+ * (a move into another container, which a drag makes as one step,
+ * docs/adr/0014), its container and rebase are put back with the position:
+ * the old position read under the new container would be converted from
+ * another space, which says nothing about the step.
+ */
 function withPositionsOf(after: DocumentSnapshot, before: DocumentSnapshot): Resolver {
   const elements = { ...after.elements };
   for (const [id, element] of Object.entries(after.elements)) {
     const old = Object.hasOwn(before.elements, id) ? before.elements[id] : undefined;
-    if (old && JSON.stringify(old.pos) !== JSON.stringify(element.pos))
-      elements[id] = { ...element, pos: old.pos };
+    if (!old || JSON.stringify(old.pos) === JSON.stringify(element.pos)) continue;
+    elements[id] =
+      old.parent !== element.parent
+        ? { ...element, pos: old.pos, parent: old.parent, rebase: old.rebase }
+        : { ...element, pos: old.pos };
   }
   return new Resolver(lookupFromRecord(elements));
 }

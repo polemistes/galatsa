@@ -33,7 +33,16 @@ import {
   type ToolPointerEvent,
   type ToolSession,
 } from "@galatsa/extension-api/editing";
-import { BASICS } from "@galatsa/extension-basics";
+import { BASICS, isFrame } from "@galatsa/extension-basics";
+import {
+  dropBox,
+  dropFrames,
+  dropTarget,
+  labelAt,
+  shownFrames,
+  type DropFrame,
+  type ShownFrame,
+} from "./frames.ts";
 import {
   CORNERS,
   SIDES,
@@ -107,12 +116,23 @@ type Drag =
       readonly clicked: ElementId | null;
       gesture: Gesture | null;
       offset: Point;
+      /** The frames the selection can be dropped into, found when the drag starts. */
+      frames: readonly DropFrame[];
+      /** The containers the moved elements are seen in now. */
+      readonly from: ReadonlySet<ElementId | null>;
+      /** The container a drop here moves them into; undefined: they stay where they are. */
+      target: ElementId | null | undefined;
     }
   | {
       readonly kind: "band";
       readonly start: ToolPointerEvent;
       current: Point;
       readonly add: boolean;
+      /**
+       * A band drawn from a frame's background selects among what is in the
+       * frame; a click there (no drag) selects the frame.
+       */
+      readonly within?: ElementId;
     }
   | {
       readonly kind: "corner";
@@ -165,6 +185,10 @@ function bandRect(a: Point, b: Point): Rect {
     w: Math.abs(b.x - a.x),
     h: Math.abs(b.y - a.y),
   };
+}
+
+function touches(a: Rect, b: Rect): boolean {
+  return a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h;
 }
 
 /** The resize command's arguments. */
@@ -344,7 +368,8 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     ids: readonly ElementId[],
     clicked: ElementId | null,
   ): void => {
-    const moving = outermost(resolver(), ids);
+    const r = resolver();
+    const moving = outermost(r, ids);
     drag = {
       kind: "move",
       start: event,
@@ -353,7 +378,35 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       clicked,
       gesture: null,
       offset: { x: 0, y: 0 },
+      frames: [],
+      from: new Set(moving.map((id) => r.logicalParentOf(id))),
+      target: undefined,
     };
+  };
+
+  // The frames on screen, for their names, worked out again when the
+  // document or the camera changes.
+  let shown: {
+    readonly doc: number;
+    readonly camera: unknown;
+    readonly frames: readonly ShownFrame[];
+  } | null = null;
+  const framesShown = (): readonly ShownFrame[] => {
+    const camera = services().camera.get();
+    if (shown === null || shown.doc !== docVersion || shown.camera !== camera)
+      shown = { doc: docVersion, camera, frames: shownFrames(services(), doc) };
+    return shown.frames;
+  };
+
+  /**
+   * The frame whose name is under a point, where nothing but a frame's
+   * background (or nothing) is hit there: an element on top of a name wins.
+   */
+  const nameUnder = (point: Point, hit: ElementId | null): ElementId | null => {
+    const r = resolver();
+    if (hit !== null && !isFrame(r, hit)) return null;
+    const id = labelAt(framesShown(), point, zoom());
+    return id === null || r.isLocked(id) ? null : id;
   };
 
   // -------------------------------------------------------------------------
@@ -368,6 +421,10 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     if (d.gesture === null) {
       if (far < CLICK_SLOP) return;
       d.gesture = session.gesture();
+      d.frames = dropFrames(
+        resolver(),
+        d.items.map((item) => item.id),
+      );
       setCursor("move");
     }
     let dx = event.world.x - d.start.world.x;
@@ -377,6 +434,15 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       else dx = 0;
     }
     d.offset = { x: dx, y: dy };
+    // Let go here, the selection goes into the frame under the pointer, or
+    // out to the canvas (docs/adr/0014); where all of it is seen already, it
+    // stays.
+    const target = dropTarget(d.frames, event.world);
+    const into = d.from.size !== 1 || !d.from.has(target) ? target : undefined;
+    if (into !== d.target) {
+      d.target = into;
+      session.requestOverlay();
+    }
     const changes: Record<ElementId, { x: number; y: number }> = {};
     for (const { id, at } of d.items) changes[id] = { x: at.x + dx, y: at.y + dy };
     d.gesture.preview(changes);
@@ -511,7 +577,8 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       f !== null &&
       f.move &&
       (hit === null ? insideBox(f.box, event.world) : f.ids.includes(hit));
-    setCursor(hit !== null || overSelection ? "move" : "default");
+    const overName = nameUnder(event.world, hit) !== null;
+    setCursor(hit !== null || overSelection || overName ? "move" : "default");
   };
 
   /** Follows the pointer during a drag. */
@@ -558,7 +625,11 @@ export function startSelectTool(session: ToolSession): ToolHandler {
           return;
         }
       }
-      const hit = s.scene.elementAt(event.world, PICK / zoom());
+      const found = s.scene.elementAt(event.world, PICK / zoom());
+      // A frame's name above it is a handle: it takes the frame, whatever
+      // else is behind it (an element on top of the name wins).
+      const name = nameUnder(event.world, found);
+      const hit = name ?? found;
       if (event.modifiers.shift) {
         if (hit !== null) {
           s.selection.set(
@@ -571,8 +642,25 @@ export function startSelectTool(session: ToolSession): ToolHandler {
         drag = { kind: "band", start: event, current: event.world, add: true };
         return;
       }
+      const already = hit !== null && selection.includes(hit);
+      // The background of a frame that is not selected: a drag draws a band
+      // among what is in the frame, a click selects the frame. Between the
+      // elements of a selection, the selection is moved, as on the canvas.
+      if (hit !== null && name === null && !already && isFrame(resolver(), hit)) {
+        if (f !== null && f.move && insideBox(f.box, event.world)) {
+          startMove(event, f.ids, null);
+          return;
+        }
+        drag = {
+          kind: "band",
+          start: event,
+          current: event.world,
+          add: false,
+          within: hit,
+        };
+        return;
+      }
       if (hit !== null) {
-        const already = selection.includes(hit);
         const ids = already ? selection : [hit];
         if (!already) s.selection.set(ids);
         if (session.isEnabled(BASICS.move, { ids: [...ids], dx: 1, dy: 0 }))
@@ -614,14 +702,24 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       session.requestOverlay();
       switch (d.kind) {
         case "band": {
-          // A click on empty canvas is not a band: it would select what only
-          // the bounding box of a turned or round element covers.
-          if (still) return;
           const s = services();
+          // A click on a frame's background selects the frame. A click on
+          // empty canvas is not a band: it would select what only the
+          // bounding box of a turned or round element covers.
+          if (still) {
+            if (d.within !== undefined) s.selection.set([d.within]);
+            return;
+          }
           const r = resolver();
-          const found = s.scene
-            .elementsIn(bandRect(d.start.world, event.world), "touching")
-            .filter((id) => !r.isLocked(id));
+          const rect = bandRect(d.start.world, event.world);
+          const found = (
+            d.within === undefined
+              ? s.scene.elementsIn(rect, "touching")
+              : r.logicalChildren(d.within).filter((id) => {
+                  const b = s.scene.bounds(id);
+                  return b !== null && touches(rect, b);
+                })
+          ).filter((id) => !r.isLocked(id));
           s.selection.set(d.add ? [...s.selection.get(), ...found] : found);
           return;
         }
@@ -634,6 +732,7 @@ export function startSelectTool(session: ToolSession): ToolHandler {
             ids: [...d.ids],
             dx: d.offset.x,
             dy: d.offset.y,
+            ...(d.target !== undefined ? { target: d.target } : {}),
           });
           break;
         case "corner":
@@ -709,6 +808,15 @@ export function startSelectTool(session: ToolSession): ToolHandler {
         ctx.fill(path, "rgba(37, 99, 235, 0.08)");
         ctx.stroke(path, { color: COLOR, width: px, dash: [4 * px, 4 * px] });
         return;
+      }
+      // The frame a drop would move the selection into.
+      if (drag?.kind === "move" && drag.target !== undefined && drag.target !== null) {
+        const box = dropBox(drag.frames, drag.target);
+        if (box !== null) {
+          const path = ctx.createPath();
+          path.rect(box.x, box.y, box.w, box.h);
+          ctx.stroke(path, { color: COLOR, width: 2 * px });
+        }
       }
       // While a handle or the selection is dragged, the editor's outline
       // follows the preview; the handles come back when it ends.

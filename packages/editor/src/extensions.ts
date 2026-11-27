@@ -4,7 +4,8 @@
 // commands every element has, docs/adr/0005, section 12.1), then the built-in
 // selection tool (docs/adr/0008; its tool is the first, so the default when the
 // program names none), then the editor's navigation commands (navigation.ts),
-// then the program's other extensions. The basics come first so that they keep
+// then the frame panel (rename.ts, docs/adr/0014), then the program's other
+// extensions. The basics come first so that they keep
 // their shortcuts when another extension claims the same one ("select all" in
 // the selection sketch, say): the first registered keeps a shortcut. The
 // selection tool gets keys before the navigation's shortcuts (the arrow keys
@@ -24,6 +25,7 @@ import type { I18n } from "@galatsa/i18n";
 import { storageMessages } from "@galatsa/storage";
 import { editorMessages } from "./messages/index.ts";
 import { navigationExtension } from "./navigation.ts";
+import { framesExtension } from "./rename.ts";
 
 export interface LoadedExtensions {
   readonly host: EditorHost;
@@ -50,6 +52,7 @@ export function loadExtensions(
     basicsExtension,
     selectExtension,
     navigationExtension,
+    framesExtension,
     ...extensions,
   ]);
   return {
