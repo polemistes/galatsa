@@ -223,6 +223,7 @@ export class Editor {
       {
         host: this.host,
         environment: () => this.environment(),
+        run: <R>(command: ContributionId, args?: unknown) => this.run<R>(command, args),
         mode: () => this.#state.mode,
         scale: () => this.#state.camera.zoom * this.renderer.viewport.devicePixelRatio,
         invalidate: () => this.invalidate(),
@@ -273,9 +274,23 @@ export class Editor {
     return { doc: this.doc, undo: this.undo, services: this.services };
   }
 
-  /** Runs a command as one undo step, as a menu or a shortcut would. */
+  /**
+   * Runs a command as one undo step, as a menu or a shortcut would. While a
+   * gesture (a drag) is open on the document, commands that change the
+   * document are refused ("disabled"): the drag ends in a command of its own,
+   * and one run in the middle of it would leave the drag to commit over what
+   * it changed (a move of an element just deleted, as an extra undo step).
+   * Commands that do not change the document (undoable: false) still run;
+   * undo and redo refuse by themselves until the gesture ends.
+   */
   run<R = unknown>(command: ContributionId, args?: unknown): CommandOutcome<R> {
-    return this.host.commands.execute<R>(command, this.environment(), args);
+    const env = this.environment();
+    if (this.host.commands.gestureActive(env)) {
+      const entry = this.host.commands.get(command);
+      if (entry !== undefined && entry.definition.undoable !== false)
+        return { ok: false, reason: "disabled" };
+    }
+    return this.host.commands.execute<R>(command, env, args);
   }
 
   /** Calls `listener` when the selection, camera, mode, panels, tool or cursor change. */

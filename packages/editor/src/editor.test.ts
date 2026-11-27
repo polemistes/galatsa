@@ -283,6 +283,42 @@ describe("editor core", () => {
     expect(toSnapshot(editor.doc).elements).toEqual(before.elements);
   });
 
+  it("refuses document changes from the keyboard while a drag is open", () => {
+    const { editor } = make();
+    const shape = (
+      editor.run<string>("examples.shape/insert", {
+        kind: "rect",
+        x: 100,
+        y: 100,
+        w: 100,
+        h: 100,
+      }) as { value: string }
+    ).value;
+    const steps = editor.undo.undoStack.length;
+    editor.pointerDown(pointer(150, 150));
+    editor.pointerMove(pointer(250, 170));
+    expect(editor.selection).toEqual([shape]);
+    // Delete during the drag is refused; select all (no document change) is not.
+    expect(editor.keyDown(key("Delete", { code: "Delete" }))).toMatchObject({
+      command: BASICS.delete,
+      outcome: { ok: false, reason: "disabled" },
+    });
+    expect(editor.keyDown(key("a", { ctrlKey: true }))).toMatchObject({
+      outcome: { ok: true },
+    });
+    editor.pointerUp(pointer(250, 170));
+    expect(shapes(editor)).toEqual([shape]);
+    // One step: the move. Undo takes it back, and the next undo the insertion.
+    expect(editor.undo.undoStack.length).toBe(steps + 1);
+    editor.keyDown(key("z", { ctrlKey: true }));
+    expect(editor.live.localPosition(shape)).toEqual({ x: 100, y: 100 });
+    expect(shapes(editor)).toEqual([shape]);
+    // After the drag, Delete works.
+    editor.services.selection.set([shape]);
+    editor.keyDown(key("Delete", { code: "Delete" }));
+    expect(shapes(editor)).toEqual([]);
+  });
+
   it("takes no input while input is off, and cancels a drag in progress", () => {
     const { editor } = make();
     const shape = (

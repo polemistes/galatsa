@@ -26,6 +26,8 @@ import type {
 export interface ToolHost {
   readonly host: EditorHost;
   environment(): CommandEnvironment;
+  /** Runs a command the way the editor runs user actions (Editor.run). */
+  run<R>(command: ContributionId, args?: unknown): CommandOutcome<R>;
   mode(): Mode;
   /** Device pixels per world unit. */
   scale(): number;
@@ -138,9 +140,7 @@ export class ToolController {
     return {
       environment: () => editor.environment(),
       run: <R>(command: ContributionId, args?: unknown): CommandOutcome<R> =>
-        live()
-          ? editor.host.commands.execute<R>(command, editor.environment(), args)
-          : { ok: false, reason: "disabled" },
+        live() ? editor.run<R>(command, args) : { ok: false, reason: "disabled" },
       gesture: (): Gesture => editor.host.commands.beginGesture(editor.environment()),
       scale: () => editor.scale(),
       requestOverlay: () => {
