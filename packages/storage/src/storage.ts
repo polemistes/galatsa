@@ -526,12 +526,9 @@ export class DocumentStorage {
     ids: readonly string[],
     records: readonly (SessionRecord | null)[],
   ): Promise<ReadonlySet<string>> {
-    let asked: ReadonlySet<string> | null = null;
-    try {
-      asked = this.#ctx.liveness ? await this.#ctx.liveness.alive(ids) : null;
-    } catch {
-      asked = null;
-    }
+    const asked = this.#ctx.liveness
+      ? await this.#ctx.liveness.alive(ids).catch(() => null)
+      : null;
     if (asked) return asked;
     const now = this.#ctx.scheduler.now();
     const staleAfter = this.#ctx.timing.staleAfter;
