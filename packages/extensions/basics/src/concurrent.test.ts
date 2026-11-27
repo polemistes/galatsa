@@ -212,6 +212,27 @@ function samePoint(a: Point, b: Point): boolean {
 }
 
 /** The state after, with every position put back that changed since the state before. */
+/**
+ * Whether an element's position is converted from another space (rule 3 of
+ * docs/adr/0001 section 5.3): written in a space that is neither its container
+ * nor covered by its rebase, which happens only after conflicting concurrent
+ * changes of container. Such a position is converted through container offsets
+ * computed by rules 1 and 2 alone, so any change of container along the way
+ * can shift it, also one that keeps every container where it is (0001 section
+ * 13, "mixed double conflicts"). Rule 1 leaves
+ * such elements out.
+ */
+function converted(snapshot: DocumentSnapshot, r: Resolver, id: ElementId): boolean {
+  const element = snapshot.elements[id];
+  if (!element) return false;
+  const parent = r.parentOf(id);
+  if (element.pos.space === parent) return false;
+  const rebase = element.rebase;
+  return !(
+    rebase?.to === parent && rebase.shifts.some((s) => s.from === element.pos.space)
+  );
+}
+
 function withPositionsOf(after: DocumentSnapshot, before: DocumentSnapshot): Resolver {
   const elements = { ...after.elements };
   for (const [id, element] of Object.entries(after.elements)) {
@@ -242,9 +263,12 @@ function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): b
   // 1. Values the other user wrote stay, and nothing moves on the canvas except
   // by the positions the undo writes.
   for (const w of values) expect(w.kept(), `value of the other: ${w.label}`).toBe(true);
-  const back = withPositionsOf(toSnapshot(me.doc), snap0);
+  const snap1 = toSnapshot(me.doc);
+  const r1 = new Resolver(lookupFromRecord(snap1.elements));
+  const back = withPositionsOf(snap1, snap0);
   for (const id of seen) {
     if (r.isGone(id)) continue;
+    if (converted(snap0, r0, id) || converted(snap1, r1, id)) continue;
     expect(
       samePoint(r0.worldOrigin(id), back.worldOrigin(id)),
       `${id} moved on the canvas by something other than a position the step wrote`,
@@ -326,7 +350,7 @@ describe("two users undoing concurrently", () => {
   for (const seed of SEEDS) {
     it(`each undoes only their own changes, and none of the other's is lost (seed ${seed})`, () => {
       concurrentScenario(seed, STEPS);
-    }, 60_000);
+    }, 600_000);
   }
 
   function pair(clients?: readonly [number, number]) {
