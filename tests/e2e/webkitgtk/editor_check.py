@@ -40,7 +40,7 @@ gi.require_version("WebKit", "6.0")
 from gi.repository import GLib, Gtk, WebKit  # noqa: E402
 
 PORT = int(os.environ.get("E2E_WEB_PORT", "5198"))
-URL = f"http://localhost:{PORT}/?lang=en&fresh"
+URL = f"http://localhost:{PORT}/?lang=en&scene=bench&fresh"
 TITLE = "Galatsa editor check"
 WIDTH, HEIGHT = 1000, 700
 TIMEOUT_S = 180

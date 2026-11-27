@@ -24,7 +24,7 @@
   div {
     position: absolute;
     left: 50%;
-    top: 8px;
+    top: 64px;
     transform: translateX(-50%);
     max-width: min(32rem, calc(100% - 16px));
     padding: 8px 12px;

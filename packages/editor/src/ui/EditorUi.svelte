@@ -1,10 +1,9 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!--
-  The editor's interface over the canvas. For now the save status and the
-  storage layer's notices, saving as a file and closing with the offer to save
-  first, the recovery offers at start (docs/adr/0006, section 7.1), extensions
-  that were not loaded, shortcut conflicts, and open custom panels. Toolbars
-  and the properties panel come with the editor shell.
+  The editor's interface over the canvas: the toolbar and the properties
+  panel (docs/adr/0016), the save status and the storage layer's notices, the
+  recovery offers at start (docs/adr/0006, section 7.1), extensions that were
+  not loaded, shortcut conflicts, and open custom panels.
 -->
 <script lang="ts">
   import { noticeText } from "@galatsa/storage";
@@ -14,7 +13,9 @@
   import EditorNotice from "./EditorNotice.svelte";
   import Panels from "./Panels.svelte";
   import Problems from "./Problems.svelte";
+  import Properties from "./Properties.svelte";
   import RecoveryDialog from "./RecoveryDialog.svelte";
+  import Toolbar from "./Toolbar.svelte";
   import { translator, Watched } from "./reactive.ts";
 
   let { app }: { app: EditorApp } = $props();
@@ -40,6 +41,14 @@
   {#if state.phase === "editing" && state.document !== null}
     <DocumentBar {i18n} doc={state.document} />
   {/if}
+  {#if state.phase === "editing" && state.document !== null && state.editor !== null}
+    {#key state.editor}
+      <div class="side">
+        <Toolbar {app} editor={state.editor} doc={state.document} />
+        <Properties editor={state.editor} />
+      </div>
+    {/key}
+  {/if}
   {#if state.editor !== null}
     <Panels editor={state.editor} />
     <ContextMenu editor={state.editor} />
@@ -62,6 +71,18 @@
       14px/1.4 system-ui,
       sans-serif;
     color: #1e293b;
+  }
+  .side {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    bottom: 56px;
+    max-width: calc(100% - 16px);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    pointer-events: none;
   }
   .card {
     position: absolute;

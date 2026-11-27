@@ -21,6 +21,7 @@ import {
   pickFileToOpen,
   workerEncoder,
   type DiscardResult,
+  type FileSource,
   type Notice,
   type OpenResult,
   type RecoveryOffer,
@@ -81,6 +82,9 @@ export interface EditorAppOptions {
   /** Called when an editor is created over a document (after it is fitted). */
   readonly onEditor?: (editor: Editor) => void;
 }
+
+/** How long opening a file waits for the open document's last changes to be stored. */
+const FLUSH_WAIT_MS = 5000;
 
 /** The checkpoint encoder in a worker, or on this thread if the worker cannot start. */
 function encoderFor(createWorker: (() => WorkerLike) | undefined) {
@@ -191,6 +195,32 @@ export class EditorApp {
   async openDefault(): Promise<void> {
     this.#set({ phase: "opening", offers: [] });
     await this.#show(await this.#options.openDefault(this.storage));
+  }
+
+  /**
+   * Opens a presentation file the user picked (`pickFileToOpen`) in place of
+   * the open document, as a new stored document. The open document is stored
+   * first (a flush, waited for at most five seconds) and its session closed;
+   * the interface asks before this when it has changes not saved to a file
+   * (docs/adr/0016). If the file cannot be opened, the open document stays,
+   * and the result says why.
+   */
+  async openFile(source: FileSource): Promise<OpenResult> {
+    const result = await this.storage.openFile(source);
+    if (!result.ok) return result;
+    const previous = this.#state.document;
+    this.#closeEditor();
+    this.#set({ phase: "opening", editor: null, document: null });
+    if (previous !== null) {
+      await Promise.race([
+        previous.session.flush().catch(() => false),
+        new Promise((resolve) => setTimeout(resolve, FLUSH_WAIT_MS)),
+      ]);
+      await previous.session.close({ evenIfUnstored: true }).catch(() => undefined);
+      previous.dispose();
+    }
+    await this.#show(result);
+    return result;
   }
 
   async #show(

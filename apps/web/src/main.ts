@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The development page: starts the editor with the shape, image and text
-// extensions, on the
-// sample scene (the benchmark scene as a document) or, with `?scene=empty`, on
-// a new empty document.
+// The web page: starts the editor with the shape, image, text and routes
+// extensions on a new, empty presentation (docs/adr/0016), or, with
+// `?scene=bench`, on the sample scene (the benchmark scene of bench/ as a
+// document, 2,000 elements), which the end-to-end tests and measurements use.
 //
 // Query parameters: `lang=nb|en` (otherwise the stored choice or the system's
-// language), `scene=empty`, `fresh` (a new copy of the sample scene instead of
-// the stored one), `mode=advanced`.
+// language), `scene=bench`, `fresh` (with `scene=bench`: a new copy of the
+// sample scene instead of the stored one), `mode=advanced`.
 //
 // `window.galatsaDev` gives tests and the browser console the running program.
 
@@ -39,8 +39,13 @@ const i18n = createI18n({
   ...(lang !== null && isLocale(lang) ? { locale: lang } : {}),
   bundles: [webMessages],
 });
-document.documentElement.lang = i18n.locale;
-document.title = i18n.t("web:page.title");
+// The language can be changed in the toolbar: the page follows.
+const showLanguage = (): void => {
+  document.documentElement.lang = i18n.locale;
+  document.title = i18n.t("web:page.title");
+};
+showLanguage();
+i18n.subscribe(showLanguage);
 
 const root = document.getElementById("app");
 if (root === null) throw new Error("The page has no #app element");
@@ -64,7 +69,7 @@ const ready = EditorApp.start({
     editor.invalidate();
   },
   async openDefault(storage) {
-    if (params.get("scene") === "empty") {
+    if (params.get("scene") !== "bench") {
       const session = await storage.create();
       return { ok: true, session, notices: [] };
     }

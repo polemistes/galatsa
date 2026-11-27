@@ -598,6 +598,10 @@ const togglePanel = defineCommand<unknown, void>({
   shortcuts: ["Shift+R"],
   quick: true,
   undoable: false,
+  // A button in the editor's toolbar, pressed while the panel is open.
+  toolbar: "panels",
+  icon: "route",
+  active: (ctx) => ctx.services.panels.isOpen(ROUTES_PANEL),
   execute(ctx) {
     const panels = ctx.services.panels;
     if (panels.isOpen(ROUTES_PANEL)) panels.close(ROUTES_PANEL);

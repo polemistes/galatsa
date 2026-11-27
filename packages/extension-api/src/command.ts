@@ -104,10 +104,19 @@ export interface CommandDefinition<A = unknown, R = unknown> {
   readonly undoLabel?: Label;
   /** Longer text for tooltips and the command search. */
   readonly description?: Label;
+  /** An icon of the program's icon set; the toolbar falls back to the command's name. */
   readonly icon?: IconRef;
   readonly shortcuts?: readonly Shortcut[];
   /** Offered in quick mode too. Every command is offered in advanced mode. */
   readonly quick?: boolean;
+  /**
+   * The toolbar group the command has a button in (docs/adr/0016): commands
+   * with the same group stand together, groups in the order their first
+   * command was registered. The button runs the command the way a shortcut
+   * does, with the selection as its elements, and is shown while the mode
+   * offers the command and `visible` allows it. Without it, no button.
+   */
+  readonly toolbar?: string;
   /**
    * False for commands that do not change the document themselves (camera,
    * panels, mode, selection, undo and redo): they run without an undo step of
@@ -119,6 +128,11 @@ export interface CommandDefinition<A = unknown, R = unknown> {
   enabled?(ctx: CommandContext, args: A | undefined): boolean;
   /** Whether menus and toolbars show it now. Default: always. */
   visible?(ctx: CommandContext): boolean;
+  /**
+   * For a command that switches something on and off (a panel): whether it
+   * is on now, so its toolbar button shows as pressed (docs/adr/0016).
+   */
+  active?(ctx: CommandContext): boolean;
   execute(ctx: CommandContext, args: A): R;
 }
 
@@ -349,6 +363,35 @@ export class CommandRegistry {
     } catch {
       return false;
     }
+  }
+
+  /** True if a command that switches something on and off says it is on (docs/adr/0016). */
+  isActive(id: ContributionId, env: CommandEnvironment): boolean {
+    const entry = this.#commands.get(id);
+    if (!entry?.definition.active) return false;
+    try {
+      return entry.definition.active(this.context(env));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The commands with a toolbar button in a mode, by group: groups in the
+   * order their first command was registered, commands in registration order
+   * within a group (docs/adr/0016). `visible` is not asked here; it can
+   * change with the selection, and the toolbar asks it when it draws.
+   */
+  toolbar(mode: Mode): { readonly group: string; readonly commands: RegisteredCommand[] }[] {
+    const groups = new Map<string, RegisteredCommand[]>();
+    for (const entry of this.#commands.values()) {
+      const group = entry.definition.toolbar;
+      if (group === undefined || !availableIn(entry.definition.quick, mode)) continue;
+      const list = groups.get(group);
+      if (list === undefined) groups.set(group, [entry]);
+      else list.push(entry);
+    }
+    return [...groups].map(([group, commands]) => ({ group, commands }));
   }
 
   /**

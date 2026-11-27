@@ -36,6 +36,9 @@ export default defineConfig(
     plugins: [svelte(), fontLicenses()],
     // The checkpoint worker is an ES module (it imports the file format).
     worker: { format: "es" },
+    // Relative paths, so that the built page works from any folder (GitHub
+    // Pages serves it from /galatsa/).
+    base: "./",
     build: { outDir: "dist", target: "es2023" },
   }),
 );
