@@ -177,7 +177,8 @@ function planFrame(ctx: CommandContext, args: unknown): FramePlan | undefined {
   if (args === null || typeof args !== "object") return undefined;
   const given = args as { ids?: unknown; rect?: unknown; parent?: unknown };
   const r = resolve(ctx);
-  const ids = given.ids === undefined ? [] : readIds(given);
+  const none = Array.isArray(given.ids) && given.ids.length === 0;
+  const ids = given.ids === undefined || none ? [] : readIds(given);
   if (ids === undefined) return undefined;
   if (given.rect !== undefined) {
     const box = readRect(given.rect);
