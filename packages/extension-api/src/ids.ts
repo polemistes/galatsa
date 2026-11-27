@@ -38,7 +38,7 @@ export function extensionOf(id: ContributionId): ExtensionId {
 /**
  * User interface text is never stored in a definition, only a message key
  * "namespace:key", looked up with the program's I18n (docs/adr/0003). The
- * namespace is the extension's own (or a prefix of its id, see section 7.3 of
+ * namespace is the extension's own (or a prefix of its id, see section 9.2 of
  * the specification), or "common".
  */
 export type Label = `${string}:${string}`;
@@ -97,7 +97,7 @@ export function normalizeShortcut(shortcut: string): Shortcut | undefined {
  */
 export type IconRef = string;
 
-/** Version of the extension interface (section 8.3 of the specification). */
+/** Version of the extension interface (section 9.3 of the specification). */
 export interface ApiVersion {
   /** Raised for every incompatible change. */
   readonly major: number;

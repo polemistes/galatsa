@@ -159,7 +159,7 @@ export class CommandRegistry {
   /** Nesting depth of execute and run: only the outermost makes an undo step. */
   #depth = 0;
   /** The running gesture, if any. */
-  #gesture: object | null = null;
+  #gesture: Gesture | null = null;
 
   constructor(lookup: ExtensionLookup) {
     this.#lookup = lookup;
@@ -312,23 +312,22 @@ export class CommandRegistry {
    * another commits the first.
    */
   beginGesture(env: () => CommandEnvironment): Gesture {
+    this.#gesture?.commit();
     const undo = env().undo;
     const timeout = undo.captureTimeout;
     undo.stopCapturing();
     const before = undo.undoStack.length;
     undo.captureTimeout = Number.POSITIVE_INFINITY;
-    const token = {};
-    this.#gesture = token;
     const end = (): boolean => {
-      if (this.#gesture !== token) return false;
+      if (this.#gesture !== gesture) return false;
       this.#gesture = null;
       undo.captureTimeout = timeout;
       undo.stopCapturing();
       return true;
     };
-    return {
+    const gesture: Gesture = {
       run: <R>(command: ContributionId, args?: unknown): CommandOutcome<R> =>
-        this.#gesture === token
+        this.#gesture === gesture
           ? this.execute<R>(command, env(), args)
           : { ok: false, reason: "disabled" },
       commit: () => {
@@ -338,6 +337,8 @@ export class CommandRegistry {
         if (end() && undo.undoStack.length > before) takeBack(undo);
       },
     };
+    this.#gesture = gesture;
+    return gesture;
   }
 }
 

@@ -186,6 +186,21 @@ describe("gestures", () => {
   });
 });
 
+describe("gestures, continued", () => {
+  it("commit the running gesture when another starts", () => {
+    const t = setup();
+    const first = t.host.commands.beginGesture(t.env);
+    first.run("t/move", { x: 1 });
+    const second = t.host.commands.beginGesture(t.env);
+    expect(first.run("t/move", { x: 2 }).ok).toBe(false);
+    second.run("t/move", { x: 3 });
+    second.commit();
+    expect(t.undo.undoStack.length).toBe(2);
+    // The capture timeout is back to normal: separate commands are separate steps.
+    expect(t.undo.captureTimeout).toBe(500);
+  });
+});
+
 describe("shortcuts", () => {
   it("are normalized: modifiers in a fixed order, letters in lower case", () => {
     expect(normalizeShortcut("Shift+Mod+Z")).toBe("Mod+Shift+z");

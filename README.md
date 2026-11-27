@@ -40,7 +40,7 @@ Other scripts:
 ## Repository layout
 
 ```
-packages/   core, renderer, format, player, editor, i18n, extensions, server
+packages/   core, extension-api, renderer, format, player, editor, i18n, extensions, server
 apps/       web, desktop
 bench/      performance measurements
 tests/e2e/  end-to-end tests
