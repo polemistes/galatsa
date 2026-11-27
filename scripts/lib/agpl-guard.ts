@@ -79,7 +79,12 @@ export function idToPath(id: string, api: PathApi = path): string | undefined {
   let value = id.replace(/^\0+/, "");
   if (value.startsWith("file:")) {
     try {
-      value = fileURLToPath(value.split(/[?#]/)[0] ?? value);
+      // Read the URL by the rules of `api`, not of the host: on a Windows host the
+      // default would reject a POSIX URL such as file:///r/a.ts, and the other way
+      // round. With the default `api` (the host's path module) nothing changes.
+      value = fileURLToPath(value.split(/[?#]/)[0] ?? value, {
+        windows: api.sep === "\\",
+      });
     } catch {
       return undefined;
     }
