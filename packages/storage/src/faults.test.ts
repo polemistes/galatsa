@@ -210,7 +210,68 @@ describe("damaged journal entries", () => {
   });
 });
 
+describe("changes while the store is busy", () => {
+  it("changes made while a journal entry or a checkpoint is being written are stored", async () => {
+    for (const withCheckpoint of [false, true]) {
+      const m = machine();
+      const p1 = program(m);
+      const session = await p1.storage.create();
+      let during = 0;
+      m.store.beforeOperation = async (operation, key) => {
+        if (
+          (operation === "write" || operation === "create") &&
+          !key.includes("/s/") &&
+          during < 6
+        ) {
+          during++;
+          addBox(session.doc, 100 + during, 0);
+        }
+      };
+      addBox(session.doc, 1, 1);
+      await p1.scheduler.advance(1000);
+      addBox(session.doc, 2, 2);
+      if (withCheckpoint) await session.checkpoint();
+      await p1.scheduler.advance(1500);
+      m.store.beforeOperation = null;
+      await session.flush();
+      const expected = toSnapshot(session.doc);
+      p1.crash(session);
+      const again = opened(await program(m).storage.open(session.slot));
+      expect(during).toBeGreaterThan(1);
+      expect(toSnapshot(again.doc), `with checkpoint: ${withCheckpoint}`).toEqual(
+        expected,
+      );
+    }
+  });
+});
+
 describe("several tabs", () => {
+  it("a running tab that meets another tab's damaged entry keeps its checkpoints whole, and removes the entry", async () => {
+    const m = machine();
+    const a = await program(m).storage.create();
+    const pb = program(m);
+    const b = opened(await pb.storage.open(a.slot));
+    for (const n of [1, 2, 3]) {
+      addBox(b.doc, n, n);
+      await b.flush();
+    }
+    pb.crash(b);
+    const fromB = keysUnder(m, keys.journal(a.slot));
+    expect(fromB).toHaveLength(3);
+    const middle = m.store.data.get(fromB[1]!)!.slice();
+    middle[middle.length - 1]! ^= 0xff;
+    m.store.data.set(fromB[1]!, middle);
+    addBox(a.doc, 9, 9);
+    await a.checkpoint();
+    // The entry after the damaged one waits for it in Yjs; it must not travel
+    // into the checkpoint, or the checkpoint loses its merge identity.
+    const newest = keysUnder(m, keys.checkpoints(a.slot)).at(-1)!;
+    expect((await loadCheckpoint(m.store.data.get(newest)!))?.mergeIdentityKept).toBe(
+      true,
+    );
+    expect(m.store.data.has(fromB[1]!)).toBe(false);
+  });
+
   it("a tab that opens while another stores an entry still gets everything, and saves it", async () => {
     const m = machine(memoryChannels());
     const pa = program(m);
