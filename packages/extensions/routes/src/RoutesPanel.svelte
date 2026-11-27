@@ -177,23 +177,38 @@
   }
 
   /** Deleting a stop that routes use asks first (the users' decision). */
+  /** Where the keyboard focus was before the dialog took it (the canvas, usually). */
+  let focusBefore: HTMLElement | null = null;
+
   function askDelete(stop: StopId): void {
     const count = routesUsing(readRoutes(doc), stop).length;
-    if (count === 0) run(ROUTES.deleteStop, { stop });
-    else deleting = { stop, count };
+    if (count === 0) {
+      run(ROUTES.deleteStop, { stop });
+      return;
+    }
+    focusBefore =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    deleting = { stop, count };
+  }
+
+  /** Closes the dialog and gives the focus back, so Ctrl+Z reaches the canvas again. */
+  function closeDialog(): void {
+    deleting = null;
+    focusBefore?.focus({ preventScroll: true });
+    focusBefore = null;
   }
 
   function confirmDelete(): void {
     if (deleting === null) return;
     const stop = deleting.stop;
-    deleting = null;
+    closeDialog();
     run(ROUTES.deleteStop, { stop });
   }
 
   function dialogKey(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       event.stopPropagation();
-      deleting = null;
+      closeDialog();
     }
   }
 
@@ -465,7 +480,7 @@
         {t("galatsa.routes:delete.used", { count: deleting.count })}
       </p>
       <div class="row end">
-        <button type="button" use:focusOnMount onclick={() => (deleting = null)}
+        <button type="button" use:focusOnMount onclick={closeDialog}
           >{t("galatsa.routes:cancel")}</button
         >
         <button type="button" class="danger" onclick={confirmDelete}

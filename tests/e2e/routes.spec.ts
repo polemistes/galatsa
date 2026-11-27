@@ -295,7 +295,9 @@ test("routes and stops through the panel, each action one undo step", async ({
   await panel.getByLabel("Route", { exact: true }).selectOption({ index: 0 });
   await expect(steps.getByRole("listitem").nth(1)).toContainText("Opening");
 
-  // Deleting it warns that two routes use it; Cancel keeps it.
+  // Deleting it warns that two routes use it; Cancel keeps it. (The keyboard
+  // goes back to the canvas, which the dialog gives the focus back to.)
+  await surface.focus();
   await steps.getByRole("button", { name: /Opening/ }).click();
   await panel.getByRole("button", { name: "Delete stop" }).click();
   const dialog = page.getByRole("alertdialog");
@@ -317,8 +319,7 @@ test("routes and stops through the panel, each action one undo step", async ({
   expect(now.routes).toEqual([[viewStop], []]);
   expect(now.undoSteps).toBe(before + 1);
 
-  // Ctrl+Z brings it back to both.
-  await surface.focus();
+  // Ctrl+Z brings it back to both: the dialog gave the focus back to the canvas.
   await page.keyboard.press("ControlOrMeta+z");
   await expect(steps.getByRole("listitem")).toHaveCount(2);
   expect((await routes(page)).routes).toEqual([[viewStop, frameStop], [frameStop]]);
