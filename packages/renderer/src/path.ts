@@ -320,6 +320,9 @@ export function flatten(
   let current: Polyline | null = null;
   let startX = 0;
   let startY = 0;
+  // After closePath (or rect) the current point is the subpath's start, and the
+  // next segment starts a new subpath there, as in Canvas 2D.
+  let afterClose = false;
   const X = (x: number, y: number): number => m.a * x + m.c * y + m.e;
   const Y = (x: number, y: number): number => m.b * x + m.d * y + m.f;
   const begin = (x: number, y: number): void => {
@@ -327,10 +330,21 @@ export function flatten(
     out.push(current);
     startX = x;
     startY = y;
+    afterClose = false;
+  };
+  /** Makes sure there is a subpath; without a current point it starts at (x, y). */
+  const ensure = (x: number, y: number): void => {
+    if (current !== null) return;
+    if (afterClose) begin(startX, startY);
+    else begin(x, y);
   };
   const lineTo = (x: number, y: number): void => {
-    if (current === null) begin(x, y);
-    else current.points.push(x, y);
+    if (current === null) {
+      const fresh = !afterClose;
+      ensure(x, y);
+      if (fresh) return;
+    }
+    (current as Polyline | null)!.points.push(x, y);
   };
   const near = (x0: number, y0: number, x1: number, y1: number, grow: number): boolean =>
     Math.max(x0, x1) + grow >= cx0 &&
@@ -451,12 +465,12 @@ export function flatten(
         lineTo(X(o[i]!, o[i + 1]!), Y(o[i]!, o[i + 1]!));
         break;
       case Q: {
-        const [px, py] = lastPoint();
         const qx = X(o[i]!, o[i + 1]!);
         const qy = Y(o[i]!, o[i + 1]!);
         const x = X(o[i + 2]!, o[i + 3]!);
         const y = Y(o[i + 2]!, o[i + 3]!);
-        if (current === null) begin(qx, qy);
+        ensure(qx, qy);
+        const [px, py] = lastPoint();
         flattenCubic(
           px,
           py,
@@ -471,7 +485,7 @@ export function flatten(
         break;
       }
       case C: {
-        if (current === null) begin(X(o[i]!, o[i + 1]!), Y(o[i]!, o[i + 1]!));
+        ensure(X(o[i]!, o[i + 1]!), Y(o[i]!, o[i + 1]!));
         const [px, py] = lastPoint();
         flattenCubic(
           px,
@@ -550,6 +564,7 @@ export function flatten(
         current = null;
         startX = sx;
         startY = sy;
+        afterClose = true;
         break;
       }
       case Z: {
@@ -559,6 +574,7 @@ export function flatten(
         current = null;
         startX = sx;
         startY = sy;
+        afterClose = true;
         break;
       }
     }
@@ -666,6 +682,38 @@ export type PathPaint =
   | { readonly kind: "clip" };
 
 /**
+ * Strokes wider than this many device pixels are drawn as filled outlines,
+ * clipped to the view, so the canvas never gets a line width (or the clip
+ * margin it needs) far beyond the size of the screen.
+ */
+export const THICK_STROKE_PX = 2 ** 11;
+/** The canvas default; the renderer does not change it. */
+const MITER_LIMIT = 10;
+
+/** How far a stroke can reach beyond its path, in device pixels. */
+function strokeReach(
+  lineWidth: number,
+  join: CanvasLineJoin,
+  cap: CanvasLineCap,
+): number {
+  const half = lineWidth / 2;
+  const joinReach = join === "miter" ? half * MITER_LIMIT : half;
+  const capReach = cap === "square" ? half * Math.SQRT2 : half;
+  return Math.max(joinReach, capReach);
+}
+
+/**
+ * The dash pattern as the canvas uses it (an odd list is repeated once), or
+ * null for a solid line or a pattern with nothing but zero lengths.
+ */
+export function dashPattern(dash: readonly number[] | null): number[] | null {
+  if (!dash || dash.length === 0) return null;
+  if (dash.some((d) => !(d >= 0) || !Number.isFinite(d))) return null;
+  const pattern = dash.length % 2 === 1 ? [...dash, ...dash] : [...dash];
+  return pattern.reduce((a, b) => a + b, 0) > 0 ? pattern : null;
+}
+
+/**
  * Draws (or clips to) a path mapped through `m`. `view` is the visible device
  * rectangle [x0, y0, x1, y1]. Returns false if nothing reached the canvas
  * because the path is entirely outside the view (a clip then clips everything).
@@ -679,9 +727,12 @@ export function paintPath(
 ): boolean {
   if (path.empty) return false;
   const k = Math.hypot(m.a, m.b);
-  const lineWidth = paint.kind === "stroke" ? paint.style.width * k : 0;
-  // Room for line width, miter joins and anti-aliasing.
-  const pad = 2 + (paint.kind === "stroke" ? lineWidth * 6 : 0);
+  const stroke = paint.kind === "stroke" ? paint.style : null;
+  const lineWidth = stroke ? stroke.width * k : 0;
+  const join = stroke?.join ?? "miter";
+  const cap = stroke?.cap ?? "butt";
+  // Room for the stroke (width, miter joins, caps) and anti-aliasing.
+  const pad = 2 + (stroke ? strokeReach(lineWidth, join, cap) : 0);
   const [minX, minY, maxX, maxY] = deviceBounds(path, m);
   if (
     maxX < view[0]! - pad ||
@@ -692,30 +743,37 @@ export function paintPath(
     return false;
   }
   const ctx = state.ctx;
+  const thick = lineWidth > THICK_STROKE_PX;
   const direct =
-    minX >= -SAFE_COORD &&
-    maxX <= SAFE_COORD &&
-    minY >= -SAFE_COORD &&
-    maxY <= SAFE_COORD;
+    !thick &&
+    minX - pad >= -SAFE_COORD &&
+    maxX + pad <= SAFE_COORD &&
+    minY - pad >= -SAFE_COORD &&
+    maxY + pad <= SAFE_COORD;
   state.identity();
-  if (paint.kind === "stroke") {
-    state.stroke(paint.style.color);
-    state.lineWidth(lineWidth);
-    ctx.lineJoin = paint.style.join ?? "miter";
-    ctx.lineCap = paint.style.cap ?? "butt";
+  const pattern = stroke?.dash ? dashPattern(stroke.dash.map((d) => d * k)) : null;
+  if (stroke && thick) {
+    // Grow the view only as far as the visible part of the band can come from.
+    const clip = [view[0]! - pad, view[1]! - pad, view[2]! + pad, view[3]! + pad];
+    const polys = flatten(path, m, clip);
+    state.fill(stroke.color);
+    strokeAsFill(state, polys, view, lineWidth, join, cap, pattern);
+    return true;
   }
-  const dash =
-    paint.kind === "stroke" && paint.style.dash
-      ? paint.style.dash.map((d) => d * k)
-      : null;
-  if (dash) ctx.setLineDash(dash);
+  if (stroke) {
+    state.stroke(stroke.color);
+    state.lineWidth(lineWidth);
+    ctx.lineJoin = join;
+    ctx.lineCap = cap;
+  }
+  if (pattern) ctx.setLineDash(pattern);
   if (direct) {
     emitDirect(state, path, m);
     finish(state, paint);
   } else {
     const clip = [view[0]! - pad, view[1]! - pad, view[2]! + pad, view[3]! + pad];
     const polys = flatten(path, m, clip);
-    if (paint.kind !== "stroke") {
+    if (!stroke) {
       ctx.beginPath();
       for (const poly of polys) {
         const pts = clipPolygon(poly.points, clip);
@@ -726,10 +784,10 @@ export function paintPath(
       }
       finish(state, paint);
     } else {
-      strokeClipped(state, polys, clip, dash);
+      strokeClipped(state, polys, clip, pattern);
     }
   }
-  if (dash) ctx.setLineDash([]);
+  if (pattern) ctx.setLineDash([]);
   return true;
 }
 
@@ -741,47 +799,90 @@ function finish(state: CanvasState, paint: PathPaint): void {
   else state.ctx.clip();
 }
 
-/** Strokes polylines clipped to `clip`, keeping the dash phase along each one. */
+/**
+ * The points of a closed polyline rotated to start at a vertex outside `clip`,
+ * with the length of the path before that vertex (for the dash phase). Null if
+ * every vertex is inside.
+ */
+function startOutside(
+  pts: readonly number[],
+  clip: readonly number[],
+): { points: number[]; before: number } | null {
+  const n = pts.length / 2;
+  for (let j = 0; j < n; j++) {
+    const x = pts[2 * j]!;
+    const y = pts[2 * j + 1]!;
+    if (x >= clip[0]! && x <= clip[2]! && y >= clip[1]! && y <= clip[3]!) continue;
+    let before = 0;
+    for (let s = 0; s < j; s++)
+      before += Math.hypot(
+        pts[2 * s + 2]! - pts[2 * s]!,
+        pts[2 * s + 3]! - pts[2 * s + 1]!,
+      );
+    return { points: [...pts.slice(2 * j), ...pts.slice(0, 2 * j)], before };
+  }
+  return null;
+}
+
+/** `value` modulo `period`, in [0, period). */
+function modulo(value: number, period: number): number {
+  const r = value % period;
+  return r < 0 ? r + period : r;
+}
+
+/**
+ * Strokes polylines clipped to `clip`. A closed polyline that is cut is walked
+ * from a vertex outside the clip, so every corner inside keeps its join; a
+ * dashed one restarts each visible run with the dash phase it has there,
+ * reduced to one pattern length.
+ */
 function strokeClipped(
   state: CanvasState,
   polys: readonly Polyline[],
   clip: readonly number[],
-  dash: readonly number[] | null,
+  pattern: readonly number[] | null,
 ): void {
   const ctx = state.ctx;
+  const period = pattern ? pattern.reduce((a, b) => a + b, 0) : 0;
   ctx.beginPath();
   for (const poly of polys) {
-    const pts = poly.points;
+    let pts = poly.points;
     if (inside(pts, clip)) {
       ctx.moveTo(pts[0]!, pts[1]!);
       for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i]!, pts[i + 1]!);
       if (poly.closed) ctx.closePath();
       continue;
     }
-    const n = pts.length / 2;
-    const segments = poly.closed ? n : n - 1;
     let distance = 0;
+    let segments = pts.length / 2 - 1;
+    if (poly.closed) {
+      const rotated = startOutside(pts, clip);
+      if (rotated) {
+        // Walk once around, back to the starting vertex.
+        pts = [...rotated.points, rotated.points[0]!, rotated.points[1]!];
+        distance = rotated.before;
+        segments = pts.length / 2 - 1;
+      }
+    }
     let open = false;
     for (let s = 0; s < segments; s++) {
       const ax = pts[2 * s]!;
       const ay = pts[2 * s + 1]!;
-      const bx = pts[(2 * s + 2) % pts.length]!;
-      const by = pts[(2 * s + 3) % pts.length]!;
+      const bx = pts[2 * s + 2]!;
+      const by = pts[2 * s + 3]!;
       const length = Math.hypot(bx - ax, by - ay);
       const part = clipSegment(ax, ay, bx, by, clip);
       if (part === null) {
         open = false;
       } else {
         const [t0, t1] = part;
-        const sx = ax + (bx - ax) * t0;
-        const sy = ay + (by - ay) * t0;
         if (!open || t0 > 0) {
-          if (dash) {
+          if (pattern) {
             ctx.stroke();
             ctx.beginPath();
-            ctx.lineDashOffset = distance + length * t0;
+            ctx.lineDashOffset = modulo(distance + length * t0, period);
           }
-          ctx.moveTo(sx, sy);
+          ctx.moveTo(ax + (bx - ax) * t0, ay + (by - ay) * t0);
         }
         ctx.lineTo(ax + (bx - ax) * t1, ay + (by - ay) * t1);
         open = t1 === 1;
@@ -790,5 +891,219 @@ function strokeClipped(
     }
   }
   ctx.stroke();
-  if (dash) ctx.lineDashOffset = 0;
+  if (pattern) ctx.lineDashOffset = 0;
+}
+
+/** Signed area (positive: clockwise on screen, y down). */
+function area(points: readonly number[]): number {
+  let sum = 0;
+  const n = points.length;
+  for (let i = 0; i < n; i += 2) {
+    const j = (i + 2) % n;
+    sum += points[i]! * points[j + 1]! - points[j]! * points[i + 1]!;
+  }
+  return sum / 2;
+}
+
+/** The same polygon, wound clockwise on screen. */
+function clockwise(points: number[]): number[] {
+  if (area(points) >= 0) return points;
+  const out: number[] = [];
+  for (let i = points.length - 2; i >= 0; i -= 2) out.push(points[i]!, points[i + 1]!);
+  return out;
+}
+
+/** A circle as a polygon, finely only near `clip`. */
+function disc(x: number, y: number, r: number, clip: readonly number[]): number[] {
+  const p = new RecordedPath();
+  p.arc(x, y, r, 0, 2 * Math.PI);
+  return flatten(p, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, clip)[0]?.points ?? [];
+}
+
+/**
+ * Draws a stroke wider than the screen can take as filled polygons: a rectangle
+ * per segment, a polygon per join and cap, each wound the same way and clipped
+ * to the view, filled together with the non-zero rule (the overlaps add up and
+ * never cancel). Dashes split the polylines into open runs first.
+ */
+function strokeAsFill(
+  state: CanvasState,
+  polys: readonly Polyline[],
+  view: readonly number[],
+  lineWidth: number,
+  join: CanvasLineJoin,
+  cap: CanvasLineCap,
+  pattern: readonly number[] | null,
+): void {
+  const ctx = state.ctx;
+  const half = lineWidth / 2;
+  const clip = [view[0]! - 2, view[1]! - 2, view[2]! + 2, view[3]! + 2];
+  const reach = [clip[0]! - half, clip[1]! - half, clip[2]! + half, clip[3]! + half];
+  const pieces: number[][] = [];
+  const add = (points: number[]): void => {
+    if (points.length < 6) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < points.length; i += 2) {
+      minX = Math.min(minX, points[i]!);
+      maxX = Math.max(maxX, points[i]!);
+      minY = Math.min(minY, points[i + 1]!);
+      maxY = Math.max(maxY, points[i + 1]!);
+    }
+    if (maxX < clip[0]! || minX > clip[2]! || maxY < clip[1]! || minY > clip[3]!) return;
+    const clipped = clipPolygon(clockwise(points), clip);
+    if (clipped.length >= 6) pieces.push(clipped);
+  };
+  const nearVertex = (x: number, y: number): boolean =>
+    x >= reach[0]! - half * MITER_LIMIT &&
+    x <= reach[2]! + half * MITER_LIMIT &&
+    y >= reach[1]! - half * MITER_LIMIT &&
+    y <= reach[3]! + half * MITER_LIMIT;
+
+  // One run: an open or closed list of points without repeats.
+  const run = (pts: number[], closed: boolean): void => {
+    const n = pts.length / 2;
+    if (n < 2) {
+      if (n === 1 && cap === "round") add(disc(pts[0]!, pts[1]!, half, clip));
+      return;
+    }
+    const segs = closed ? n : n - 1;
+    const dir: Array<[number, number]> = [];
+    for (let s = 0; s < segs; s++) {
+      const ax = pts[2 * s]!;
+      const ay = pts[2 * s + 1]!;
+      const bx = pts[(2 * s + 2) % pts.length]!;
+      const by = pts[(2 * s + 3) % pts.length]!;
+      const len = Math.hypot(bx - ax, by - ay);
+      const ux = (bx - ax) / len;
+      const uy = (by - ay) / len;
+      dir.push([ux, uy]);
+      if (clipSegment(ax, ay, bx, by, reach) === null) continue;
+      const nx = -uy * half;
+      const ny = ux * half;
+      let [sx, sy, ex, ey] = [ax, ay, bx, by];
+      if (!closed && cap === "square") {
+        if (s === 0) [sx, sy] = [ax - ux * half, ay - uy * half];
+        if (s === segs - 1) [ex, ey] = [bx + ux * half, by + uy * half];
+      }
+      add([sx + nx, sy + ny, ex + nx, ey + ny, ex - nx, ey - ny, sx - nx, sy - ny]);
+    }
+    // Joins at the vertices where two segments meet.
+    const first = closed ? 0 : 1;
+    for (let v = first; v < (closed ? n : n - 1); v++) {
+      const x = pts[2 * v]!;
+      const y = pts[2 * v + 1]!;
+      if (!nearVertex(x, y)) continue;
+      const [ux0, uy0] = dir[(v - 1 + segs) % segs]!;
+      const [ux1, uy1] = dir[v % segs]!;
+      const turn = ux0 * uy1 - uy0 * ux1;
+      if (Math.abs(turn) < 1e-12 && ux0 * ux1 + uy0 * uy1 > 0) continue;
+      if (join === "round") {
+        add(disc(x, y, half, clip));
+        continue;
+      }
+      // The outer side is opposite the turn.
+      const side = turn > 0 ? -1 : 1;
+      const o0x = -uy0 * half * side;
+      const o0y = ux0 * half * side;
+      const o1x = -uy1 * half * side;
+      const o1y = ux1 * half * side;
+      const cosHalf = Math.sqrt(Math.max(0, (1 + ux0 * ux1 + uy0 * uy1) / 2));
+      if (join === "miter" && cosHalf > 0 && 1 / cosHalf <= MITER_LIMIT) {
+        const mx = o0x + o1x;
+        const my = o0y + o1y;
+        const ml = Math.hypot(mx, my);
+        const dist = half / cosHalf;
+        add([
+          x,
+          y,
+          x + o0x,
+          y + o0y,
+          x + (mx / ml) * dist,
+          y + (my / ml) * dist,
+          x + o1x,
+          y + o1y,
+        ]);
+      } else {
+        add([x, y, x + o0x, y + o0y, x + o1x, y + o1y]);
+      }
+    }
+    if (!closed && cap === "round") {
+      add(disc(pts[0]!, pts[1]!, half, clip));
+      add(disc(pts[pts.length - 2]!, pts[pts.length - 1]!, half, clip));
+    }
+  };
+
+  const period = pattern ? pattern.reduce((a, b) => a + b, 0) : 0;
+  for (const poly of polys) {
+    // Drop repeated points, which have no direction.
+    const pts: number[] = [];
+    for (let i = 0; i < poly.points.length; i += 2) {
+      const x = poly.points[i]!;
+      const y = poly.points[i + 1]!;
+      if (pts.length >= 2 && pts[pts.length - 2] === x && pts[pts.length - 1] === y)
+        continue;
+      pts.push(x, y);
+    }
+    if (
+      poly.closed &&
+      pts.length >= 4 &&
+      pts[0] === pts[pts.length - 2] &&
+      pts[1] === pts[pts.length - 1]
+    )
+      pts.length -= 2;
+    // Sub-pixel dash patterns look like a lighter solid line; draw them solid.
+    if (!pattern || period < 1) {
+      run(pts, poly.closed);
+      continue;
+    }
+    // Dashes: an open run for each visible "on" interval, segment by segment.
+    const closedPts = poly.closed ? [...pts, pts[0]!, pts[1]!] : pts;
+    let distance = 0;
+    for (let s = 0; s + 3 < closedPts.length; s += 2) {
+      const ax = closedPts[s]!;
+      const ay = closedPts[s + 1]!;
+      const bx = closedPts[s + 2]!;
+      const by = closedPts[s + 3]!;
+      const len = Math.hypot(bx - ax, by - ay);
+      const part = clipSegment(ax, ay, bx, by, reach);
+      if (part && len > 0) {
+        const d0 = distance + len * part[0];
+        const d1 = distance + len * part[1];
+        let index = 0;
+        let at = d0 - modulo(d0, period);
+        while (at < d1) {
+          const length = pattern[index]!;
+          const on = index % 2 === 0;
+          const a = Math.max(at, d0);
+          const b = Math.min(at + length, d1);
+          if (on && b > a) {
+            const ta = (a - distance) / len;
+            const tb = (b - distance) / len;
+            run(
+              [
+                ax + (bx - ax) * ta,
+                ay + (by - ay) * ta,
+                ax + (bx - ax) * tb,
+                ay + (by - ay) * tb,
+              ],
+              false,
+            );
+          }
+          at += length;
+          index = (index + 1) % pattern.length;
+        }
+      }
+      distance += len;
+    }
+  }
+  ctx.beginPath();
+  for (const pts of pieces) {
+    ctx.moveTo(pts[0]!, pts[1]!);
+    for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i]!, pts[i + 1]!);
+    ctx.closePath();
+  }
+  ctx.fill("nonzero");
 }
