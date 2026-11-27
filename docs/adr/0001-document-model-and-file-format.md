@@ -659,7 +659,7 @@ A file either opens or is refused with one `FileFormatError` whose code says why
 
 Everything else is a warning on a file that did open: `content-quarantined` (with the list of what was read as a default, left out or kept as unsupported; section 2.1), `document-recovered`, `ydoc-discarded`, `migrated`, `asset-damaged` (an asset entry fails its checksum or its hash), `asset-missing`, `asset-undescribed` (section 8.3), `thumbnail-missing`. A damaged entry costs that entry, not the file. The writer returns the bytes and its own warnings: `ydoc-not-written` when Yjs cannot encode the state (section 13) or the state is larger than a reader accepts, in which case the file is written without `ydoc.bin` rather than not at all.
 
-The grammar does not check references: dangling parents, frames, stops and assets are legal and handled by resolution. Recovering the last good version after an interrupted save is the job of the saving code (write a temporary file, then replace).
+The grammar does not check references: dangling parents, frames, stops and assets are legal and handled by resolution. Recovering the last good version after an interrupted save is the job of the saving code (write a temporary file, then replace); see [0006](0006-storage.md).
 
 ### 9.7 Limits
 

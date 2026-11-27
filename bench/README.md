@@ -37,6 +37,12 @@ For `measureUserAgentSpecificMemory()` the page must be cross-origin isolated. T
 
 Risks for the desktop shell, from memory and not checked here: WKWebView on macOS may cap animation frames near 60 Hz by default and at 30 Hz in Low Power Mode (the meter then flags the run); the Tauri configuration that sends COOP and COEP may interfere with its IPC; and a macOS host may not be allowed to read the memory of WebKit's WebContent process, without which the memory target cannot be judged there.
 
+## Storage check
+
+`storage-check.html` is not a benchmark: it runs the storage layer (`@galatsa/storage`, see `docs/adr/0006-storage.md`) in a real browser, with IndexedDB, Web Locks, BroadcastChannel, the origin private file system and the checkpoint worker. `tests/e2e/storage.spec.ts` drives it through `window.galatsaStorageCheck` in Chromium and Firefox (`pnpm --filter @galatsa/e2e exec playwright test storage.spec.ts`).
+
+With `?auto=phase1` and then `?auto=phase2` it runs on its own and writes the result into the page title, for browsers Playwright cannot drive. `tests/e2e/webkitgtk/storage_check.py` does that in the system's WebKitGTK and kills the web process between the two phases (needs python-gobject and WebKitGTK 6.0; run it under `env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a`, so no window is shown).
+
 ## Adding an engine
 
 An engine lives in its own package, depends on `@galatsa/bench` (`"workspace:*"`) and implements `BenchEngine`:
