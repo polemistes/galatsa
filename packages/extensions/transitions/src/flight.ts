@@ -7,7 +7,7 @@
 // u the position along the line between the two centres and w the width of the
 // view in world units,
 //
-//   ds^2 = (rho^2 du^2 + dw^2 / rho^2) / w^2                  (its equation 7)
+//   ds^2 = (rho^2 du^2 + dw^2 / rho^2) / w^2                  (its equation 6)
 //
 // and the optimal path from one view to another is the shortest path in this
 // metric. rho trades zooming for panning: a larger rho zooms out further.

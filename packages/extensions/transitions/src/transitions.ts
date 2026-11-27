@@ -20,21 +20,28 @@ import {
   type TransitionRequest,
   type ViewExtension,
 } from "@galatsa/extension-api";
-import { fadeMix, smoothProgress } from "./easing.ts";
+import { fadeMix, RAMP, smoothProgress } from "./easing.ts";
 import { flightPath, metricDistance } from "./flight.ts";
 import { transitionMessages } from "./messages/index.ts";
 
 export const TRANSITIONS_EXTENSION_ID = "galatsa.transitions";
 
 /**
- * Mean speed of a flight, in units of the metric of van Wijk and Nuij per
- * second. With the speed profile's ramps (a quarter of the time each) the peak
- * is 0.75 / (1 - 0.25) = 1 unit per second. In that metric, with rho =
- * sqrt(2), 1 unit per second means at most 1 / rho = 0.71 screen widths per
- * second of panning, or a zoom by e^rho = 4.1 times per second, or a mix of
- * the two within those bounds.
+ * Peak speed of a flight, in units of the metric of van Wijk and Nuij per
+ * second. The users in the paper's experiment chose 0.90 on average for a
+ * constant speed on a notebook; an audience in front of a large screen has
+ * more of its field of view in motion and did not choose the speed, so the
+ * peak is lower. With rho = sqrt(2), 0.85 units per second means at most
+ * 0.85 / rho = 0.60 screen widths per second of panning, or a zoom by
+ * e^(0.85 rho) = 3.3 times per second, or a mix of the two within those bounds.
  */
-export const FLIGHT_SPEED = 0.75;
+export const FLIGHT_PEAK_SPEED = 0.85;
+
+/**
+ * Mean speed of a flight, in units of the metric per second: with the speed
+ * profile's ramps (a quarter of the time each), the peak times 1 - 0.25.
+ */
+export const FLIGHT_SPEED = FLIGHT_PEAK_SPEED * (1 - RAMP);
 
 /** Shortest flight in milliseconds, so that a small move is not abrupt. */
 export const MIN_FLIGHT_DURATION = 500;
@@ -80,6 +87,15 @@ function cutTo(to: CameraView): CameraMotion {
 }
 
 /**
+ * A cut for when there is nothing to show between start and goal: to the
+ * goal, or, when the goal is not a usable view and the start is, a motion
+ * that stays at the start, so the renderer never gets NaN or a zero zoom.
+ */
+function settle(from: CameraView, to: CameraView): CameraMotion {
+  return isUsable(to) || !isUsable(from) ? cutTo(to) : cutTo(from);
+}
+
+/**
  * Duration in milliseconds of a flight of `length` (in the metric of van Wijk
  * and Nuij): the length at FLIGHT_SPEED, at least MIN_FLIGHT_DURATION, times
  * `durationScale`. 0 for no length.
@@ -94,8 +110,8 @@ export function flightDuration(length: number, durationScale: number): number {
 /**
  * True if the comfort settings say that a flight from `from` to `to` should
  * be a cross-fade: the zoom ratio, the distance (in widths of the wider view)
- * or the duration at normal speed is above its limit, or the views are in
- * different spaces.
+ * or the duration at normal speed is above its limit or the limit is not a
+ * number, or the views are in different spaces.
  */
 export function exceedsFlightLimits(
   from: CameraView,
@@ -106,12 +122,22 @@ export function exceedsFlightLimits(
   if (from.space !== to.space) return true;
   const width = widthOf(viewport);
   const small = Math.min(from.zoom, to.zoom);
-  if (Math.max(from.zoom, to.zoom) / small > comfort.maxFlightZoomRatio) return true;
+  if (!within(Math.max(from.zoom, to.zoom) / small, comfort.maxFlightZoomRatio))
+    return true;
   const distance = (Math.hypot(to.cx - from.cx, to.cy - from.cy) * small) / width;
-  if (distance > comfort.maxFlightDistance) return true;
+  if (!within(distance, comfort.maxFlightDistance)) return true;
   const length = metricDistance(from, to, width);
   if (!(length <= MAX_FLIGHT_LENGTH)) return true;
-  return flightDuration(length, 1) > comfort.maxFlightDuration;
+  return !within(flightDuration(length, 1), comfort.maxFlightDuration);
+}
+
+/**
+ * True if `value` is at most `limit`. False when either is not a number (NaN,
+ * or a limit missing from an older or damaged settings object), so that such
+ * a limit gives a cross-fade rather than letting any flight through.
+ */
+function within(value: number, limit: unknown): boolean {
+  return typeof limit === "number" && value <= limit;
 }
 
 /** A cross-fade from `from` to `to`, gentle at both ends. */
@@ -135,13 +161,14 @@ export function planFade(
 /**
  * A flight from the request's start to its goal, or a cross-fade when the
  * comfort settings ask for one, or a cut when there is nothing to show between
- * them (the same view, or a view that is not usable).
+ * them (the same view, or a view that is not usable; a goal that is not usable
+ * leaves the camera at a usable start).
  */
 export function planFlight(
   request: Omit<TransitionRequest<unknown>, "options">,
 ): CameraMotion {
   const { from, to, comfort, viewport } = request;
-  if (!isUsable(from) || !isUsable(to) || sameView(from, to)) return cutTo(to);
+  if (!isUsable(from) || !isUsable(to) || sameView(from, to)) return settle(from, to);
   if (comfort.reducedMotion || exceedsFlightLimits(from, to, viewport, comfort))
     return planFade(from, to, comfort.durationScale);
   const path = flightPath(from, to, widthOf(viewport));
@@ -196,7 +223,7 @@ export const fade = defineTransition<null>({
   plan: ({ from, to, comfort }) =>
     isUsable(from) && isUsable(to)
       ? planFade(from, to, comfort.durationScale)
-      : cutTo(to),
+      : settle(from, to),
 });
 
 /** Show the goal at once. No options. */
@@ -205,7 +232,7 @@ export const cut = defineTransition<null>({
   label: messageKey(transitionMessages, "cut.name"),
   quick: true,
   read: () => null,
-  plan: ({ to }) => cutTo(to),
+  plan: ({ from, to }) => settle(from, to),
 });
 
 /** The transition a route uses for stops that name none. */

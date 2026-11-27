@@ -24,6 +24,7 @@ import {
   exceedsFlightLimits,
   fade,
   FADE_DURATION,
+  FLIGHT_PEAK_SPEED,
   FLIGHT_SPEED,
   flightDuration,
   fly,
@@ -81,13 +82,14 @@ describe("comfort defaults", () => {
   it("are calm", () => {
     expect(DEFAULT_COMFORT).toEqual({
       reducedMotion: false,
-      maxFlightZoomRatio: 64,
-      maxFlightDistance: 4,
-      maxFlightDuration: 4000,
+      maxFlightZoomRatio: 32,
+      maxFlightDistance: 3,
+      maxFlightDuration: 4200,
       durationScale: 1,
     });
-    // The peak speed in the metric: the mean speed over 1 - the ramp share.
-    expect(FLIGHT_SPEED).toBe(0.75);
+    // The mean speed in the metric: the peak times 1 - the ramp share.
+    expect(FLIGHT_PEAK_SPEED).toBe(0.85);
+    expect(FLIGHT_SPEED).toBeCloseTo(0.6375, 15);
     expect(MIN_FLIGHT_DURATION).toBe(500);
     expect(FADE_DURATION).toBe(700);
   });
@@ -97,11 +99,11 @@ describe("the flight", () => {
   it("takes as long as its length at the calm speed", () => {
     // One screen width to the side: length 2 asinh(1) / sqrt(2).
     const pan = plan(A, { space: null, cx: 1000, cy: 0, zoom: 1 });
-    expect(pan.duration).toBeCloseTo((1.246450480280461 / 0.75) * 1000, 9);
-    expect(pan.duration).toBeCloseTo(1661.9339737072814, 9);
+    expect(pan.duration).toBeCloseTo((1.246450480280461 / 0.6375) * 1000, 9);
+    expect(pan.duration).toBeCloseTo(1955.2164396556252, 9);
     // A zoom by four: ln(4) / sqrt(2).
     const zoom = plan(A, { space: null, cx: 0, cy: 0, zoom: 4 });
-    expect(zoom.duration).toBeCloseTo(1307.0108579580628, 9);
+    expect(zoom.duration).toBeCloseTo(1537.6598328918387, 9);
     // Slower when the viewer asks for it.
     const slow = plan(
       A,
@@ -111,13 +113,13 @@ describe("the flight", () => {
         durationScale: 2,
       },
     );
-    expect(slow.duration).toBeCloseTo(2 * 1307.0108579580628, 9);
+    expect(slow.duration).toBeCloseTo(2 * 1537.6598328918387, 9);
     // A short move still takes half a second, so it is not abrupt.
     expect(plan(A, { space: null, cx: 1, cy: 0, zoom: 1 }).duration).toBe(500);
     expect(flightDuration(0, 1)).toBe(0);
     expect(flightDuration(0.001, 1)).toBe(500);
-    expect(flightDuration(1.5, 1)).toBeCloseTo(2000, 9);
-    expect(flightDuration(1.5, 0.5)).toBeCloseTo(1000, 9);
+    expect(flightDuration(1.275, 1)).toBeCloseTo(2000, 9);
+    expect(flightDuration(1.275, 0.5)).toBeCloseTo(1000, 9);
   });
 
   it("starts and ends exactly at the start and the goal", () => {
@@ -132,7 +134,7 @@ describe("the flight", () => {
 
   it("follows the smooth speed profile in the metric", () => {
     const to: CameraView = { space: null, cx: 1500, cy: 500, zoom: 4 };
-    const motion = plan(A, to);
+    const motion = plan(A, to, NO_LIMITS);
     const length = metricDistance(A, to, VIEWPORT.width);
     expect(motion.duration).toBeCloseTo((length / FLIGHT_SPEED) * 1000, 9);
     const n = 500;
@@ -153,9 +155,9 @@ describe("the flight", () => {
       );
       peak = Math.max(peak, step / (t2 - t1));
     }
-    // Never faster than one metric unit per second.
-    expect(peak).toBeLessThanOrEqual(1 / 1000 + 1e-9);
-    expect(peak).toBeGreaterThan(0.999 / 1000);
+    // Never faster than 0.85 metric units per second.
+    expect(peak).toBeLessThanOrEqual(0.85 / 1000 + 1e-9);
+    expect(peak).toBeGreaterThan(0.849 / 1000);
   });
 
   it("is the same flight backwards", () => {
@@ -205,7 +207,7 @@ describe("the flight", () => {
     expect(calm.frame(calm.duration / 2).kind).toBe("blend");
     const motion = plan(from, to, NO_LIMITS);
     const length = flightPath(from, to, VIEWPORT.width).length;
-    expect(motion.duration).toBeCloseTo((length / 0.75) * 1000, 6);
+    expect(motion.duration).toBeCloseTo((length / 0.6375) * 1000, 6);
     expect(motion.frame(motion.duration)).toEqual({ kind: "view", view: to });
     let last = 0;
     let previous: CameraView = from;
@@ -227,38 +229,38 @@ describe("the flight", () => {
 
 describe("the limits of a flight", () => {
   it("cross-fade above the zoom ratio", () => {
-    const at64: CameraView = { space: null, cx: 0, cy: 0, zoom: 64 };
-    const at65: CameraView = { space: null, cx: 0, cy: 0, zoom: 65 };
-    expect(exceedsFlightLimits(A, at64, VIEWPORT, DEFAULT_COMFORT)).toBe(false);
-    expect(exceedsFlightLimits(A, at65, VIEWPORT, DEFAULT_COMFORT)).toBe(true);
+    const at32: CameraView = { space: null, cx: 0, cy: 0, zoom: 32 };
+    const at33: CameraView = { space: null, cx: 0, cy: 0, zoom: 33 };
+    expect(exceedsFlightLimits(A, at32, VIEWPORT, DEFAULT_COMFORT)).toBe(false);
+    expect(exceedsFlightLimits(A, at33, VIEWPORT, DEFAULT_COMFORT)).toBe(true);
     // Zooming out counts the same.
-    expect(exceedsFlightLimits(at65, A, VIEWPORT, DEFAULT_COMFORT)).toBe(true);
-    const flight = plan(A, at64);
-    expect(flight.duration).toBeCloseTo(3921.032573874188, 6);
+    expect(exceedsFlightLimits(at33, A, VIEWPORT, DEFAULT_COMFORT)).toBe(true);
+    const flight = plan(A, at32);
+    expect(flight.duration).toBeCloseTo(3844.149582229597, 6);
     expect(flight.frame(flight.duration / 2).kind).toBe("view");
-    const crossFade = plan(A, at65);
+    const crossFade = plan(A, at33);
     expect(crossFade.duration).toBe(FADE_DURATION);
-    expectNoMotion(crossFade, A, at65);
-    expect(crossFade.frame(350)).toMatchObject({ kind: "blend", from: A, to: at65 });
+    expectNoMotion(crossFade, A, at33);
+    expect(crossFade.frame(350)).toMatchObject({ kind: "blend", from: A, to: at33 });
     expect(mixOf(crossFade.frame(350))).toBeCloseTo(0.5, 15);
   });
 
   it("cross-fade above the distance, in widths of the wider view", () => {
-    // At zoom 1 the view is 1000 units wide. Four widths take 3.95 seconds.
-    const at4: CameraView = { space: null, cx: 4000, cy: 0, zoom: 1 };
-    const beyond: CameraView = { space: null, cx: 2400, cy: 3210, zoom: 1 };
-    expect(plan(A, at4).duration).toBeCloseTo(3949.827858146323, 6);
-    expect(exceedsFlightLimits(A, at4, VIEWPORT, DEFAULT_COMFORT)).toBe(false);
+    // At zoom 1 the view is 1000 units wide. Three widths take 4.03 seconds.
+    const at3: CameraView = { space: null, cx: 3000, cy: 0, zoom: 1 };
+    const beyond: CameraView = { space: null, cx: 1800, cy: 2410, zoom: 1 };
+    expect(plan(A, at3).duration).toBeCloseTo(4033.9947374044273, 6);
+    expect(exceedsFlightLimits(A, at3, VIEWPORT, DEFAULT_COMFORT)).toBe(false);
     expect(exceedsFlightLimits(A, beyond, VIEWPORT, DEFAULT_COMFORT)).toBe(true);
-    expect(plan(A, at4).frame(1000).kind).toBe("view");
+    expect(plan(A, at3).frame(1000).kind).toBe("view");
     expectNoMotion(plan(A, beyond), A, beyond);
   });
 
   it("cross-fade when the flight would take too long", () => {
-    // A zoom by 8 to a place two screen widths away: within the ratio and the
-    // distance, but the flight would take about 4.6 seconds.
-    const to: CameraView = { space: null, cx: 2000, cy: 0, zoom: 8 };
-    expect(flightDuration(metricDistance(A, to, 1000), 1)).toBeCloseTo(4632.5107, 3);
+    // A zoom by 4 to a place two screen widths away: within the ratio and the
+    // distance, but the flight would take about 4.7 seconds.
+    const to: CameraView = { space: null, cx: 2000, cy: 0, zoom: 4 };
+    expect(flightDuration(metricDistance(A, to, 1000), 1)).toBeCloseTo(4684.0558, 3);
     expect(exceedsFlightLimits(A, to, VIEWPORT, DEFAULT_COMFORT)).toBe(true);
     expectNoMotion(plan(A, to), A, to);
     // A longer limit lets it fly. The limit is on the duration at normal
@@ -273,20 +275,64 @@ describe("the limits of a flight", () => {
     ).toBe(false);
   });
 
+  it("cross-fade when a limit is not a number or is missing", () => {
+    const from: CameraView = { space: null, cx: 0, cy: 0, zoom: 2 ** -30 };
+    const to: CameraView = { space: null, cx: 1e9, cy: 0, zoom: 2 ** 30 };
+    const near = at(10);
+    for (const key of [
+      "maxFlightZoomRatio",
+      "maxFlightDistance",
+      "maxFlightDuration",
+    ] as const) {
+      for (const value of [Number.NaN, undefined, null, "64"]) {
+        const comfort = { ...NO_LIMITS, [key]: value } as unknown as ComfortSettings;
+        expect(exceedsFlightLimits(A, near, VIEWPORT, comfort), `${key} ${value}`).toBe(
+          true,
+        );
+        expectNoMotion(plan(from, to, comfort), from, to);
+      }
+      // Without the key at all, as from an older settings object.
+      const { [key]: _dropped, ...older } = NO_LIMITS;
+      expect(plan(from, to, older as ComfortSettings).duration).toBe(FADE_DURATION);
+    }
+    // Infinity is a number: no limit.
+    expect(exceedsFlightLimits(from, to, VIEWPORT, NO_LIMITS)).toBe(false);
+  });
+
   it("cross-fade between views in different spaces", () => {
     const to: CameraView = { space: "frame", cx: 10, cy: 0, zoom: 1 };
     expectNoMotion(plan(A, to), A, to);
   });
 
-  it("cut when a view is not a view", () => {
-    for (const zoom of [0, -1, Number.NaN, Infinity]) {
-      const to: CameraView = { space: null, cx: 10, cy: 0, zoom };
-      const motion = plan(A, to);
+  it("cut when a view is not a view, and never to a goal that is not one", () => {
+    const broken: CameraView[] = [
+      ...[0, -1, Number.NaN, Infinity].map((zoom) => ({
+        space: null,
+        cx: 10,
+        cy: 0,
+        zoom,
+      })),
+      { space: null, cx: Number.NaN, cy: 0, zoom: 1 },
+      { space: null, cx: 0, cy: Infinity, zoom: 1 },
+    ];
+    for (const to of broken) {
+      // The camera stays where it is rather than giving the renderer NaN.
+      for (const transition of [fly, fade, cut]) {
+        const motion = transition.plan({
+          from: A,
+          to,
+          options: null,
+          comfort: DEFAULT_COMFORT,
+          viewport: VIEWPORT,
+        });
+        expect(motion.duration).toBe(0);
+        expect(motion.frame(0)).toEqual({ kind: "view", view: A });
+      }
+      // From a start that is not usable to a goal that is: a cut to the goal.
+      const motion = plan(to, A);
       expect(motion.duration).toBe(0);
-      expect(motion.frame(0)).toEqual({ kind: "view", view: to });
+      expect(motion.frame(0)).toEqual({ kind: "view", view: A });
     }
-    const motion = plan({ space: null, cx: Number.NaN, cy: 0, zoom: 1 }, A);
-    expect(motion.duration).toBe(0);
   });
 });
 

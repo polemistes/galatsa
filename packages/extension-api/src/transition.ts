@@ -44,15 +44,15 @@ export interface ComfortSettings {
 
 /**
  * Calm defaults, used until the user changes them. At the speed of the
- * built-in flight, a zoom by 64, a pan of 4 screen widths and the duration
- * limit are each about four seconds of flight. See section 7 of
- * docs/adr/0005-extension-interface.md.
+ * built-in flight, a zoom by 32 (3.8 s), a pan of 3 screen widths (4.0 s) and
+ * the duration limit (4.2 s) each mark about four seconds of flight. See
+ * section 7 of docs/adr/0005-extension-interface.md.
  */
 export const DEFAULT_COMFORT: ComfortSettings = {
   reducedMotion: false,
-  maxFlightZoomRatio: 64,
-  maxFlightDistance: 4,
-  maxFlightDuration: 4000,
+  maxFlightZoomRatio: 32,
+  maxFlightDistance: 3,
+  maxFlightDuration: 4200,
   durationScale: 1,
 };
 
