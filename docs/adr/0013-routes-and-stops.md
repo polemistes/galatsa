@@ -49,7 +49,7 @@ Some details:
 
 ### The warning before deleting a stop
 
-When the user deletes the chosen stop in the panel and live routes still visit it, the panel shows a dialog of its own (`role="alertdialog"`, over the whole window): "Slette stoppet?" with "Stoppet brukes i N ruter. Slettes det, forsvinner det fra alle rutene." (the English text likewise), and the buttons Avbryt (focused, also Escape) and Slett likevel. Slett likevel runs `delete-stop`: one undo step, and the stop disappears from every route; Ctrl+Z brings it back to all of them. A stop no route uses is deleted without asking. N counts routes, not visits (a route that visits the stop twice counts once). A stop deleted from the panel is always one the route shown visits, so there the dialog always comes; that is the users' rule as written.
+When the user deletes the chosen stop in the panel and live routes still visit it, the panel shows a dialog of its own (`role="alertdialog"`, over the whole window): "Slette stoppet?" with "Stoppet brukes i N ruter. Slettes det, forsvinner det fra alle rutene." (the English text likewise), and the buttons Avbryt (focused, also Escape) and Slett likevel; when it closes, the keyboard focus goes back where it was (the canvas), so Ctrl+Z reaches the editor. Slett likevel runs `delete-stop`: one undo step, and the stop disappears from every route; Ctrl+Z brings it back to all of them. A stop no route uses is deleted without asking. N counts routes, not visits (a route that visits the stop twice counts once). A stop deleted from the panel is always one the route shown visits, so there the dialog always comes; that is the users' rule as written.
 
 ### What the editor shows
 
