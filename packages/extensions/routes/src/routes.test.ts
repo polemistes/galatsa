@@ -7,7 +7,7 @@
 // route, one undo step per command, the route on the canvas, and jumps.
 
 import { FRAME_TYPE, hiddenAt, type ElementId, type StopId } from "@galatsa/core";
-import { addElement, stopNotes, edit } from "@galatsa/core/ydoc";
+import { addElement, stopNotes, edit, setStopView } from "@galatsa/core/ydoc";
 import { Editor, loadExtensions } from "@galatsa/editor";
 import { DEFAULT_COMFORT, type DrawContext, type Path } from "@galatsa/extension-api";
 import { BASICS } from "@galatsa/extension-basics";
@@ -30,7 +30,9 @@ import {
   routeShapes,
   routesExtension,
   routesUsing,
+  speedOfTransition,
   textChange,
+  transitionForSpeed,
   viewOfCamera,
   type AddedStop,
   type JumpEnvironment,
@@ -623,6 +625,44 @@ describe("after the review", () => {
   });
 });
 
+describe("the speed into a stop", () => {
+  it("is stored in the stop's transition, each choice one undo step", () => {
+    const t = setup();
+    const added = t.must<AddedStop>(ROUTES.addStopFromView);
+    const transition = () => readRoutes(t.doc).stops[added.stop]!.transition;
+    expect(transition()).toBe(null);
+    expect(speedOfTransition(transition())).toBe("default");
+    for (const speed of ["calm", "fast", "normal", "fade", "default"] as const) {
+      if (speed !== "default" || transition() !== null)
+        oneStep(t, ROUTES.setStopSpeed, { stop: added.stop, speed });
+      expect(speedOfTransition(transition())).toBe(speed);
+    }
+    expect(transitionForSpeed("calm")).toEqual({
+      type: "galatsa.transitions/fly",
+      options: { speed: "calm" },
+    });
+    expect(transitionForSpeed("fade")).toEqual({
+      type: "galatsa.transitions/fade",
+      options: null,
+    });
+    // The same choice again changes nothing and makes no undo step.
+    const depth = t.editor.undo.undoStack.length;
+    t.must(ROUTES.setStopSpeed, { stop: added.stop, speed: "default" });
+    expect(t.editor.undo.undoStack.length).toBe(depth);
+    // A choice the panel does not offer, or a stop that is not there, is refused.
+    expect(
+      t.editor.isEnabled(ROUTES.setStopSpeed, { stop: added.stop, speed: "warp" }),
+    ).toBe(false);
+    expect(t.editor.isEnabled(ROUTES.setStopSpeed, { stop: "gone", speed: "calm" })).toBe(
+      false,
+    );
+    // A transition the panel does not offer (a cut) is shown as "other".
+    expect(speedOfTransition({ type: "galatsa.transitions/cut", options: null })).toBe(
+      "other",
+    );
+  });
+});
+
 describe("presenting", () => {
   /** An editor with three stops in a route, and a page that notes what it is asked to present. */
   function presenting() {
@@ -676,6 +716,27 @@ describe("presenting", () => {
     t.end();
     // With no stop chosen: from the start.
     choose(t.doc, { route, entry: null });
+    t.must(ROUTES.presentFromHere);
+    expect(t.started[1]).toEqual({ route, step: 0 });
+  });
+
+  it("counts the chosen stop as the player does, without stops that show nothing", () => {
+    const t = presenting();
+    const route = t.stops[0]!.route;
+    // The first stop's frame is missing entirely: the player skips it.
+    edit(t.doc, () =>
+      setStopView(t.doc, t.stops[0]!.stop, {
+        kind: "frame",
+        frame: "missing-frame" as ElementId,
+        padding: 0,
+      }),
+    );
+    choose(t.doc, { route, entry: t.stops[2]!.entry });
+    t.must(ROUTES.presentFromHere);
+    expect(t.started).toEqual([{ route, step: 1 }]);
+    t.end();
+    // The chosen stop itself shows nothing: from the next one.
+    choose(t.doc, { route, entry: t.stops[0]!.entry });
     t.must(ROUTES.presentFromHere);
     expect(t.started[1]).toEqual({ route, step: 0 });
   });

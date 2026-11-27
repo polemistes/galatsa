@@ -485,3 +485,17 @@ describe("editing in place", () => {
     expect(ytext(id).toString()).toBe("ab仮名\n");
   });
 });
+
+describe("presenting", () => {
+  it("ends editing in place, keeping what was typed, when a presentation starts", () => {
+    const t = setup();
+    const id = t.click(100, 100);
+    expect(t.editor.textEdit.id).toBe(id);
+    t.session().type("Hello");
+    t.editor.setPresenter((_request, ended) => ({ exit: () => ended() }));
+    expect(t.editor.present()).toBe(true);
+    expect(t.editor.textEdit.id).toBe(null);
+    expect(t.session().ended).toBe(true);
+    expect(t.ytext(id).toString()).toContain("Hello");
+  });
+});

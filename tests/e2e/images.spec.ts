@@ -435,8 +435,19 @@ test("an image, a cropped image and the crop tool look as stored", async ({ page
       const canvas = document.querySelector<HTMLElement>(".galatsa-canvas")!;
       return { w: canvas.clientWidth, h: canvas.clientHeight };
     });
-  const shown = await canvasSize();
-  await page.setViewportSize({ width: 1600 - shown.w, height: 1000 - shown.h });
+  // The toolbar may wrap at one width and not at another, so adjust until the
+  // canvas has the size asked for.
+  let viewport = { width: 800, height: 500 };
+  for (let i = 0; i < 4; i++) {
+    const shown = await canvasSize();
+    if (shown.w === 800 && shown.h === 500) break;
+    viewport = {
+      width: viewport.width + 800 - shown.w,
+      height: viewport.height + 500 - shown.h,
+    };
+    await page.setViewportSize(viewport);
+    await page.waitForTimeout(100);
+  }
   await expect.poll(canvasSize).toEqual({ w: 800, h: 500 });
   await page.evaluate(async () => {
     const dev = window as unknown as Dev;

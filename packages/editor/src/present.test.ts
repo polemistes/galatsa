@@ -78,6 +78,24 @@ describe("presenting from the editor", () => {
     expect(t.editor.services.presentation.active()).toBe(false);
   });
 
+  it("says so when the player throws while it starts", () => {
+    const t = setup();
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (error: unknown) => errors.push(error);
+    try {
+      t.editor.setPresenter(() => {
+        throw new Error("no canvas");
+      });
+      expect(t.editor.services.presentation.start()).toBe(false);
+    } finally {
+      console.error = original;
+    }
+    expect(t.editor.services.presentation.active()).toBe(false);
+    expect(t.editor.notice).toEqual({ message: "editor:present.failed" });
+    expect(errors.length).toBe(1);
+  });
+
   it("is not running when the presentation ended while it started, and is told only once", () => {
     const t = setup();
     let focused = 0;

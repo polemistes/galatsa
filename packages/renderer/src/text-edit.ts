@@ -201,7 +201,35 @@ function wordStep(text: string, index: number, forward: boolean): number {
   return 0;
 }
 
-export class DomTextEditSession implements TextEditSession {
+/**
+ * An editing session the renderer lays over an element's text and keeps in
+ * place as the camera moves (CanvasRenderer.beginTextEdit).
+ */
+export interface PlacedTextEditSession extends TextEditSession {
+  readonly ended: boolean;
+  /** Puts the editing element where the element is on screen; null hides it. */
+  place(m: Matrix | null, ratio: number): void;
+  /** Puts the caret where `options.caretAt` asks, once the element is placed. */
+  placeCaret(): void;
+}
+
+/**
+ * Makes the editing element for CanvasRenderer.beginTextEdit
+ * (`RendererOptions.textEditing`). Passed in by an editor, so that a player,
+ * which edits nothing, does not carry the editing code.
+ */
+export type TextEditFactory = (
+  id: string,
+  container: HTMLElement,
+  families: FontFamilies,
+  options: TextEditOptions,
+) => PlacedTextEditSession;
+
+/** In-place editing with an editable browser element over the text. */
+export const domTextEditing: TextEditFactory = (id, container, families, options) =>
+  new DomTextEditSession(id, container, families, options);
+
+export class DomTextEditSession implements PlacedTextEditSession {
   readonly id: string;
   readonly element: HTMLElement;
   readonly #container: HTMLElement;

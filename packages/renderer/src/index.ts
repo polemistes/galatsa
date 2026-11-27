@@ -77,6 +77,9 @@ export {
   type TextEditOptions,
   type TextEditSession,
   type TextSelection,
+  type TextEditFactory,
+  type PlacedTextEditSession,
+  domTextEditing,
   diffText,
   transformEdit,
 } from "./text-edit.ts";

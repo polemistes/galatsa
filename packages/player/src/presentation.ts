@@ -36,7 +36,6 @@ import {
 import {
   readRoutes,
   readSteps,
-  sameView,
   viewOfRegion,
   type PresentationSource,
   type RouteInfo,
@@ -44,7 +43,15 @@ import {
   type Step,
   type StopsAndRoutes,
 } from "./model.ts";
-import { Playback, type Hidden, type Leg, type Picture, type Shot } from "./playback.ts";
+import {
+  Playback,
+  type GoalChange,
+  type Hidden,
+  type Leg,
+  type Picture,
+  type Shot,
+  sameMembers,
+} from "./playback.ts";
 import { Anchor } from "./roam.ts";
 
 export type Phase = "stop" | "moving" | "roaming";
@@ -225,7 +232,9 @@ export class Presentation {
   goTo(index: number): void {
     this.#settle();
     if (!Number.isInteger(index) || index < 0 || index >= this.#steps.length) return;
+    // The stop shown, or the one the camera is on its way to: nothing to do.
     if (this.#phase === "stop" && index === this.#at) return;
+    if (this.#phase === "moving" && index === this.#target) return;
     this.#travel(index);
   }
 
@@ -337,8 +346,9 @@ export class Presentation {
   resize(screen: Screen): void {
     const old = this.#playback.screen;
     if (old.width === screen.width && old.height === screen.height) return;
+    this.#settle();
     this.#playback.setScreen(screen);
-    this.#refit();
+    this.#refit("resize");
   }
 
   /**
@@ -353,6 +363,7 @@ export class Presentation {
     this.#routes = readRoutes(this.#sr);
     const at = this.#steps[this.#at]?.entry;
     const target = this.#steps[this.#target]?.entry;
+    const hiddenBefore = this.#at < 0 ? NOTHING : this.#hiddenAt(this.#at);
     if (!this.#routes.some((r) => r.id === this.#route))
       this.#route = this.#routes[0]?.id ?? null;
     this.#rereadSteps();
@@ -365,7 +376,7 @@ export class Presentation {
     else {
       if (this.#at >= 0) this.#at = find(at, this.#at);
       this.#target = find(target, this.#target);
-      this.#refit();
+      this.#refit("document", hiddenBefore);
     }
     this.#emit();
   }
@@ -380,21 +391,22 @@ export class Presentation {
     this.#phase = "roaming";
   }
 
-  /** Shows the stop as it is now: where it is, at this screen size, with what it hides. */
-  #refit(): void {
+  /**
+   * Shows the stop as it is now: where it is, at this screen size, with what
+   * it hides. A transition on its way there goes on undisturbed when the goal
+   * is the same, and is steered onto it when it moved a little (playback.ts).
+   */
+  #refit(change: GoalChange, hiddenBefore?: Hidden): void {
     const now = this.#now();
     if (this.#phase === "stop") this.#playback.rest(this.#goal(this.#at));
-    else if (this.#phase === "moving") {
-      const leg = this.#leg(this.#target);
-      const heading = this.#playback.heading(now);
-      if (
-        heading === null ||
-        heading.hidden !== leg.goal.hidden ||
-        !sameView(heading.view, leg.goal.view)
-      )
-        this.#playback.to(leg, now);
-    } else
-      this.#playback.setHidden(this.#at < 0 ? NOTHING : this.#hiddenAt(this.#at), now);
+    else if (this.#phase === "moving")
+      this.#playback.follow(this.#leg(this.#target), now, change);
+    else if (hiddenBefore !== undefined) {
+      // Roaming: what the stop shown last hides is shown as it is now, if the
+      // document changed it; otherwise the picture is left as it is.
+      const hidden = this.#at < 0 ? NOTHING : this.#hiddenAt(this.#at);
+      if (!sameMembers(hidden, hiddenBefore)) this.#playback.setHidden(hidden, now);
+    }
   }
 
   // -------------------------------------------------------------------------

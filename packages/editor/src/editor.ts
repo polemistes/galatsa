@@ -45,6 +45,7 @@ import { BASICS, frameIds, openFrames, readFragment } from "@galatsa/extension-b
 import type { I18n, MessageValues } from "@galatsa/i18n";
 import {
   CanvasRenderer,
+  domTextEditing,
   spaceMap,
   type Canvas2D,
   type ImageSource,
@@ -308,6 +309,7 @@ export class Editor {
       t: (label: Label, values?: MessageValues) => this.i18n.t(label, values),
       background: options.background ?? "#ffffff",
       onInvalidate: () => this.invalidate(),
+      textEditing: domTextEditing,
     });
     this.renderer.setScene(this.scene);
     this.renderer.setCamera(this.#state.camera);
@@ -1149,16 +1151,27 @@ export class Editor {
   present(request: PresentationRequest = {}): boolean {
     if (this.#disposed || this.#presenter === null || this.#presenting !== null)
       return false;
-    // A gesture left open would be drawn in the presentation and committed after it.
+    // A gesture left open would be drawn in the presentation and committed
+    // after it; text edited in place is committed and its editing element
+    // taken away.
     this.pointerCancel();
+    this.textEdit.end();
     // Told once that it is over, also if that happens before the presenter returns.
     let over = false;
-    const running = this.#presenter(request, () => {
-      if (over) return;
-      over = true;
-      this.#presenting = null;
-      this.focusCanvas();
-    });
+    let running: { exit(): void } | null;
+    try {
+      running = this.#presenter(request, () => {
+        if (over) return;
+        over = true;
+        this.#presenting = null;
+        this.focusCanvas();
+      });
+    } catch (error) {
+      // The player could not start (it leaves nothing in the page): say so.
+      console.error(error);
+      this.#notify("editor:present.failed");
+      return false;
+    }
     this.#presenting = over ? null : running;
     return this.#presenting !== null;
   }

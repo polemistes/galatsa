@@ -15,6 +15,7 @@ import {
   type RouteId,
   type StopId,
   type TextRun,
+  stopRegion,
 } from "@galatsa/core";
 import {
   addRoute,
@@ -52,6 +53,7 @@ import {
   viewOfCamera,
   type StopsAndRoutes,
 } from "./model.ts";
+import { isStopSpeed, transitionForSpeed, type StopSpeed } from "./speed.ts";
 import { choose, currentChoice } from "./state.ts";
 
 export { ROUTES_EXTENSION };
@@ -70,6 +72,7 @@ export const ROUTES = {
   deleteStop: `${ROUTES_EXTENSION}/delete-stop`,
   renameStop: `${ROUTES_EXTENSION}/rename-stop`,
   setStopNotes: `${ROUTES_EXTENSION}/set-stop-notes`,
+  setStopSpeed: `${ROUTES_EXTENSION}/set-stop-speed`,
   updateStopView: `${ROUTES_EXTENSION}/update-stop-view`,
   copyStopForRoute: `${ROUTES_EXTENSION}/copy-stop-for-route`,
   setVisibility: `${ROUTES_EXTENSION}/set-visibility`,
@@ -469,6 +472,31 @@ const setStopNotes = defineCommand<NotesArgs, void>({
   },
 });
 
+export interface SpeedArgs extends StopArgs {
+  /** How the camera comes into the stop (speed.ts). */
+  readonly speed: StopSpeed;
+}
+
+/**
+ * Sets how the camera comes into a stop: the route's default, a calm, normal
+ * or fast flight, or a cross-fade (speed.ts). Stored in the stop's
+ * `transition`; one undo step, and none when nothing changes.
+ */
+const setStopSpeed = defineCommand<SpeedArgs, void>({
+  name: "set-stop-speed",
+  label: label("set-stop-speed"),
+  undoLabel: label("set-stop-speed.step"),
+  quick: true,
+  enabled: (ctx, args) =>
+    stopRecordOk(ctx, args) && isStopSpeed((args as SpeedArgs).speed),
+  execute(ctx, { stop, speed }) {
+    const transition = transitionForSpeed(speed);
+    const old = readRoutes(ctx.doc).stops[stop]!.transition;
+    if (JSON.stringify(old) === JSON.stringify(transition)) return;
+    edit(ctx.doc, () => setStopTransition(ctx.doc, stop, transition));
+  },
+});
+
 /** Points the stop at the rectangle the camera shows now. */
 const updateStopView = defineCommand<StopArgs, void>({
   name: "update-stop-view",
@@ -635,6 +663,33 @@ const presentCommand = defineCommand<PresentArgs | undefined, void>({
   },
 });
 
+/**
+ * The chosen step as the player counts the steps of a route: it skips stops
+ * that show nothing (their frame is missing entirely, docs/adr/0001 section
+ * 6.2), so the step is the number of played steps before the chosen one. A
+ * chosen step that is skipped starts at the next one; none chosen, the first.
+ */
+function playedStep(
+  ctx: CommandContext,
+  sr: StopsAndRoutes,
+  route: RouteId | null,
+  entry: RouteEntryId | null,
+): number {
+  if (route === null || entry === null) return 0;
+  const steps = routeSteps(sr, route);
+  const at = steps.findIndex((s) => s.entry === entry);
+  if (at < 0) return 0;
+  const resolver = new Resolver(yLookup(ctx.doc));
+  let played = 0;
+  for (const step of steps.slice(0, at))
+    if (
+      Object.hasOwn(sr.stops, step.stop) &&
+      stopRegion(sr, resolver, step.stop) !== null
+    )
+      played++;
+  return played;
+}
+
 /** Presents the route shown from the chosen step (from the start when none is chosen). */
 const presentFromHere = defineCommand<unknown, void>({
   name: "present-from-here",
@@ -646,11 +701,7 @@ const presentFromHere = defineCommand<unknown, void>({
   execute(ctx) {
     const sr = readRoutes(ctx.doc);
     const choice = currentChoice(ctx.doc, sr);
-    const step =
-      choice.route === null || choice.entry === null
-        ? -1
-        : routeSteps(sr, choice.route).findIndex((s) => s.entry === choice.entry);
-    present(ctx, choice.route, Math.max(step, 0));
+    present(ctx, choice.route, playedStep(ctx, sr, choice.route, choice.entry));
   },
 });
 
@@ -686,6 +737,7 @@ export const routesCommands = [
   deleteStop,
   renameStopCommand,
   setStopNotes,
+  setStopSpeed,
   updateStopView,
   copyStopForRoute,
   setVisibilityCommand,

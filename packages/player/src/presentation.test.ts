@@ -27,6 +27,7 @@ import { describe, expect, it } from "vitest";
 import { sameView, sourceFromSnapshot, viewOfRegion } from "./model.ts";
 import type { Picture } from "./playback.ts";
 import { Presentation, type PresentationOptions } from "./presentation.ts";
+import { MIN_STEER_MS } from "./steer.ts";
 import {
   element,
   frame,
@@ -675,7 +676,152 @@ describe("comfort", () => {
   });
 });
 
+/** The test document with a long flight (3.6 s) from the first stop to the second. */
+function far(): TestDocument {
+  const doc = document();
+  doc.stops["s1"]!.view = rect(4000, 0, 1600, 900);
+  return doc;
+}
+
+/** Milliseconds until the camera has arrived, checking every 5 ms that nothing jumps; calls `each` before each step. */
+function arrival(
+  { p, clock, source }: ReturnType<typeof setup>,
+  each: (elapsed: number) => void = () => {},
+): number {
+  let last = p.picture();
+  for (let elapsed = 0; elapsed < LONG; elapsed += 5) {
+    each(elapsed);
+    if (p.state.phase !== "moving") return elapsed;
+    clock.advance(5);
+    const next = p.picture();
+    expect(usable(next)).toBe(true);
+    const { gap } = pictureGap(source.resolver, last, next, SCREEN.width);
+    expect(gap).toBeLessThan(MAX_STEP);
+    last = next;
+  }
+  return Infinity;
+}
+
 describe("the surroundings", () => {
+  it("flies on undisturbed when the document changes every 200 ms without moving the goal", () => {
+    const plain = setup(far());
+    plain.p.next();
+    const alone = arrival(plain);
+    expect(alone).toBeGreaterThan(3000);
+    const busy = setup(far());
+    busy.p.next();
+    const pictures: Picture[] = [];
+    const taken = arrival(busy, (elapsed) => {
+      if (elapsed % 200 === 0 && elapsed > 0) busy.p.documentChanged();
+      pictures.push(busy.p.picture());
+    });
+    // The same flight, frame by frame, arriving when it would have.
+    expect(taken).toBe(alone);
+    expect(single(busy.p.picture())).toEqual(busy.viewOf("s1"));
+    const again = setup(far());
+    again.p.next();
+    for (const picture of pictures) {
+      expect(picture).toEqual(again.p.picture());
+      again.clock.advance(5);
+    }
+  });
+
+  it("steers onto a goal the document moves a little every 200 ms, and arrives in about the flight's own time", () => {
+    const plain = setup(far());
+    plain.p.next();
+    const alone = arrival(plain);
+    const busy = setup(far());
+    busy.p.next();
+    let x = 4000;
+    const taken = arrival(busy, (elapsed) => {
+      if (elapsed % 200 !== 0 || elapsed === 0) return;
+      x += 8;
+      busy.doc.stops["s1"]!.view = rect(x, 0, 1600, 900);
+      busy.p.documentChanged();
+    });
+    expect(taken).toBeLessThanOrEqual(alone + MIN_STEER_MS + 5);
+    expect(busy.p.state.phase).toBe("stop");
+    expect(single(busy.p.picture())).toEqual(busy.viewOf("s1"));
+  });
+
+  it("takes over what the goal hides without touching the flight", () => {
+    const plain = setup(far());
+    plain.p.next();
+    const alone = arrival(plain);
+    const busy = setup(far());
+    busy.p.next();
+    const before = hiddenOf(busy.p.picture());
+    const taken = arrival(busy, (elapsed) => {
+      if (elapsed !== 300) return;
+      busy.doc.stops["s1"]!.visibility = { box: { action: "hide" } };
+      busy.p.documentChanged();
+      // Not before arrival.
+      expect(hiddenOf(busy.p.picture())).toEqual(before);
+    });
+    expect(taken).toBe(alone);
+    expect(hiddenOf(busy.p.picture())).toEqual([...hiddenAt(busy.doc, "main", 1)].sort());
+    expect(hiddenOf(busy.p.picture())).toContain("box");
+  });
+
+  it("goes on undisturbed when the stop it is on its way to is chosen again", () => {
+    const plain = setup(far());
+    plain.p.goTo(6);
+    const pictures: Picture[] = [];
+    const alone = arrival(plain, () => pictures.push(plain.p.picture()));
+    const again = setup(far());
+    again.p.goTo(6);
+    const taken = arrival(again, (elapsed) => {
+      if (elapsed % 100 === 0) again.p.goTo(6);
+      if (elapsed === 500) again.p.goTo(again.p.state.steps.length - 1);
+      expect(again.p.picture()).toEqual(pictures[elapsed / 5]);
+    });
+    expect(taken).toBe(alone);
+  });
+
+  it("flies into a stop at the speed the stop asks for", () => {
+    const times: Record<string, number> = {};
+    for (const speed of ["calm", "normal", "fast"]) {
+      const doc = far();
+      doc.stops["s1"]!.transition = { type: FLY, options: { speed } };
+      const t = setup(doc);
+      t.p.next();
+      times[speed] = arrival(t);
+      expect(single(t.p.picture())).toEqual(t.viewOf("s1"));
+    }
+    const plain = setup(far());
+    plain.p.next();
+    // No transition named: the route's default, at normal speed.
+    expect(arrival(plain)).toBe(times["normal"]);
+    expect(times["calm"]! / times["normal"]!).toBeCloseTo(1 / 0.7, 1);
+    expect(times["fast"]! / times["normal"]!).toBeCloseTo(1 / 1.4, 1);
+  });
+
+  it("steers onto the new fit when the screen changes size in the middle of a flight", () => {
+    const plain = setup(far());
+    plain.p.next();
+    const alone = arrival(plain);
+    const busy = setup(far());
+    busy.p.next();
+    // The window is dragged larger, a few pixels every frame, for a second.
+    let screen = SCREEN;
+    const taken = arrival(busy, (elapsed) => {
+      if (elapsed < 200 || elapsed > 1200 || elapsed % 15 !== 0) return;
+      screen = { width: screen.width + 4, height: screen.height + 2 };
+      busy.p.resize(screen);
+    });
+    expect(taken).toBeLessThanOrEqual(alone + MIN_STEER_MS + 5);
+    expect(single(busy.p.picture())).toEqual(busy.viewOf("s1", screen));
+    // Going to full screen in the last moments of a flight is steered too.
+    const late = setup(far());
+    late.p.next();
+    const big = { width: 1920, height: 1080 };
+    const lateTaken = arrival(late, (elapsed) => {
+      if (elapsed === alone - 20) late.p.resize(big);
+    });
+    expect(lateTaken).toBeLessThanOrEqual(alone - 20 + MIN_STEER_MS + 5);
+    expect(single(late.p.picture())).toEqual(late.viewOf("s1", big));
+  });
+
   it("fits the stop again when the screen changes size", () => {
     const { p, run, viewOf, clock } = setup();
     const tall = { width: 600, height: 1200 };
@@ -755,7 +901,18 @@ describe("the surroundings", () => {
 });
 
 describe("input at any time", () => {
-  type Input = (p: Presentation, random: () => number) => "roam" | "cut" | "route";
+  /** What an input may do to the document and the screen. */
+  interface World {
+    readonly doc: TestDocument;
+    resize(screen: { width: number; height: number }): void;
+  }
+  type Input = (
+    p: Presentation,
+    random: () => number,
+    world: World,
+  ) => "roam" | "cut" | "route";
+
+  const SCREENS = [SCREEN, { width: 1200, height: 800 }, { width: 1440, height: 810 }];
 
   const INPUTS: readonly Input[] = [
     (p) => (p.next(), "route"),
@@ -778,12 +935,41 @@ describe("input at any time", () => {
       ),
       "roam"
     ),
+    // The document changes somewhere else (another window, another user).
+    (p) => (p.documentChanged(), "route"),
+    // A stop is moved a little, or somewhere else: at rest a cut, in a
+    // transition it goes on to the stop where it now is.
+    (p, random, { doc }) => {
+      const view = doc.stops["s1"]!.view as { x: number; y: number };
+      const small = random() < 0.7;
+      doc.stops["s1"]!.view = rect(
+        small ? view.x + (random() - 0.5) * 20 : random() * 2000 - 500,
+        small ? view.y + (random() - 0.5) * 20 : random() * 1000 - 200,
+        800,
+        450,
+      );
+      p.documentChanged();
+      return "cut";
+    },
+    // The window changes size: at rest a cut, in a transition it is steered.
+    (_p, random, { resize }) => (
+      resize(SCREENS[Math.floor(random() * SCREENS.length)]!),
+      "cut"
+    ),
   ];
 
   it("never jumps and never locks, whatever is pressed and whenever", () => {
     for (let seed = 1; seed <= 60; seed++) {
       const random = seeded(seed);
       const { p, clock, source, viewOf, doc } = setup();
+      let screen = SCREEN;
+      const world: World = {
+        doc,
+        resize: (next) => {
+          screen = next;
+          p.resize(next);
+        },
+      };
       let last = p.picture();
       for (let i = 0; i < 50; i++) {
         // Wait a random while, often too short for the transition to end.
@@ -792,7 +978,7 @@ describe("input at any time", () => {
           clock.advance(5);
           const picture = p.picture();
           expect(usable(picture)).toBe(true);
-          const { gap } = pictureGap(source.resolver, last, picture, SCREEN.width);
+          const { gap } = pictureGap(source.resolver, last, picture, screen.width);
           if (gap >= MAX_STEP)
             throw new Error(
               `seed ${seed}, input ${i}: the picture jumped by ${gap} in 5 ms`,
@@ -800,18 +986,20 @@ describe("input at any time", () => {
           last = picture;
         }
         const routeBefore = p.state.route;
-        const kind = INPUTS[Math.floor(random() * INPUTS.length)]!(p, random);
+        const phaseBefore = p.state.phase;
+        const kind = INPUTS[Math.floor(random() * INPUTS.length)]!(p, random, world);
         const picture = p.picture();
         expect(usable(picture)).toBe(true);
         // What the presenter moves by hand moves at once; nothing else may
         // change the picture at the moment it is pressed. (A change of route
-        // at a stop both routes visit changes what is hidden there.)
-        if (kind !== "roam") {
+        // at a stop both routes visit changes what is hidden there; a stop
+        // that moved, or a new screen size, is shown at once at rest.)
+        if (kind === "route" || (kind === "cut" && phaseBefore !== "stop")) {
           const { gap, popped } = pictureGap(
             source.resolver,
             last,
             picture,
-            SCREEN.width,
+            screen.width,
           );
           if (gap > 1e-9)
             throw new Error(
@@ -825,6 +1013,8 @@ describe("input at any time", () => {
         expect(state.position).toBeLessThan(state.steps.length);
       }
       // Never locked: a jump is always obeyed, and ends exactly at the stop.
+      world.resize(SCREEN);
+      last = p.picture();
       const steps = p.state.steps;
       const index = Math.floor(random() * steps.length);
       p.goTo(index);
@@ -869,7 +1059,10 @@ describe("input at any time", () => {
           if (popped) expect(gap).toBeLessThan(0.002);
           last = picture;
         }
-        INPUTS[Math.floor(random() * 5)]!(p, random);
+        INPUTS[Math.floor(random() * 5)]!(p, random, {
+          doc: document(),
+          resize: () => {},
+        });
         last = p.picture();
       }
     }

@@ -31,6 +31,7 @@ export {
   type GoToArgs,
   type MoveVisitArgs,
   type NotesArgs,
+  type SpeedArgs,
   type PlaceArgs,
   type PresentArgs,
   type RenameRouteArgs,
@@ -64,6 +65,13 @@ export {
   type StopsAndRoutes,
 } from "./model.ts";
 export { routeOverlay, routeShapes } from "./overlay.ts";
+export {
+  isStopSpeed,
+  speedOfTransition,
+  STOP_SPEEDS,
+  transitionForSpeed,
+  type StopSpeed,
+} from "./speed.ts";
 export {
   choose,
   currentChoice,

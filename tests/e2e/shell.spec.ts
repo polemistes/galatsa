@@ -233,7 +233,7 @@ test("a presentation made with the mouse is saved as a file and opened again", a
     .toBe(3);
 
   // A frame around the selection (the image), where the program has a button for it.
-  const frameButton = toolbar.locator('button[data-id*="frame"]');
+  const frameButton = toolbar.locator('button[data-id="galatsa.basics/frame"]');
   const framed = (await frameButton.count()) > 0;
   if (framed) {
     await frameButton.first().click();

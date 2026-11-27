@@ -41,6 +41,7 @@ export default {
   "import.choose": "Insert a file…",
   "import.unsupported":
     "“{name}” cannot be inserted: no part of the program reads files of its kind.",
+  "present.failed": "The presentation could not start.",
   "import.failed": "“{name}” could not be inserted.",
   "import.tooLarge":
     "“{name}” was not inserted: files larger than {size} MB cannot be inserted.",

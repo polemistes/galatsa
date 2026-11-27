@@ -10,6 +10,7 @@ import {
   DEFAULT_COMFORT,
   defineTransition,
   guardComfort,
+  type AnyTransition,
   type CameraMotion,
   type ComfortSettings,
   type MotionFrame,
@@ -56,21 +57,30 @@ const careless = defineTransition<null>({
 });
 
 function planned(
-  transition: typeof fly,
+  transition: AnyTransition,
   from: CameraView,
   to: CameraView,
   comfort: ComfortSettings,
 ): CameraMotion {
   return guardComfort(
-    transition.plan({ from, to, options: null, comfort, viewport: VIEWPORT }),
+    transition.plan({
+      from,
+      to,
+      options: transition.read(null),
+      comfort,
+      viewport: VIEWPORT,
+    }),
     from,
     to,
     comfort,
   );
 }
 
-function next(to: CameraView, transition = fly): NextTransition {
-  return { transition, options: null, to, viewport: VIEWPORT };
+function next(
+  to: CameraView,
+  transition: AnyTransition = fly as AnyTransition,
+): NextTransition {
+  return { transition, options: transition.read(null), to, viewport: VIEWPORT };
 }
 
 /**
