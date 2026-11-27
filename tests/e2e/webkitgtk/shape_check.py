@@ -24,7 +24,9 @@ import math
 import os
 import sys
 
-import editor_check as base
+# Importing editor_check would otherwise leave a __pycache__ folder here.
+sys.dont_write_bytecode = True
+import editor_check as base  # noqa: E402
 
 base.PORT = int(os.environ.get("E2E_WEB_PORT", "5198"))
 base.URL = f"http://localhost:{base.PORT}/?scene=empty&lang=en"
