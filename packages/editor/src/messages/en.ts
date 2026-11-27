@@ -45,6 +45,8 @@ export default {
   "import.tooLarge":
     "“{name}” was not inserted: files larger than {size} MB cannot be inserted.",
   "import.tooMany": "Only the first {count} files were inserted.",
+  "paste.assetsMissing":
+    "{count, plural, one {# image} other {# images}} in what was pasted could not be found in this program. They show as missing and are not saved with the presentation; insert them from their files.",
   "panels.label": "Panels",
   "nav.zoomIn": "Zoom in",
   "nav.zoomOut": "Zoom out",

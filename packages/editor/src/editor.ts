@@ -10,6 +10,7 @@
 // Node. `dom.ts` turns DOM events into those values.
 
 import {
+  type AssetId,
   type CameraView,
   type ElementId,
   type Fragment,
@@ -108,6 +109,12 @@ export interface EditorOptions {
    * (`importFiles`); without it, files are not imported.
    */
   readonly assetStore?: AssetStore;
+  /**
+   * Brings the bytes of assets a paste refers to into this document's store
+   * (from another document of the program, which has them), and resolves to
+   * the ones it could not find. Without it, pasted assets are not checked.
+   */
+  readonly adoptAssets?: (ids: readonly AssetId[]) => Promise<AssetId[]>;
   readonly mode?: Mode;
   /** The tool picked at start and after a tool is done (the first tool when absent). */
   readonly defaultTool?: ContributionId;
@@ -208,6 +215,7 @@ export class Editor {
     null;
   #notice: EditorNotice | null = null;
   readonly #assetStore: AssetStore | null;
+  readonly #adoptAssets: ((ids: readonly AssetId[]) => Promise<AssetId[]>) | null;
   /** Imports still running (`importFiles`). */
   #importing = 0;
   /** The context menu (right click), drawn by the interface. */
@@ -240,6 +248,7 @@ export class Editor {
     this.platform = options.platform ?? detectPlatform();
     this.#schedule = options.schedule ?? defaultScheduler();
     this.#assetStore = options.assetStore ?? null;
+    this.#adoptAssets = options.adoptAssets ?? null;
     this.undo = createUndoManager(doc);
     this.live = liveResolver(doc);
     this.scene = new EditorScene(doc, this.live);
@@ -799,10 +808,35 @@ export class Editor {
       fragment,
       ...this.#pasteTarget(fragment, origin),
     });
-    if (outcome.ok) this.dismissNotice();
-    else if (!this.host.commands.gestureActive(this.environment()))
+    if (outcome.ok) {
+      this.dismissNotice();
+      const assets = (outcome.value as { readonly assets?: readonly AssetId[] }).assets;
+      if (assets !== undefined && assets.length > 0) void this.#adopt(assets);
+    } else if (!this.host.commands.gestureActive(this.environment()))
       this.#notify(PASTE_PROBLEMS.damaged);
     return outcome;
+  }
+
+  /**
+   * After a paste: the bytes of its assets are brought into this document's
+   * store where the program has them; what it does not have (copied from
+   * another program or browser) is told in a notice, so that a save that
+   * would lack those images is never silent.
+   */
+  async #adopt(assets: readonly AssetId[]): Promise<void> {
+    const adopt = this.#adoptAssets;
+    if (adopt === null) return;
+    let missing: AssetId[];
+    try {
+      missing = await adopt(assets);
+    } catch {
+      missing = [...assets];
+    }
+    if (this.#disposed) return;
+    const found = assets.filter((id) => !missing.includes(id));
+    if (found.length > 0) this.renderer.imagesChanged(found);
+    if (missing.length > 0)
+      this.#notify("editor:paste.assetsMissing", { count: missing.length });
   }
 
   /** A container the user can paste into: there, seen, not locked. */

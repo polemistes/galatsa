@@ -5,6 +5,7 @@
 // (docs/adr/0006, section 7.1), opening a document, the editor over it, and
 // the Svelte interface for panels and the storage dialogs.
 
+import type { AssetId } from "@galatsa/core";
 import type { ContributionId, Mode } from "@galatsa/extension-api";
 import type {
   EditExtension,
@@ -222,6 +223,7 @@ export class EditorApp {
       i18n: this.i18n,
       images,
       assetStore: sessionAssetStore(session),
+      adoptAssets: (ids) => this.#adoptAssets(session, ids),
       ...(this.#options.mode ? { mode: this.#options.mode } : {}),
       ...(this.#options.defaultTool ? { defaultTool: this.#options.defaultTool } : {}),
     });
@@ -241,6 +243,29 @@ export class EditorApp {
     this.#set({ phase: "editing", editor, document: doc, problem: null });
     editor.fitAll();
     this.#options.onEditor?.(editor);
+  }
+
+  /**
+   * Copies the bytes (and reduced versions) of pasted assets this document's
+   * store does not have from another stored document that has them. Returns
+   * the ones found nowhere.
+   */
+  async #adoptAssets(
+    session: StorageSession,
+    ids: readonly AssetId[],
+  ): Promise<AssetId[]> {
+    const missing: AssetId[] = [];
+    for (const id of ids) {
+      if ((await session.getAsset(id).catch(() => undefined)) !== undefined) continue;
+      const found = await this.storage.findAsset(id, session.slot).catch(() => null);
+      if (found === null) {
+        missing.push(id);
+        continue;
+      }
+      await session.putAsset(found.bytes);
+      if (found.previews.length > 0) await session.putPreviews(id, found.previews);
+    }
+    return missing;
   }
 
   #closeEditor(): void {

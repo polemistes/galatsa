@@ -45,6 +45,8 @@ export default {
   "import.tooLarge":
     "«{name}» ble ikke satt inn: filer større enn {size} MB kan ikke settes inn.",
   "import.tooMany": "Bare de første {count} filene ble satt inn.",
+  "paste.assetsMissing":
+    "{count, plural, one {# bilde} other {# bilder}} i det som ble limt inn, finnes ikke i dette programmet. De vises som manglende og lagres ikke med presentasjonen; sett dem inn fra filene sine.",
   "panels.label": "Paneler",
   "nav.zoomIn": "Zoom inn",
   "nav.zoomOut": "Zoom ut",

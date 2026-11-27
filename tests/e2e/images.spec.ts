@@ -748,3 +748,46 @@ test("an SVG with HTML in it never makes the canvas unreadable", async ({ page }
   });
   expect(region).toBeGreaterThan(0);
 });
+
+test("an image pasted into another document brings its bytes along", async ({ page }) => {
+  await start(page);
+  const result = await page.evaluate(async () => {
+    const dev = window as unknown as Dev;
+    const first = dev.galatsaDev.editor()!;
+    const blob = await dev.galatsaTestImage(900, 600, 31, "image/png");
+    await first.importFiles([new File([blob], "carried.png", { type: "image/png" })]);
+    const asset = String(first.scene.element(first.selection[0]!)!.data["asset"]);
+    const copied = (first as unknown as { clipboardCopy(): boolean }).clipboardCopy();
+    const fragment = (first as unknown as { clipboard: unknown }).clipboard;
+    // Another, new document.
+    const app = await dev.galatsaDev.ready;
+    const created = await (
+      app.storage as unknown as { create(): Promise<Session> }
+    ).create();
+    const slot = created.slot;
+    await created.close();
+    await app.restore(slot);
+    const second = dev.galatsaDev.editor()!;
+    const pasted = (
+      second as unknown as {
+        clipboardPaste(content: unknown): boolean;
+      }
+    ).clipboardPaste({ fragment, origin: null, problem: null, text: null, files: [] });
+    for (let i = 0; i < 100; i++) await new Promise((r) => setTimeout(r, 20));
+    const session = app.state.document!.session as unknown as {
+      getAsset(id: string): Promise<Uint8Array | undefined>;
+    };
+    return {
+      copied,
+      pasted,
+      bytes: (await session.getAsset(asset))?.length ?? 0,
+      versions: (await app.state.document!.session.previewFacts(asset)).length,
+      notice: (second as unknown as { notice: unknown }).notice,
+    };
+  });
+  expect(result.copied && result.pasted).toBe(true);
+  expect(result.bytes).toBeGreaterThan(0);
+  expect(result.versions).toBe(2);
+  expect(result.notice).toBeNull();
+  await settle(page);
+});

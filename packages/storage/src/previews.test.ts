@@ -133,3 +133,23 @@ describe("previews in the store", () => {
     await session.close();
   });
 });
+
+describe("assets between stored documents", () => {
+  it("finds an asset's bytes and versions in another stored document, checked against its id", async () => {
+    const m = machine();
+    const p = program(m);
+    const a = await p.storage.create();
+    const id = await withImage(a);
+    await a.putPreviews(id, [preview(256, 171, 1)]);
+    const b = await p.storage.create();
+    const found = await p.storage.findAsset(id, b.slot);
+    expect(found?.bytes).toEqual(ORIGINAL);
+    expect(found?.previews.map((v) => v.width)).toEqual([256]);
+    // Not in the slot that asks, and not where the bytes are damaged.
+    expect(await p.storage.findAsset(id, a.slot)).toBeNull();
+    m.store.data.set(keys.asset(a.slot, id), new Uint8Array([1]));
+    expect(await p.storage.findAsset(id, b.slot)).toBeNull();
+    await a.close();
+    await b.close();
+  });
+});

@@ -392,6 +392,29 @@ export class DocumentStorage {
     }
   }
 
+  /**
+   * The bytes of an asset, and its reduced versions, from any stored document
+   * that has them (checked against the id), other than `except`; null if none
+   * has. For pasting between documents of the program: the clipboard carries
+   * an asset's description, not its bytes.
+   */
+  async findAsset(
+    id: AssetId,
+    except?: string,
+  ): Promise<{ bytes: Uint8Array; previews: AssetPreview[] } | null> {
+    const suffix = `/a/${id}`;
+    for (const key of await this.backend.list(DOC_PREFIX)) {
+      if (!key.endsWith(suffix)) continue;
+      const slot = key.slice(DOC_PREFIX.length, key.length - suffix.length);
+      if (slot === except || slot.includes("/")) continue;
+      const bytes = await readAsset(this.backend, slot, id).catch(() => undefined);
+      if (bytes === undefined) continue;
+      const previews = await readPreviews(this.backend, slot, id).catch(() => []);
+      return { bytes, previews };
+    }
+    return null;
+  }
+
   // --- Internals ------------------------------------------------------------
 
   /**

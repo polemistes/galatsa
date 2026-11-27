@@ -269,3 +269,36 @@ describe("reading files", () => {
     });
   });
 });
+
+describe("pasting images from elsewhere", () => {
+  it("brings the bytes of pasted images in, and says which it could not find", async () => {
+    const asked: string[][] = [];
+    let missing: AssetId[] = [];
+    const { editor } = testEditor({
+      adoptAssets: async (ids) => {
+        asked.push([...ids]);
+        return missing.filter((id) => ids.includes(id));
+      },
+    });
+    const id = `sha256-${"ab".repeat(32)}` as AssetId;
+    const element = editor.run<string>("examples.image/insert", {
+      asset: id,
+      info: { mediaType: "image/png", byteLength: 3, width: 10, height: 10 },
+    });
+    expect(element.ok).toBe(true);
+    editor.services.selection.set([element.ok ? element.value : ""]);
+    expect(editor.clipboardCopy()).toBe(true);
+    expect(editor.clipboardPaste()).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(asked).toEqual([[id]]);
+    expect(editor.notice).toBeNull();
+    // Copied from another program: the bytes are nowhere here.
+    missing = [id];
+    expect(editor.clipboardPaste()).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(editor.notice).toEqual({
+      message: "editor:paste.assetsMissing",
+      values: { count: 1 },
+    });
+  });
+});
