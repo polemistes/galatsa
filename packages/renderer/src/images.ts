@@ -31,7 +31,7 @@ export interface ImageLevel {
 }
 
 /** The longest side a scalable (vector) original is drawn at, in pixels. */
-export const MAX_SCALABLE_SIDE = 8192;
+export const MAX_SCALABLE_SIDE = 4096;
 
 /** The media type of SVG, which is decoded on the main thread through an image element. */
 export const SVG_TYPE = "image/svg+xml";
@@ -115,23 +115,81 @@ export async function decodeWithImageDecoder(
   }
 }
 
+/** Pixels per unit of the absolute CSS lengths SVG sizes are given in. */
+const CSS_UNITS: { readonly [unit: string]: number } = {
+  "": 1,
+  px: 1,
+  in: 96,
+  cm: 96 / 2.54,
+  mm: 96 / 25.4,
+  pt: 96 / 72,
+  pc: 16,
+};
+
 /**
- * An SVG file prepared to be drawn at a given size: its root gets that width
- * and height (and a viewBox from its own width and height if it had none), so
- * the browser draws the vector picture at that size rather than scaling a
- * picture of its natural size. Returns the text unchanged if it is not SVG the
- * browser can parse.
+ * An absolute SVG length in pixels, or undefined (percentages, em, missing).
+ * The same conversion as the image extension's when it reads an SVG's natural
+ * size (`svgLength` in @galatsa/extension-image); the two must agree.
  */
-export function svgAtSize(text: string, width: number, height: number): string {
-  if (typeof DOMParser !== "function" || typeof XMLSerializer !== "function") return text;
+export function svgLength(value: string | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const text = value.trim().toLowerCase();
+  let unitStart = text.length;
+  while (unitStart > 0 && text[unitStart - 1]! >= "a" && text[unitStart - 1]! <= "z")
+    unitStart--;
+  if (unitStart > 0 && text[unitStart] === "e" && unitStart + 1 === text.length)
+    return undefined;
+  const number = text.slice(0, unitStart).trim();
+  const factor = CSS_UNITS[text.slice(unitStart)];
+  if (number === "" || factor === undefined || !/^[0-9.e+-]+$/.test(number))
+    return undefined;
+  const n = Number(number) * factor;
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** The size browsers give SVG without one of its own. */
+const SVG_DEFAULT = { width: 300, height: 150 };
+
+/** Elements that could make a canvas the SVG is drawn on unreadable, or pull in other content. */
+const UNSAFE_SVG = new Set(["foreignobject", "script", "iframe", "object", "embed"]);
+
+/** A raster image embedded in SVG may stay; anything else an `image` names is removed. */
+const SAFE_HREF = /^data:image\/(?:png|jpeg|gif|webp);/i;
+
+/**
+ * An SVG file prepared to be drawn at a given size, or null if it is not SVG
+ * the browser can parse. Its root gets that width and height, so the browser
+ * draws the vector picture at that size rather than scaling a picture of its
+ * natural size; an SVG without a viewBox gets one from its own width and
+ * height, converted as its natural size was (300 by 150 where it gives none).
+ * Content that could taint the canvas (`foreignObject`: HTML in the picture)
+ * or pull in other documents (scripts, frames, images that are not embedded
+ * PNG, JPEG, GIF or WebP, such as another SVG) is removed first.
+ */
+export function svgAtSize(text: string, width: number, height: number): string | null {
+  if (typeof DOMParser !== "function" || typeof XMLSerializer !== "function") return null;
   const parsed = new DOMParser().parseFromString(text, SVG_TYPE);
   const root = parsed.documentElement;
   if (root.localName !== "svg" || parsed.getElementsByTagName("parsererror").length > 0)
-    return text;
+    return null;
+  for (const element of [...parsed.getElementsByTagName("*")]) {
+    const name = element.localName.toLowerCase();
+    if (UNSAFE_SVG.has(name)) {
+      element.remove();
+      continue;
+    }
+    if (name === "image" || name === "feimage") {
+      const href =
+        element.getAttribute("href") ??
+        element.getAttributeNS("http://www.w3.org/1999/xlink", "href") ??
+        "";
+      if (!SAFE_HREF.test(href.trim())) element.remove();
+    }
+  }
   if (!root.hasAttribute("viewBox")) {
-    const w = parseFloat(root.getAttribute("width") ?? "");
-    const h = parseFloat(root.getAttribute("height") ?? "");
-    if (w > 0 && h > 0) root.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    const w = svgLength(root.getAttribute("width")) ?? SVG_DEFAULT.width;
+    const h = svgLength(root.getAttribute("height")) ?? SVG_DEFAULT.height;
+    root.setAttribute("viewBox", `0 0 ${w} ${h}`);
   }
   root.setAttribute("width", String(width));
   root.setAttribute("height", String(height));
@@ -148,6 +206,7 @@ export async function decodeSvg(
   height: number,
 ): Promise<Decoded> {
   const text = svgAtSize(await blob.text(), width, height);
+  if (text === null) throw new Error("not SVG the browser can read");
   const url = URL.createObjectURL(new Blob([text], { type: SVG_TYPE }));
   try {
     const image = new Image(width, height);
@@ -161,6 +220,14 @@ export async function decodeSvg(
       CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!ctx) throw new Error("no 2D context for SVG");
     ctx.drawImage(image, 0, 0, width, height);
+    // Whatever slipped through: a picture that made its canvas unreadable is
+    // not used, so it can never make the document's canvas unreadable too
+    // (renderRegion, thumbnails and exports read their canvas).
+    try {
+      ctx.getImageData(0, 0, 1, 1);
+    } catch {
+      throw new Error("the SVG would make the canvas unreadable");
+    }
     return fromBitmap(await createImageBitmap(canvas));
   } finally {
     URL.revokeObjectURL(url);

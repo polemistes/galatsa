@@ -625,7 +625,7 @@ test("the size of a PNG or WebP turned by EXIF is the size browsers show", async
           ...chunks,
         ]);
       }
-      const blob = new Blob([bytes], { type });
+      const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type });
       const bitmap = await createImageBitmap(blob);
       await editor.importFiles([new File([blob], `turned.${type.slice(6)}`, { type })]);
       const asset = String(editor.scene.element(editor.selection[0]!)!.data["asset"]);
@@ -648,4 +648,103 @@ test("the size of a PNG or WebP turned by EXIF is the size browsers show", async
     };
     expect(described, type).toEqual(browser);
   }
+});
+
+/** Imports SVG text, shows it filling most of the view, and reads canvas pixels at fractions of its box. */
+async function svgPixels(
+  page: Page,
+  svg: string,
+  points: readonly (readonly [number, number])[],
+): Promise<number[][]> {
+  const id = await page.evaluate(async (text) => {
+    const editor = (window as unknown as Dev).galatsaDev.editor()!;
+    editor.services.camera.set({ space: null, cx: 0, cy: 0, zoom: 1 });
+    await editor.importFiles([new File([text], "test.svg", { type: "image/svg+xml" })]);
+    const id = editor.selection[0]!;
+    editor.services.selection.set([]);
+    const b = editor.services.scene.bounds(id)!;
+    editor.fit(b);
+    return id;
+  }, svg);
+  await settle(page);
+  return page.evaluate(
+    ([id, at]) => {
+      const dev = window as unknown as Dev;
+      const editor = dev.galatsaDev.editor()!;
+      editor.renderNow();
+      const box = (
+        editor.renderer as unknown as {
+          screenBounds(id: string): { x: number; y: number; w: number; h: number };
+        }
+      ).screenBounds(id);
+      const canvas = document.querySelector<HTMLCanvasElement>(".galatsa-canvas canvas")!;
+      const ratio = canvas.width / canvas.clientWidth;
+      const ctx = canvas.getContext("2d")!;
+      return at.map(([fx, fy]) => {
+        const d = ctx.getImageData(
+          Math.round((box.x + box.w * fx) * ratio),
+          Math.round((box.y + box.h * fy) * ratio),
+          1,
+          1,
+        ).data;
+        return [d[0]!, d[1]!, d[2]!];
+      });
+    },
+    [id, points] as const,
+  );
+}
+
+test("SVG without a viewBox is drawn at its size in cm, pt or %", async ({ page }) => {
+  await start(page);
+  const quadrants = (w: number, h: number, size: string) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" ${size}>` +
+    `<rect width="${w}" height="${h}" fill="#ffffff"/>` +
+    `<rect width="${w / 2}" height="${h / 2}" fill="#ff0000"/>` +
+    `<rect x="${w / 2}" y="${h / 2}" width="${w / 2}" height="${h / 2}" fill="#0000ff"/></svg>`;
+  const cases = [
+    quadrants((4 * 96) / 2.54, (2 * 96) / 2.54, 'width="4cm" height="2cm"'),
+    quadrants(160, 80, 'width="120pt" height="60pt"'),
+    quadrants(300, 150, 'width="100%" height="100%"'),
+  ];
+  for (const svg of cases) {
+    const [topLeft, bottomRight, topRight] = await svgPixels(page, svg, [
+      [0.25, 0.25],
+      [0.75, 0.75],
+      [0.75, 0.25],
+    ]);
+    expect(topLeft, svg).toEqual([255, 0, 0]);
+    expect(bottomRight, svg).toEqual([0, 0, 255]);
+    expect(topRight, svg).toEqual([255, 255, 255]);
+  }
+});
+
+test("an SVG with HTML in it never makes the canvas unreadable", async ({ page }) => {
+  await start(page);
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">' +
+    '<rect width="200" height="100" fill="#ff0000"/>' +
+    '<foreignObject width="200" height="50"><div xmlns="http://www.w3.org/1999/xhtml">' +
+    "<p>HTML</p></div></foreignObject>" +
+    '<image href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22%3E%3C/svg%3E" width="10" height="10"/>' +
+    "</svg>";
+  // getImageData on the document's canvas works after drawing it (it would
+  // throw on a canvas made unreadable), and the red square is drawn.
+  const [pixel] = await svgPixels(page, svg, [[0.5, 0.8]]);
+  expect(pixel).toEqual([255, 0, 0]);
+  const region = await page.evaluate(async () => {
+    const editor = (window as unknown as Dev).galatsaDev.editor()!;
+    const renderer = editor.renderer as unknown as {
+      renderRegion(
+        region: { space: null; rect: { x: number; y: number; w: number; h: number } },
+        image: { width: number; height: number; mediaType: string },
+      ): Promise<Uint8Array>;
+    };
+    const id = [...editor.live.ids()].find((i) => !editor.live.isGone(i))!;
+    const bytes = await renderer.renderRegion(
+      { space: null, rect: editor.services.scene.bounds(id)! },
+      { width: 200, height: 100, mediaType: "image/png" },
+    );
+    return bytes.length;
+  });
+  expect(region).toBeGreaterThan(0);
 });
