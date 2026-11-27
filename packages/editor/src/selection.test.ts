@@ -19,7 +19,7 @@ import {
 } from "@galatsa/extension-api/editing";
 import { BASICS } from "@galatsa/extension-basics";
 import { INSERT_MISSING, visibleState } from "@galatsa/extension-basics/testing";
-import { ROTATE_LIFT } from "@galatsa/extension-select";
+import { HANDLE_FRAME_MIN, ROTATE_LIFT } from "@galatsa/extension-select";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   FRAGMENT_MIME,
@@ -321,6 +321,31 @@ describe("scaling and resizing", () => {
     expect(visibleState(editor.doc)).toEqual(state);
     expect(steps(editor)).toBe(before);
     expect(editor.selection).toEqual([a]);
+  });
+
+  it("moves a small selected element from inside it; its handles stand outside", () => {
+    const editor = make();
+    const a = rect(editor, 100, 100, 10, 10);
+    editor.services.selection.set([a]);
+    oneStepDrag(editor, { x: 105, y: 105 }, { x: 205, y: 155 });
+    expect(box(editor, a)).toMatchObject({ x: 200, y: 150, w: 10, h: 10 });
+    // Its corner handles stand on a box of HANDLE_FRAME_MIN around it: the
+    // bottom right one, half of that from the centre, still scales it.
+    const c = 205 + HANDLE_FRAME_MIN / 2;
+    const half = 155 + HANDLE_FRAME_MIN / 2;
+    oneStepDrag(editor, { x: c, y: half }, { x: c + 10, y: half + 10 });
+    expect(box(editor, a)).toMatchObject({ x: 200, y: 150, w: 20, h: 20 });
+  });
+
+  it("moves a line (no height) from its middle, and resizes it from its ends", () => {
+    const editor = make();
+    const a = rect(editor, 100, 200, 200, 0);
+    editor.services.selection.set([a]);
+    oneStepDrag(editor, { x: 200, y: 200 }, { x: 260, y: 260 });
+    expect(box(editor, a)).toMatchObject({ x: 160, y: 260, w: 200, h: 0 });
+    // The right side handle sits at the line's right end.
+    oneStepDrag(editor, { x: 360, y: 260 }, { x: 400, y: 270 });
+    expect(box(editor, a)).toMatchObject({ x: 160, y: 260, w: 240, h: 0 });
   });
 
   it("resizes a turned element along its own axis, the opposite side staying", () => {

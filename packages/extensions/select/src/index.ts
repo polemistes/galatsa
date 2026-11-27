@@ -20,6 +20,7 @@ import { startSelectTool } from "./tool.ts";
 export { selectMessages } from "./messages/index.ts";
 export {
   CLICK_SLOP,
+  HANDLE_FRAME_MIN,
   HANDLE_REACH,
   HANDLE_SIZE,
   ROTATE_LIFT,

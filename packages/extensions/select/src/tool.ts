@@ -64,8 +64,12 @@ export const HANDLE_SIZE = 8;
 export const HANDLE_REACH = 7;
 /** How far above the box the rotation handle stands. */
 export const ROTATE_LIFT = 24;
-/** Side handles are shown only on a box at least this long on screen. */
-const SIDE_HANDLES_FROM = 28;
+/**
+ * Handles stand on the box enlarged to at least this size on screen in each
+ * direction: on a small or flat box (a line) they stand outside it, so a
+ * press on the element itself moves it.
+ */
+export const HANDLE_FRAME_MIN = 28;
 /** The smallest size a resize or scaling leaves, on screen. */
 const MIN_SIZE = 2;
 /** Rotation steps with Shift. */
@@ -262,24 +266,26 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     return cached.frame;
   };
 
-  /** The handles a frame offers, given its size on screen. */
+  /** The handles a frame offers. */
   const handlesOf = (f: Frame): Handle[] => {
     const out: Handle[] = [];
     if (f.scale) out.push(...CORNERS);
-    if (f.resize) {
-      const k = zoom();
-      if (f.box.w * k >= SIDE_HANDLES_FROM)
-        out.push(...SIDES.filter((h) => h.kind === "side" && h.u === 0));
-      if (f.box.h * k >= SIDE_HANDLES_FROM)
-        out.push(...SIDES.filter((h) => h.kind === "side" && h.v === 0));
-    }
+    // The handle frame is at least HANDLE_FRAME_MIN on screen, so side
+    // handles never crowd the corners.
+    if (f.resize) out.push(...SIDES);
     if (f.rotate) out.push({ kind: "rotate" });
     return out;
   };
 
+  /** The box the handles stand on: the selection's, at least HANDLE_FRAME_MIN on screen. */
+  const handleFrame = (f: Frame): Box => {
+    const least = HANDLE_FRAME_MIN / zoom();
+    return { ...f.box, w: Math.max(f.box.w, least), h: Math.max(f.box.h, least) };
+  };
+
   const handleUnder = (f: Frame, p: Point): Handle | null => {
     const k = zoom();
-    return handleAt(f.box, handlesOf(f), p, HANDLE_REACH / k, ROTATE_LIFT / k);
+    return handleAt(handleFrame(f), handlesOf(f), p, HANDLE_REACH / k, ROTATE_LIFT / k);
   };
 
   const placed = (ids: readonly ElementId[]): Placed[] => {
@@ -722,11 +728,12 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       }
       const handles = handlesOf(f);
       const half = HANDLE_SIZE / 2 / k;
+      const around = handleFrame(f);
       for (const handle of handles) {
-        const at = handlePoint(box, handle, ROTATE_LIFT / k);
+        const at = handlePoint(around, handle, ROTATE_LIFT / k);
         const path = ctx.createPath();
         if (handle.kind === "rotate") {
-          const top = handlePoint(box, { kind: "side", u: 0, v: -1 }, 0);
+          const top = handlePoint(around, { kind: "side", u: 0, v: -1 }, 0);
           const stem = ctx.createPath();
           stem.moveTo(top.x, top.y);
           stem.lineTo(at.x, at.y);
