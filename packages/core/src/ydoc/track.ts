@@ -462,48 +462,112 @@ function settleStep(
     }
     if (Object.keys(old).length > 0) before.set(item.parentSub, old);
   }
-  const moved = [...before].filter(
-    ([, old]) => Object.hasOwn(old, "parent") || Object.hasOwn(old, "rebase"),
+  const moved = new Set(
+    [...before]
+      .filter(([, old]) => Object.hasOwn(old, "parent") || Object.hasOwn(old, "rebase"))
+      .map(([id]) => id),
   );
-  if (moved.length === 0) return;
+  if (moved.size === 0) return;
   const lookup = withoutMarks(yLookup(doc), ignoredElements);
   const then = new Resolver(placedAsBefore(lookup, before));
-  const now = new Resolver(lookup);
-  // Whether the element, or something shown inside it whose own position the
-  // step leaves alone, lands elsewhere on the canvas.
-  const shifts = (id: string): boolean =>
-    [id, ...then.descendants(id)].some(
-      (at) =>
-        (at === id || !then.isGone(at)) &&
-        !Object.hasOwn(before.get(at) ?? {}, "pos") &&
-        now.get(at) !== undefined &&
-        !samePoint(then.worldOrigin(at), now.worldOrigin(at)),
-    );
-  // Whether the element, or something inside it, would come out of a delete.
-  const revives = (id: string): boolean =>
-    [id, ...then.descendants(id)].some(
-      (at) => then.isDeleted(at) && now.get(at) !== undefined && !now.isDeleted(at),
-    );
-  const keep: Array<[string, readonly PlaceKey[]]> = [];
-  for (const [id, old] of moved) {
-    if (!then.get(id) || !now.get(id)) continue;
-    if (revives(id)) keep.push([id, PLACE_KEYS]);
-    else if (!Object.hasOwn(old, "pos") && shifts(id))
-      keep.push([id, ["parent", "rebase", "order"]]);
-  }
-  if (keep.length === 0) return;
-  doc.transact(() => {
-    for (const [id, keys] of keep) {
-      const map = elements.get(id) as Y.Map<unknown>;
-      const old = before.get(id)!;
-      for (const key of keys) {
-        if (!Object.hasOwn(old, key)) continue;
-        const value = old[key];
-        if (value === undefined) map.delete(key);
-        else map.set(key, value);
+  const ids = [...then.ids()];
+  const writesPos = (id: string) => Object.hasOwn(before.get(id) ?? {}, "pos");
+  const keepBack = (keep: Iterable<string>, keys: readonly PlaceKey[]): void => {
+    doc.transact(() => {
+      for (const id of keep) {
+        moved.delete(id);
+        const map = elements.get(id) as Y.Map<unknown>;
+        const old = before.get(id)!;
+        for (const key of keys) {
+          if (!Object.hasOwn(old, key)) continue;
+          const value = old[key];
+          if (value === undefined) map.delete(key);
+          else map.set(key, value);
+        }
       }
-    }
-  }, ORIGIN.track);
+    }, ORIGIN.track);
+  };
+
+  // 1. Nothing comes out of a delete. Only what changed its effective parent
+  // (the moved elements, and what a cycle made or broke moves with them), and
+  // what is inside it, can.
+  let now = new Resolver(lookup);
+  const candidates = new Set<string>();
+  for (const id of ids) {
+    if (now.get(id) === undefined || then.parentOf(id) === now.parentOf(id)) continue;
+    candidates.add(id);
+    for (const inside of then.descendants(id)) candidates.add(inside);
+  }
+  const revived = [...candidates].filter(
+    (at) => then.isDeleted(at) && now.get(at) !== undefined && !now.isDeleted(at),
+  );
+  if (revived.length > 0) {
+    keepBack(
+      blame(revived, moved, (at) => [at, ...ancestorsOf(then, at)]),
+      PLACE_KEYS,
+    );
+    now = new Resolver(lookup);
+  }
+
+  // 2. Nothing visible moves on the canvas unless the step writes the position
+  // of something its place depends on.
+  const still = new Set([...moved].filter((id) => !writesPos(id)));
+  if (still.size === 0) return;
+  const depends = (at: string) => [...placedBy(then, at), ...placedBy(now, at)];
+  const shifted = ids.filter(
+    (id) =>
+      now.get(id) !== undefined &&
+      !samePoint(then.worldOrigin(id), now.worldOrigin(id)) &&
+      !now.isGone(id) &&
+      !depends(id).some(writesPos),
+  );
+  if (shifted.length > 0)
+    keepBack(blame(shifted, still, depends), ["parent", "rebase", "order"]);
+}
+
+/** The ancestors of an element in the effective tree, nearest first. */
+function ancestorsOf(r: Resolver, id: string): string[] {
+  const out: string[] = [];
+  for (let at = r.parentOf(id); at !== null; at = r.parentOf(at)) out.push(at);
+  return out;
+}
+
+/**
+ * The elements whose positions an element's place on the canvas depends on: it,
+ * the containers it is in, and the containers its position is written in (rule
+ * 3 of section 5.3 converts from there), and so on up.
+ */
+function placedBy(r: Resolver, id: string): string[] {
+  const out = new Set<string>();
+  const queue = [id];
+  while (queue.length > 0) {
+    const at = queue.pop()!;
+    if (out.has(at) || r.get(at) === undefined) continue;
+    out.add(at);
+    const parent = r.parentOf(at);
+    if (parent !== null) queue.push(parent);
+    const space = r.get(at)!.pos.space;
+    if (space !== null) queue.push(space);
+  }
+  return [...out];
+}
+
+/**
+ * The suspects to blame for what was found: those in the chain of each finding,
+ * or all of them if a finding has none in its chain.
+ */
+function blame(
+  found: readonly string[],
+  suspects: ReadonlySet<string>,
+  chain: (id: string) => readonly string[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const id of found) {
+    const guilty = chain(id).filter((at) => suspects.has(at));
+    if (guilty.length === 0) return new Set(suspects);
+    for (const at of guilty) out.add(at);
+  }
+  return out;
 }
 
 /**
