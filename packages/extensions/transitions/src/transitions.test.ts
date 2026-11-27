@@ -174,6 +174,36 @@ describe("the flight", () => {
     }
   });
 
+  it("approaches the goal as precisely as it leaves the start", () => {
+    // The goal is at the origin, so the offset of a view from it keeps its
+    // relative precision however small it is. The last moments of a flight
+    // must mirror the first moments of the flight back, also when the
+    // remaining share of the way is far below the precision of a share near 1.
+    const goal: CameraView = { space: null, cx: 0, cy: 0, zoom: 2 };
+    const starts: CameraView[] = [
+      { space: null, cx: 1500, cy: -400, zoom: 0.5 },
+      { space: null, cx: 2 ** -20, cy: 0, zoom: 2 ** 40 },
+      { space: null, cx: -3e5, cy: 2e5, zoom: 2 ** -20 },
+    ];
+    for (const start of starts) {
+      const forth = plan(start, goal, NO_LIMITS);
+      const back = plan(goal, start, NO_LIMITS);
+      expect(back.duration).toBe(forth.duration);
+      for (const tau of [100, 1, 1e-3, 1e-5]) {
+        const late = forth.frame(forth.duration - tau);
+        const early = back.frame(tau);
+        if (late.kind !== "view" || early.kind !== "view") throw new Error("not a view");
+        expect(early.view.cx).not.toBe(0);
+        const relative = (a: number, b: number) => Math.abs(a - b) / Math.abs(b);
+        expect(relative(late.view.cx, early.view.cx), `${tau}`).toBeLessThan(1e-6);
+        expect(relative(late.view.cy || 1, early.view.cy || 1), `${tau}`).toBeLessThan(
+          1e-6,
+        );
+        expect(relative(late.view.zoom, early.view.zoom)).toBeLessThan(1e-12);
+      }
+    }
+  });
+
   it("is a cut when start and goal are the same", () => {
     const motion = plan(A, { ...A });
     expect(motion.duration).toBe(0);

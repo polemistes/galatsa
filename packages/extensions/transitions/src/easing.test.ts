@@ -59,6 +59,17 @@ describe("smooth progress", () => {
     }
   });
 
+  it("keeps its relative precision in the first and last moments", () => {
+    // Near the start the share is peak * pi^2 p^3 / (12 a^2), to first order.
+    const peak = 1 / (1 - RAMP);
+    for (const p of [1e-3, 1e-6, 1e-9, 1e-12]) {
+      const expected = (peak * Math.PI ** 2 * p ** 3) / (12 * RAMP ** 2);
+      expect(Math.abs(smoothProgress(p) / expected - 1), `${p}`).toBeLessThan(
+        Math.max(1e-14, 10 * (Math.PI * p) ** 2),
+      );
+    }
+  });
+
   it("takes other ramp lengths", () => {
     // A ramp of half the time has no steady part: the speed is a raised cosine
     // over the whole time, 1 - cos(2 pi p), and the distance p - sin(2 pi p) / (2 pi).

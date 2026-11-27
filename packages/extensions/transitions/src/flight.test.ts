@@ -323,3 +323,130 @@ describe("flight path", () => {
     );
   });
 });
+
+/** A small seeded generator (mulberry32), so the random cases repeat. */
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const MIN_ZOOM = 2 ** -32;
+const MAX_ZOOM = 2 ** 32;
+/** Coordinate times zoom stays below this, the model's precision budget. */
+const BUDGET = 2 ** 46;
+
+/**
+ * A random pair of views and a screen width: zooms from 2^-32 to what the
+ * precision budget allows, coordinates from 1e-3 to 1e9 from the origin,
+ * distances from 1e-12 to 1e6 widths of the wider view, zoom ratios that are
+ * exactly or nearly 1, and screens from 320 to 3840 pixels wide.
+ */
+function randomCase(r: () => number): [CameraView, CameraView, number] {
+  const width = [320, 400, 1000, 1920, 3840][Math.floor(r() * 5)]!;
+  const cx = 10 ** (r() * 12 - 3) * (r() < 0.5 ? -1 : 1);
+  const cy = cx * (r() - 0.5);
+  const maxZ = Math.min(MAX_ZOOM, BUDGET / Math.max(Math.abs(cx), Math.abs(cy), 1));
+  const lz = () => Math.log2(MIN_ZOOM) + r() * (Math.log2(maxZ) - Math.log2(MIN_ZOOM));
+  const z0 = 2 ** lz();
+  let z1 = 2 ** lz();
+  if (r() < 0.25) z1 = z0 * (1 + (r() - 0.5) * 1e-9);
+  if (r() < 0.1) z1 = z0;
+  const widths = 10 ** (r() * 18 - 12);
+  const dist = (widths * width) / Math.min(z0, z1);
+  const angle = r() * 2 * Math.PI;
+  const tx = cx + dist * Math.cos(angle);
+  const ty = cy + dist * Math.sin(angle);
+  const toMax = Math.min(MAX_ZOOM, BUDGET / Math.max(Math.abs(tx), Math.abs(ty), 1));
+  return [
+    { space: null, cx, cy, zoom: z0 },
+    { space: null, cx: tx, cy: ty, zoom: Math.min(z1, toMax) },
+    width,
+  ];
+}
+
+describe("flight path, random extreme cases", () => {
+  it("has no jump where the start's half meets the goal's half", () => {
+    const r = rng(13);
+    let worst = 0;
+    let worstCase = "";
+    for (let i = 0; i < 20000; i++) {
+      const [from, to, width] = randomCase(r);
+      const path = flightPath(from, to, width);
+      if (!(path.length > 0)) continue;
+      const half = path.length / 2;
+      const a = path.at(half);
+      const b = path.at(half + half * 2 ** -50);
+      const pixels = Math.hypot(b.cx - a.cx, b.cy - a.cy) * Math.max(a.zoom, b.zoom);
+      const zoomJump = Math.abs(Math.log(b.zoom / a.zoom)) * width;
+      const jump = Math.max(pixels, zoomJump);
+      if (jump > worst) {
+        worst = jump;
+        worstCase = JSON.stringify({ from, to, width, a, b });
+      }
+    }
+    // More than 1/64 pixel at the midpoint would be a loss of precision.
+    expect(worst, worstCase).toBeLessThan(1 / 64);
+  });
+
+  it("never goes back or overshoots, turns its zoom at most once, and steps as the metric says", () => {
+    const r = rng(7);
+    const failures: string[] = [];
+    for (let i = 0; i < 20000 && failures.length < 5; i++) {
+      const [from, to, width] = randomCase(r);
+      const path = flightPath(from, to, width);
+      if (!(path.length > 0)) continue;
+      const n = 400;
+      const dx = to.cx - from.cx;
+      const dy = to.cy - from.cy;
+      const dd = dx * dx + dy * dy;
+      let prevShare = -Infinity;
+      let prev: CameraView | null = null;
+      let turns = 0;
+      let dir = 0;
+      const where = () => JSON.stringify({ from, to, width });
+      for (let k = 0; k <= n; k++) {
+        const v = path.at((path.length * k) / n);
+        if (!finite(v) || !(v.zoom > 0)) {
+          failures.push(`not a view at ${k}: ${where()}`);
+          break;
+        }
+        if (dd > 0) {
+          const share = ((v.cx - from.cx) * dx + (v.cy - from.cy) * dy) / dd;
+          // In pixels at this view's zoom; 1/64 pixel is the model's budget.
+          const px = (x: number) => x * Math.sqrt(dd) * v.zoom;
+          if (
+            px(prevShare - share) > 1 / 64 ||
+            px(-share) > 1 / 64 ||
+            px(share - 1) > 1 / 64
+          ) {
+            failures.push(`share ${share} after ${prevShare} at ${k}: ${where()}`);
+            break;
+          }
+          prevShare = Math.max(prevShare, share);
+        }
+        if (prev) {
+          const d = Math.sign(Math.round(Math.log2(v.zoom / prev.zoom) * 1e9));
+          if (d !== 0 && dir !== 0 && d !== dir) turns++;
+          if (d !== 0) dir = d;
+          const step = distance(prev, v, width);
+          const want = path.length / n;
+          // 1/64 pixel of slack, in metric units.
+          if (Math.abs(step - want) > 1e-6 * want + (RHO / width) * (1 / 64) * 4) {
+            failures.push(`step ${step} instead of ${want} at ${k}: ${where()}`);
+            break;
+          }
+        }
+        prev = v;
+      }
+      if (turns > 1) failures.push(`zoom turned ${turns} times: ${where()}`);
+    }
+    expect(failures).toEqual([]);
+    // Its own time limit: 8 million path evaluations, slower in a busy run.
+  }, 60_000);
+});

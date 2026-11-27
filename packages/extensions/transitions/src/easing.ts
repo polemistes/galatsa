@@ -28,8 +28,25 @@ export function smoothProgress(p: number, ramp: number = RAMP): number {
   // symmetric and keeps precision near the end.
   if (p > 0.5) return 1 - smoothProgress(1 - p, a);
   const peak = 1 / (1 - a);
-  if (p < a) return peak * (p / 2 - (a / (2 * Math.PI)) * Math.sin((Math.PI * p) / a));
+  if (p < a) return peak * (a / (2 * Math.PI)) * thetaMinusSin((Math.PI * p) / a);
   return peak * (a / 2 + (p - a));
+}
+
+/**
+ * theta - sin(theta), for theta >= 0, without cancellation for small theta
+ * (by its series), so the first and last moments of a flight keep their
+ * relative precision.
+ */
+function thetaMinusSin(theta: number): number {
+  if (theta >= 1) return theta - Math.sin(theta);
+  const square = theta * theta;
+  let term = (theta * square) / 6;
+  let sum = term;
+  for (let k = 2; Math.abs(term) > 1e-17 * sum; k++) {
+    term *= -square / (2 * k * (2 * k + 1));
+    sum += term;
+  }
+  return sum;
 }
 
 /**
