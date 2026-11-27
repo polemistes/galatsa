@@ -7,15 +7,21 @@
 // selects the frame and a drag moves it. Not document content: drawn as an
 // overlay, never exported and never shown by the player.
 
-import { Resolver, type ElementId, type Point, type Rect } from "@galatsa/core";
-import { yLookup } from "@galatsa/core/ydoc";
+import {
+  FRAME_TYPE,
+  Resolver,
+  type ElementId,
+  type Point,
+  type Rect,
+} from "@galatsa/core";
+import { roots, yLookup } from "@galatsa/core/ydoc";
 import { messageKey, type Label } from "@galatsa/extension-api";
 import type {
   CommandContext,
   EditorServices,
   OverlayDefinition,
 } from "@galatsa/extension-api/editing";
-import { elementName, isFrame } from "@galatsa/extension-basics";
+import { elementName } from "@galatsa/extension-basics";
 import type * as Y from "yjs";
 import { selectMessages } from "./messages/index.ts";
 
@@ -48,26 +54,61 @@ function intersects(a: Rect, b: Rect): boolean {
 }
 
 /**
- * The frames the user sees on screen, nested ones included, back to front:
- * the visible top-level elements from the renderer, and the frames inside
- * each frame shown, from the document.
+ * Whether an element is a frame, read straight from its record: much
+ * cheaper than resolving it, for the many elements that are not frames.
+ */
+function frameTest(doc: Y.Doc): (id: ElementId) => boolean {
+  const elements = roots(doc).elements;
+  return (id) => {
+    const record = elements.get(id) as { get?(key: string): unknown } | undefined;
+    return typeof record?.get === "function" && record.get("type") === FRAME_TYPE;
+  };
+}
+
+/** The frames of a document, found again after each change of it. */
+const frameIds = new WeakMap<Y.Doc, { ids: ElementId[] | null }>();
+
+function framesOf(doc: Y.Doc): readonly ElementId[] {
+  let entry = frameIds.get(doc);
+  if (entry === undefined) {
+    const made = { ids: null as ElementId[] | null };
+    doc.on("update", () => {
+      made.ids = null;
+    });
+    frameIds.set(doc, made);
+    entry = made;
+  }
+  if (entry.ids === null) {
+    const frame = frameTest(doc);
+    entry.ids = [...roots(doc).elements.keys()].filter(frame);
+  }
+  return entry.ids;
+}
+
+/**
+ * The frames the user sees on screen, nested ones included: outer frames
+ * before the frames inside them, so a name drawn later (and found first) is
+ * that of the inner frame. Drawn in every frame on screen, so the frames are
+ * found by their type alone, once per change of the document, and only they
+ * are resolved.
  */
 export function shownFrames(services: EditorServices, doc: Y.Doc): ShownFrame[] {
   const r = new Resolver(yLookup(doc));
   const view = services.camera.viewport();
-  const out: ShownFrame[] = [];
-  const visit = (id: ElementId): void => {
-    if (!isFrame(r, id) || r.isGone(id)) return;
+  const out: { id: ElementId; box: Rect; depth: number }[] = [];
+  for (const id of framesOf(doc)) {
+    if (r.isGone(id)) continue;
     const size = r.get(id)?.size;
-    if (size === undefined) return;
+    if (size === undefined) continue;
     const at = r.worldOrigin(id);
     const box = { x: at.x, y: at.y, w: size.w, h: size.h };
-    if (!intersects(box, view)) return;
-    out.push({ id, box });
-    for (const child of r.logicalChildren(id)) visit(child);
-  };
-  for (const id of services.scene.visible()) visit(id);
-  return out;
+    if (!intersects(box, view)) continue;
+    let depth = 0;
+    for (let p = r.logicalParentOf(id); p !== null; p = r.logicalParentOf(p)) depth++;
+    out.push({ id, box, depth });
+  }
+  out.sort((a, b) => a.depth - b.depth);
+  return out.map(({ id, box }) => ({ id, box }));
 }
 
 /** Where a frame's name can be taken, in root space, at a zoom (CSS pixels per unit). */
@@ -108,24 +149,48 @@ export interface DropFrame {
  * the document, back to front. Worked out once when a drag starts, since the
  * document does not change during it.
  */
-export function dropFrames(r: Resolver, exclude: readonly ElementId[]): DropFrame[] {
+export function dropFrames(doc: Y.Doc, exclude: readonly ElementId[]): DropFrame[] {
+  const r = new Resolver(yLookup(doc));
   const skip = (id: ElementId): boolean => exclude.some((e) => r.isWithin(id, e));
-  const collect = (parent: ElementId | null): DropFrame[] => {
-    const out: DropFrame[] = [];
-    for (const id of r.logicalChildren(parent)) {
-      if (!isFrame(r, id) || r.isLocked(id) || skip(id)) continue;
-      const size = r.get(id)?.size;
-      if (size === undefined) continue;
-      const at = r.worldOrigin(id);
-      out.push({
-        id,
-        box: { x: at.x, y: at.y, w: size.w, h: size.h },
-        inside: collect(id),
-      });
+  // The frames alone, found by type, each under the frame it is seen in:
+  // walking every container's children would read every element.
+  interface Node {
+    readonly id: ElementId;
+    readonly box: Rect;
+    readonly parent: ElementId | null;
+    /** Its stacking among its siblings: the slot it is in, then its own place. */
+    readonly key: readonly string[];
+    readonly inside: Node[];
+  }
+  const nodes = new Map<ElementId, Node>();
+  for (const id of framesOf(doc)) {
+    if (r.isGone(id) || r.isLocked(id) || skip(id)) continue;
+    const envelope = r.get(id);
+    if (envelope?.size === undefined) continue;
+    const at = r.worldOrigin(id);
+    const parent = r.logicalParentOf(id);
+    const holder = r.slotIn(id, parent) ?? id;
+    const key = [r.get(holder)?.order ?? "", holder, envelope.order, id];
+    const box = { x: at.x, y: at.y, w: envelope.size.w, h: envelope.size.h };
+    nodes.set(id, { id, box, parent, key, inside: [] });
+  }
+  const top: Node[] = [];
+  for (const node of nodes.values()) {
+    // A frame inside one that cannot be dropped into is not offered either.
+    if (node.parent === null) top.push(node);
+    else nodes.get(node.parent)?.inside.push(node);
+  }
+  const compare = (a: Node, b: Node): number => {
+    for (let i = 0; i < a.key.length; i++) {
+      const x = a.key[i]!;
+      const y = b.key[i]!;
+      if (x !== y) return x < y ? -1 : 1;
     }
-    return out;
+    return 0;
   };
-  return collect(null);
+  const sorted = (list: Node[]): DropFrame[] =>
+    list.sort(compare).map((n) => ({ id: n.id, box: n.box, inside: sorted(n.inside) }));
+  return sorted(top);
 }
 
 /**

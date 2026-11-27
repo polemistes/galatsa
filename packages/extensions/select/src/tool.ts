@@ -422,7 +422,7 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       if (far < CLICK_SLOP) return;
       d.gesture = session.gesture();
       d.frames = dropFrames(
-        resolver(),
+        doc,
         d.items.map((item) => item.id),
       );
       setCursor("move");
