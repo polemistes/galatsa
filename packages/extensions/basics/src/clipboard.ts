@@ -168,6 +168,18 @@ export function readFragment(raw: unknown): ReadFragmentResult {
         at = parent;
       }
       if (!inside) p.at(id, () => p.add("is not inside one of the roots"));
+      else if (!rootSet.has(id)) {
+        // A position is written in its container's space (copy writes it so),
+        // or in the space of another element of the fragment. Paste keeps the
+        // space and only renames ids of the fragment, so any other space
+        // would leave the pasted record naming an unrelated element of the
+        // document it is pasted into (or the canvas, for none).
+        const space = elements[id]!.pos.space;
+        if (space === null || !Object.hasOwn(elements, space))
+          p.at(id, () =>
+            p.at("pos", () => p.add("space must be an element of the fragment")),
+          );
+      }
     }
   });
   // Frames and groups are core's: their data is checked here, as an element
