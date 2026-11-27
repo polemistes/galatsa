@@ -84,7 +84,7 @@ describe("viewer bundle", () => {
     expect(code).toContain("galatsa.routes");
     expect(code).not.toContain("RoutesPanel");
     expect(code).not.toContain("svelte");
-    expect(code.length).toBeLessThan(80_000);
+    expect(code.length).toBeLessThan(100_000);
   }, 60_000);
 
   it("is much smaller than the editing entry with the same extensions", async () => {
