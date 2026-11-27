@@ -32,6 +32,13 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
     {
+      // The storage layer in Firefox too (WebKit: see bench/README.md, "Storage
+      // check"). Chromium runs it in the "chromium" project above.
+      name: "storage-firefox",
+      testMatch: "storage.spec.ts",
+      use: { ...devices["Desktop Firefox"] },
+    },
+    {
       name: "bench-chromium",
       testMatch: "bench-*.spec.ts",
       // No device preset: it would replace the browser's real user agent, which the
