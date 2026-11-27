@@ -15,9 +15,32 @@ import { createMemoryStore, type MemoryBackend, type MemoryStore } from "./memor
 import type { AutosaveTiming, StorageSession } from "./session.ts";
 import { DocumentStorage } from "./storage.ts";
 
-/** Lets pending promises, microtasks and real zero-delay timers run. */
+/**
+ * Lets pending promises, microtasks and finished I/O run, through `rounds` turns
+ * of the event loop.
+ *
+ * Each turn is a message through a MessageChannel, not a setTimeout(0). A
+ * zero-delay timer waits for the system timer: about 1 ms on Linux and macOS, but
+ * up to about 15.6 ms on Windows, where the storage tests then spent nearly all
+ * their time in here and ran past Vitest's time limit. A message is a task of its
+ * own, so the microtask queue is drained and finished I/O is handled before it
+ * arrives, but it does not wait for the clock. (setImmediate would do the same,
+ * but this package is typed for browsers, without Node's types.) The storage code
+ * under test takes its timers from the ManualScheduler, so no real timer has to
+ * fire.
+ */
 export async function settle(rounds = 30): Promise<void> {
-  for (let i = 0; i < rounds; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  const channel = new MessageChannel();
+  try {
+    for (let i = 0; i < rounds; i++) {
+      await new Promise<void>((resolve) => {
+        channel.port1.onmessage = () => resolve();
+        channel.port2.postMessage(null);
+      });
+    }
+  } finally {
+    channel.port1.close();
+  }
 }
 
 export class ManualScheduler implements Scheduler {
