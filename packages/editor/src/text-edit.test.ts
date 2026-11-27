@@ -200,15 +200,28 @@ describe("applying an edit to shared text", () => {
     ).toBeUndefined();
   });
 
-  it("takes an item out of its list instead of joining it to the paragraph before", () => {
+  it("Backspace takes an item out of its list; Delete before it joins the paragraphs", () => {
     const t = text([
       { insert: "a\nb" },
       { insert: "\n", attributes: { list: "bullet" } },
     ]);
-    t.doc!.transact(() => applyTextEdit(t, { index: 1, length: 1, text: "" }));
+    t.doc!.transact(() =>
+      applyTextEdit(t, { index: 1, length: 1, text: "", backward: true }),
+    );
     expect(t.toDelta()).toEqual([{ insert: "a\nb\n" }]);
-    t.doc!.transact(() => applyTextEdit(t, { index: 1, length: 1, text: "" }));
+    t.doc!.transact(() =>
+      applyTextEdit(t, { index: 1, length: 1, text: "", backward: true }),
+    );
     expect(t.toString()).toBe("ab\n");
+    const u = text([
+      { insert: "a\nb" },
+      { insert: "\n", attributes: { list: "bullet" } },
+    ]);
+    u.doc!.transact(() => applyTextEdit(u, { index: 1, length: 1, text: "" }));
+    expect(u.toDelta()).toEqual([
+      { insert: "ab" },
+      { insert: "\n", attributes: { list: "bullet" } },
+    ]);
   });
 
   it("adds the new paragraph when Enter ends text that has no final line break", () => {
@@ -411,5 +424,64 @@ describe("editing in place", () => {
     editor.run("galatsa.basics/delete", { ids: [id] });
     expect(editor.textEdit.id).toBe(null);
     expect(s.ended).toBe(true);
+  });
+
+  it("undoing a formatting keeps the selection where it was", () => {
+    const { editor, session, ytext, click } = setup();
+    const id = click(100, 100);
+    const s = session();
+    s.type("hello world");
+    s.select({ index: 6, length: 5 });
+    expect(s.key("b", { ctrl: true })).toBe(true);
+    expect(s.key("z", { ctrl: true })).toBe(true);
+    expect(ytext(id).toDelta()).toEqual([{ insert: "hello world\n" }]);
+    expect(s.sel).toEqual({ index: 6, length: 5 });
+    s.type("Q");
+    expect(ytext(id).toString()).toBe("hello Q\n");
+    void editor;
+  });
+
+  it("keeps the selection when the focus goes elsewhere, as to a panel", () => {
+    const { editor, session, ytext, doc, click } = setup();
+    const id = click(100, 100);
+    const s = session();
+    s.type("one two three");
+    s.select({ index: 4, length: 3 });
+    s.options.onSelection?.(s.sel);
+    // The browser no longer reports a selection (the focus is in a panel).
+    s.selection = () => null;
+    expect(editor.services.text.current()).toMatchObject({ index: 4, length: 3 });
+    // Others' edits move it.
+    doc.transact(() => ytext(id).insert(0, "zero "), "remote");
+    expect(editor.services.text.current()).toMatchObject({ index: 9, length: 3 });
+    expect(editor.run(TEXT_COMMANDS.bold).ok).toBe(true);
+    expect(ytext(id).toDelta()[1]).toEqual({ insert: "two", attributes: { bold: true } });
+  });
+
+  it("zooms the canvas with Ctrl and plus, minus and 0 while editing", () => {
+    const { editor, session, click } = setup();
+    click(100, 100);
+    const zoom = editor.camera.zoom;
+    expect(session().key("=", { ctrl: true })).toBe(true);
+    expect(editor.camera.zoom).toBeCloseTo(zoom * 2, 9);
+    expect(session().key("-", { ctrl: true })).toBe(true);
+    expect(session().key("0", { ctrl: true })).toBe(true);
+    expect(editor.camera.zoom).toBe(1);
+    expect(editor.textEdit.id).not.toBe(null);
+  });
+
+  it("keeps text composed when editing ends in the middle of it", () => {
+    const { editor, sessions, ytext, click } = setup();
+    const id = click(100, 100);
+    const s = sessions.at(-1)!;
+    s.type("ab");
+    // The stand-in hands on its composition when it ends, as the element does.
+    s.end = () => {
+      s.ended = true;
+      s.options.onEdit({ index: 2, length: 0, text: "仮名", step: true });
+    };
+    editor.setInputEnabled(false);
+    expect(editor.textEdit.id).toBe(null);
+    expect(ytext(id).toString()).toBe("ab仮名\n");
   });
 });

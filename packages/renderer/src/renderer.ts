@@ -425,7 +425,13 @@ export class CanvasRenderer {
       for (const node of tree.visibleChildren(container, rect, 0.5 / s)) {
         if (node.kind === "element") {
           const m = elementMatrix(map, node.x, node.y, node.w, node.h, node.rot);
-          dc.begin(m, s, detailFor(Math.max(node.w, node.h) * s), node.id === editing);
+          dc.begin(
+            m,
+            s,
+            detailFor(Math.max(node.w, node.h) * s),
+            node.id === editing,
+            node.id,
+          );
           host.drawElement(dc, node.record, node.id as ElementId);
           stats.elementsDrawn++;
           continue;
@@ -706,8 +712,15 @@ export class CanvasRenderer {
     );
     this.#edit = session;
     this.#placeEdit();
+    // Where the caret goes is known only once the element is over the text.
+    session.placeCaret();
     this.#options.onInvalidate?.();
     return session;
+  }
+
+  /** How many text layouts the renderer keeps (for tests of its memory). */
+  get textLayoutCount(): number {
+    return this.#layouts.size;
   }
 
   /** The open editing session, if any. */

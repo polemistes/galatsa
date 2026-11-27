@@ -47,6 +47,16 @@ import * as Y from "yjs";
 import { matchShortcut, type Platform } from "./keymap.ts";
 import type { EditorScene } from "./scene-source.ts";
 
+/**
+ * Zooming by key stays the canvas's while text is edited: otherwise the
+ * browser would zoom the whole page on Ctrl and plus, minus or 0.
+ */
+const ZOOM_COMMANDS: ReadonlySet<string> = new Set([
+  "editor.navigation/zoom-in",
+  "editor.navigation/zoom-out",
+  "editor.navigation/actual-size",
+]);
+
 /** Origin of the binding's transactions; the editor's undo manager tracks it. */
 export const TEXT_ORIGIN = "galatsa:text-binding";
 
@@ -110,8 +120,10 @@ export function applyTextEdit(ytext: Y.Text, change: TextEdit): number {
     const nl = text.indexOf("\n", from);
     return nl < 0 ? -1 : nl;
   };
-  // Deleting the "\n" before a list item: out of the list instead.
-  if (length === 1 && change.text === "" && text[index] === "\n") {
+  // Backspace at the start of a list item: out of the list instead of
+  // joining it to the paragraph before. (Delete at the end of the paragraph
+  // before joins them, as everywhere else.)
+  if (length === 1 && change.text === "" && change.backward && text[index] === "\n") {
     const end = nextNl(index + 1);
     if (end >= 0 && attrs[end]?.["list"] != null) {
       ytext.format(end, 1, { list: null });
@@ -197,12 +209,16 @@ export function mapSelection(
   return { index: start, length: Math.max(0, end - start) };
 }
 
-/** Where a change starts and ends: the caret after an undo or redo. */
-function changeEnd(
+/**
+ * Where a change of the characters ends: the caret after an undo or redo.
+ * Null when the change only formatted (no insertion or deletion): the
+ * selection then stays where it was.
+ */
+export function changeEnd(
   delta: ReadonlyArray<{ retain?: number; insert?: unknown; delete?: number }>,
-): number {
+): number | null {
   let at = 0;
-  let end = 0;
+  let end: number | null = null;
   for (const op of delta) {
     if (op.retain !== undefined) at += op.retain;
     else if (op.insert !== undefined) {
@@ -257,6 +273,11 @@ interface Active {
   readonly fresh: FreshMark | null;
   /** The caret to show after the binding's own edit. */
   caret: number | null;
+  /**
+   * The selection, kept here and not only in the browser, which forgets it
+   * when the focus goes elsewhere (a panel that formats the text).
+   */
+  selection: TextSelection | null;
 }
 
 export class TextEditController {
@@ -282,12 +303,16 @@ export class TextEditController {
   current(): { id: ElementId; key: string; index: number; length: number } | null {
     const a = this.#active;
     if (a === null) return null;
-    const sel = a.session.selection() ?? { index: a.ytext.length, length: 0 };
+    const sel = a.session.selection() ??
+      a.selection ?? { index: a.ytext.length, length: 0 };
     return { id: a.id, key: a.key, index: sel.index, length: sel.length };
   }
 
   select(index: number, length: number): void {
-    this.#active?.session.select({ index, length });
+    const a = this.#active;
+    if (a === null) return;
+    a.selection = { index, length };
+    a.session.select(a.selection);
     this.#host.changed();
   }
 
@@ -347,7 +372,10 @@ export class TextEditController {
         if (active !== null) this.#edit(active, change);
       },
       onKey: (key) => this.#key(key),
-      onSelection: () => this.#host.changed(),
+      onSelection: (selection) => {
+        if (active !== null && selection !== null) active.selection = selection;
+        this.#host.changed();
+      },
       onHistory: (kind) => {
         this.#host.runFromShortcut(kind === "undo" ? BASICS.undo : BASICS.redo);
       },
@@ -361,15 +389,17 @@ export class TextEditController {
       if (active === null || this.#active !== active) return;
       const content = { $y: "text" as const, delta: ytext.toDelta() as never };
       let selection: TextSelection | undefined;
+      const before = session.selection() ?? active.selection;
+      const end = tr.origin === undo ? changeEnd(event.delta as never) : null;
       if (tr.origin === TEXT_ORIGIN && active.caret !== null) {
         selection = { index: active.caret, length: 0 };
         active.caret = null;
-      } else if (tr.origin === undo) {
-        selection = { index: changeEnd(event.delta as never), length: 0 };
-      } else {
-        const now = session.selection();
-        if (now !== null) selection = mapSelection(now, event.delta as never);
+      } else if (end !== null) {
+        selection = { index: end, length: 0 };
+      } else if (before !== null) {
+        selection = mapSelection(before, event.delta as never);
       }
+      if (selection !== undefined) active.selection = selection;
       session.setContent(content, selection);
       this.#host.changed();
     };
@@ -387,6 +417,7 @@ export class TextEditController {
       },
       fresh: options.fresh ?? null,
       caret: null,
+      selection: null,
     };
     ytext.observe(observer);
     this.#active = active;
@@ -397,6 +428,16 @@ export class TextEditController {
 
   #edit(active: Active, change: TextEdit): void {
     const doc = this.#host.doc;
+    if (this.#active !== active) {
+      // Editing has ended (the element went away, was locked, input was
+      // turned off) while the user composed: keep what was composed.
+      try {
+        edit(doc, () => applyTextEdit(active.ytext, change), { origin: TEXT_ORIGIN });
+      } catch {
+        // The text is gone from the document.
+      }
+      return;
+    }
     // A paste or composed text is an undo step of its own (with the height
     // that follows it).
     if (change.step) this.#host.undo.stopCapturing();
@@ -439,6 +480,7 @@ export class TextEditController {
     const own =
       command === BASICS.undo ||
       command === BASICS.redo ||
+      ZOOM_COMMANDS.has(command) ||
       command.startsWith(`${active.extension}/`);
     if (!own) return false;
     this.#host.runFromShortcut(command);

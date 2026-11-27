@@ -40,6 +40,8 @@ export interface TextEdit {
    * drop, the text an input method composed.
    */
   readonly step?: boolean;
+  /** A deletion backwards from a caret (Backspace), not forwards (Delete). */
+  readonly backward?: boolean;
 }
 
 /** A selection in characters of the content: start and length. */
@@ -97,6 +99,10 @@ export interface TextEditSession {
   select(selection: TextSelection): void;
   /** Height of the text, in world units. */
   contentHeight(): number;
+  /**
+   * Ends editing. Text the user is composing is handed on first (`onEdit`),
+   * so ending in the middle of a composition keeps it.
+   */
   end(): void;
 }
 
@@ -210,8 +216,12 @@ export class DomTextEditSession implements TextEditSession {
   #composing = false;
   /** Content that came while the user composed, shown when composition ends. */
   #deferred: { content: TextContent; selection?: TextSelection } | null = null;
+  /** A new style or text area that came while the user composed. */
+  #deferredTarget: { style: TextStyle; box: Rect } | null = null;
   #ended = false;
   #rendering = false;
+  /** Times the content was shown (setContent), to tell whether an edit was shown. */
+  #shows = 0;
 
   constructor(
     id: string,
@@ -242,12 +252,16 @@ export class DomTextEditSession implements TextEditSession {
     container.append(el);
     this.#listen();
     el.focus({ preventScroll: true });
-    const at = options.caretAt;
-    const placed = at !== undefined && this.#caretFromPoint(at.x, at.y);
-    if (!placed) {
-      const end = this.#maxIndex();
-      this.select(options.selection ?? { index: end, length: 0 });
-    }
+    this.select(options.selection ?? { index: this.#maxIndex(), length: 0 });
+  }
+
+  /**
+   * Puts the caret where `options.caretAt` asks, once the element is placed
+   * over the text (CanvasRenderer.beginTextEdit calls it after placing it).
+   */
+  placeCaret(): void {
+    const at = this.#options.caretAt;
+    if (at !== undefined) this.#caretFromPoint(at.x, at.y);
   }
 
   get composing(): boolean {
@@ -309,6 +323,7 @@ export class DomTextEditSession implements TextEditSession {
       return;
     }
     const keep = selection ?? this.selection();
+    this.#shows++;
     this.#rich = parseRichText(content);
     this.#text = stringOf(this.#rich);
     this.#rendering = true;
@@ -322,11 +337,25 @@ export class DomTextEditSession implements TextEditSession {
 
   setTarget(style: TextStyle, box: Rect): void {
     if (this.#ended) return;
+    if (this.#composing) {
+      // Rebuilding the element would take away what the user is composing.
+      this.#deferredTarget = { style, box };
+      return;
+    }
+    const relayout =
+      JSON.stringify(style) !== JSON.stringify(this.#style) || box.w !== this.#box.w;
     this.#style = style;
     this.#box = box;
+    // A new height or offset only moves the element (the next frame places it).
+    if (!relayout) return;
     const keep = this.selection();
     this.#applyStyle();
-    fillTextRoot(this.element, this.#rich, this.#style, false);
+    this.#rendering = true;
+    try {
+      fillTextRoot(this.element, this.#rich, this.#style, false);
+    } finally {
+      this.#rendering = false;
+    }
     if (keep !== null && this.#hasFocus()) this.select(keep);
   }
 
@@ -531,7 +560,6 @@ export class DomTextEditSession implements TextEditSession {
   }
 
   #listen(): void {
-    const el = this.element;
     this.#on("beforeinput", (e) => this.#beforeInput(e));
     this.#on("input", (e) => {
       if (!(e as InputEvent).isComposing && !this.#composing) this.#reconcile(false);
@@ -540,7 +568,36 @@ export class DomTextEditSession implements TextEditSession {
       this.#composing = true;
     });
     this.#on("compositionend", () => {
-      this.#composing = false;
+      this.#finishComposition();
+      const target = this.#deferredTarget;
+      this.#deferredTarget = null;
+      if (target !== null) this.setTarget(target.style, target.box);
+    });
+    this.#on("copy", (e) => this.#copy(e, false));
+    this.#on("cut", (e) => this.#copy(e, true));
+    this.#on("paste", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (text === "") return;
+      const sel = this.#current();
+      this.#edit({ ...sel, text: cleanInput(text), step: true });
+    });
+    this.#on("drop", (e) => {
+      // Dropping text moves it in ways the replacement model cannot follow.
+      e.preventDefault();
+    });
+    this.#listenKeys();
+  }
+
+  /**
+   * Composition ended (or editing ends during one): hands on what was
+   * composed, moved past what others changed meanwhile, and shows their
+   * change.
+   */
+  #finishComposition(): void {
+    this.#composing = false;
+    {
       const deferred = this.#deferred;
       this.#deferred = null;
       if (deferred === null) {
@@ -549,7 +606,7 @@ export class DomTextEditSession implements TextEditSession {
       }
       // Others changed the text while the user composed: hand on the
       // composition moved past their change, then show their change.
-      const local = diffText(this.#text, this.#shownText());
+      const local = diffText(shownForm(this.#text), this.#shownText());
       const rich = parseRichText(deferred.content);
       const remote = diffText(this.#text, stringOf(rich));
       this.#rich = rich;
@@ -557,19 +614,58 @@ export class DomTextEditSession implements TextEditSession {
       const moved = local === null ? null : transformEdit(local, remote);
       if (moved !== null) this.#edit({ ...moved, step: true });
       else this.setContent(deferred.content, deferred.selection);
-    });
-    this.#on("paste", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const text = e.clipboardData?.getData("text/plain") ?? "";
-      if (text === "") return;
-      const sel = this.#current();
-      this.#edit({ ...sel, text: text.replace(/\r\n?/g, "\n"), step: true });
-    });
-    this.#on("drop", (e) => {
-      // Dropping text moves it in ways the replacement model cannot follow.
-      e.preventDefault();
-    });
+    }
+  }
+
+  /**
+   * Copy and cut: the selected text as plain text, and as plain HTML (bold,
+   * italic, paragraphs) without the element's own sizes and colours, which
+   * other programs would paste at the reference size.
+   */
+  #copy(e: ClipboardEvent, cut: boolean): void {
+    e.stopPropagation();
+    const sel = this.selection();
+    if (sel === null || sel.length === 0 || e.clipboardData === null) return;
+    e.preventDefault();
+    e.clipboardData.setData(
+      "text/plain",
+      this.#text.slice(sel.index, sel.index + sel.length),
+    );
+    e.clipboardData.setData("text/html", this.#html(sel));
+    if (cut) this.#edit({ ...this.#clampDeletion(sel), text: "", step: true });
+  }
+
+  /** The selected part of the content as simple HTML. */
+  #html(sel: TextSelection): string {
+    const end = sel.index + sel.length;
+    const escape = (t: string): string =>
+      t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const parts: string[] = [];
+    for (const p of this.#rich.paragraphs) {
+      const from = Math.max(sel.index, p.start);
+      const to = Math.min(end, p.start + p.length);
+      if (to < from || (to === from && !(p.start >= sel.index && p.start < end)))
+        continue;
+      let html = "";
+      let at = p.start;
+      for (const run of p.runs) {
+        const a = Math.max(from, at);
+        const b = Math.min(to, at + run.text.length);
+        if (b > a) {
+          let t = escape(run.text.slice(a - at, b - at));
+          if (run.italic) t = `<i>${t}</i>`;
+          if (run.bold) t = `<b>${t}</b>`;
+          html += t;
+        }
+        at += run.text.length;
+      }
+      parts.push(p.list === null ? `<p>${html}</p>` : `<li>${html}</li>`);
+    }
+    return parts.join("");
+  }
+
+  #listenKeys(): void {
+    const el = this.element;
     this.#on("keydown", (e) => {
       e.stopPropagation();
       if (e.isComposing || this.#composing || e.keyCode === 229) return;
@@ -624,10 +720,7 @@ export class DomTextEditSession implements TextEditSession {
       case "insertFromYank":
       case "insertTranspose": {
         e.preventDefault();
-        const text = (e.data ?? e.dataTransfer?.getData("text/plain") ?? "").replace(
-          /\r\n?/g,
-          "\n",
-        );
+        const text = cleanInput(e.data ?? e.dataTransfer?.getData("text/plain") ?? "");
         const range = this.#target(e);
         const step = type !== "insertText" && type !== "insertReplacementText";
         this.#edit({ ...this.#clampDeletion(range), text, step });
@@ -642,7 +735,11 @@ export class DomTextEditSession implements TextEditSession {
       default:
         if (type.startsWith("delete")) {
           e.preventDefault();
-          this.#edit({ ...this.#deletion(e), text: "" });
+          this.#edit({
+            ...this.#deletion(e),
+            text: "",
+            backward: type.endsWith("Backward"),
+          });
           return;
         }
         // Formatting the browser would do to the element itself (lists,
@@ -663,24 +760,39 @@ export class DomTextEditSession implements TextEditSession {
   #reconcile(step: boolean): void {
     if (this.#ended) return;
     const now = this.#shownText();
-    const edit = diffText(this.#text, now);
+    const edit = diffText(shownForm(this.#text), now);
     if (edit === null) return;
     const caret = this.selection();
     // The element now shows the edited text; until the caller shows it again
     // (setContent), indices refer to it.
     this.#text = now;
+    const shows = this.#shows;
     this.#edit({ ...edit, step });
-    if (caret !== null && this.#text === now && this.#hasFocus()) this.select(caret);
+    // Shown again with the caret where the caller put it; if not, keep the
+    // browser's caret in the element as it is.
+    if (shows === this.#shows && caret !== null && this.#hasFocus()) this.select(caret);
   }
 
   end(): void {
     if (this.#ended) return;
+    // Keep what the user was composing: the browser may never send its end.
+    if (this.#composing) this.#finishComposition();
     this.#ended = true;
     const hadFocus = this.#hasFocus();
     for (const off of this.#off.splice(0)) off();
     this.element.remove();
     if (hadFocus) this.#container.focus({ preventScroll: true });
   }
+}
+
+/** Text typed or pasted: line breaks as "\n", tabs as spaces (docs/adr/0011). */
+export function cleanInput(text: string): string {
+  return text.replace(/\r\n?/g, "\n").replace(/\t/g, " ");
+}
+
+/** The content as the element shows it: a tab as a space (fillTextRoot). */
+function shownForm(text: string): string {
+  return text.replace(/\t/g, " ");
 }
 
 function keyOf(e: KeyboardEvent): TextEditKey {

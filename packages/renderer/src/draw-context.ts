@@ -84,6 +84,7 @@ export class CanvasDrawContext implements DrawContext {
   #scale: number;
   #detail: DetailLevel;
   #skipText = false;
+  #owner: string | undefined = undefined;
   readonly counters: FrameCounters;
 
   constructor(env: DrawEnvironment, counters: FrameCounters) {
@@ -95,11 +96,18 @@ export class CanvasDrawContext implements DrawContext {
   }
 
   /** Prepares the context for the next element. */
-  begin(matrix: Matrix, scale: number, detail: DetailLevel, skipText = false): void {
+  begin(
+    matrix: Matrix,
+    scale: number,
+    detail: DetailLevel,
+    skipText = false,
+    owner?: string,
+  ): void {
     this.#matrix = matrix;
     this.#scale = scale;
     this.#detail = detail;
     this.#skipText = skipText;
+    this.#owner = owner;
   }
 
   get matrix(): Matrix {
@@ -241,10 +249,22 @@ export class CanvasDrawContext implements DrawContext {
         fontSize: 0,
         color: style.color,
       });
-    return env.layouts.get(content, style, width, () =>
-      env.textEngine
-        ? env.textEngine.layout(content, style, width)
-        : layoutText(env.measurer, env.families, content, style, width),
+    const owner = this.#owner;
+    // The element's text is being edited, so the canvas does not draw it:
+    // its last layout stands in, and nothing is laid out for each key.
+    if (this.#skipText && owner !== undefined) {
+      const last = env.layouts.last(owner);
+      if (last !== undefined) return last;
+    }
+    return env.layouts.get(
+      content,
+      style,
+      width,
+      () =>
+        env.textEngine
+          ? env.textEngine.layout(content, style, width)
+          : layoutText(env.measurer, env.families, content, style, width),
+      owner,
     );
   }
 

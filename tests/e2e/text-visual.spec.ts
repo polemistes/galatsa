@@ -123,6 +123,12 @@ test("text looks the same while it is edited, at zoom 0.1, 1, 8 and 40", async (
       const third = s.indexOf("\n", second + 1);
       shared.format(second, 1, { list: "bullet" });
       shared.format(third, 1, { list: "bullet" });
+      // A tab written by another program (typing and pasting make spaces
+      // of tabs): both show it as a space.
+      (shared as unknown as { insert(at: number, text: string): void }).insert(
+        s.length - 1,
+        "\tTab",
+      );
     }, "galatsa:local");
     editor.services.selection.set([]);
     editor.renderer.setOverlay(null);

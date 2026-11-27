@@ -128,7 +128,9 @@ export function fillTextRoot(
       span.style.fontWeight = prefix.includes("700") ? "700" : "400";
       span.style.fontStyle = prefix.startsWith("italic") ? "italic" : "normal";
       if (run.color !== null) span.style.color = run.color;
-      span.textContent = run.text;
+      // A tab is shown as a space: the canvas draws it as one (fillText), and
+      // the browser would widen it to a tab stop.
+      span.textContent = run.text.replace(/\t/g, " ");
       block.append(span);
     }
     if (paragraph.length === 0) block.append(doc.createElement("br"));

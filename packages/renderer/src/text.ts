@@ -355,12 +355,24 @@ export function ladderSize(px: number): number {
   return Math.min(MAX_FONT_PX, Math.max(1, Math.round(step * 64) / 64));
 }
 
-/** A cache of layouts by content, style and width, bounded in size. */
+/** Layouts kept per content (other styles and widths: a resize being dragged). */
+const LAYOUTS_PER_CONTENT = 4;
+/** Contents kept per element (each edit of a text is a new content). */
+const CONTENTS_PER_OWNER = 2;
+
+/**
+ * A cache of layouts by content, style and width, bounded in size: in all,
+ * per content, and per element (`owner`), so that typing, which makes a new
+ * content for every key, or dragging a width, does not fill it with layouts
+ * nobody draws again (docs/adr/0011-text.md).
+ */
 export class LayoutCache {
   readonly #entries = new Map<
     TextContent,
     { readonly layouts: Map<string, RichTextLayout>; used: number }
   >();
+  /** The contents of each element, oldest first, and its last layout. */
+  readonly #owners = new Map<string, { contents: TextContent[]; last: RichTextLayout }>();
   #size = 0;
   #clock = 0;
   readonly #limit: number;
@@ -379,17 +391,26 @@ export class LayoutCache {
     return this.#size;
   }
 
+  /** The last layout made or found for an element, if any. */
+  last(owner: string): RichTextLayout | undefined {
+    return this.#owners.get(owner)?.last;
+  }
+
   get(
     content: TextContent,
     style: TextStyle,
     width: number,
     make: () => RichTextLayout,
+    owner?: string,
   ): RichTextLayout {
     const key = `${style.fontFamily}|${style.fontSize}|${style.lineHeight ?? ""}|${style.bold ? 1 : 0}${style.italic ? 1 : 0}|${style.align}|${style.color}|${width}`;
     let entry = this.#entries.get(content);
     const hit = entry?.layouts.get(key);
     if (entry) entry.used = ++this.#clock;
-    if (hit) return hit;
+    if (hit) {
+      this.#own(owner, content, hit);
+      return hit;
+    }
     const layout = make();
     if (layout.provisional) return layout;
     if (this.#size >= this.#limit) {
@@ -402,7 +423,35 @@ export class LayoutCache {
     }
     entry.layouts.set(key, layout);
     this.#size++;
+    if (entry.layouts.size > LAYOUTS_PER_CONTENT) {
+      const oldest = entry.layouts.keys().next().value!;
+      entry.layouts.delete(oldest);
+      this.#size--;
+    }
+    this.#own(owner, content, layout);
     return layout;
+  }
+
+  /** Notes that an element shows `content`; drops its contents beyond the last few. */
+  #own(owner: string | undefined, content: TextContent, layout: RichTextLayout): void {
+    if (owner === undefined) return;
+    let own = this.#owners.get(owner);
+    if (!own) {
+      own = { contents: [], last: layout };
+      this.#owners.set(owner, own);
+    }
+    own.last = layout;
+    if (own.contents[own.contents.length - 1] === content) return;
+    own.contents = own.contents.filter((c) => c !== content);
+    own.contents.push(content);
+    while (own.contents.length > CONTENTS_PER_OWNER) {
+      const old = own.contents.shift()!;
+      const entry = this.#entries.get(old);
+      if (entry) {
+        this.#entries.delete(old);
+        this.#size -= entry.layouts.size;
+      }
+    }
   }
 
   /** Drops the quarter of the contents used longest ago. */
@@ -414,10 +463,13 @@ export class LayoutCache {
       this.#entries.delete(content);
       this.#size -= entry.layouts.size;
     }
+    // Owners whose last layout went with it keep only a reference to it.
+    if (this.#owners.size > this.#limit) this.#owners.clear();
   }
 
   clear(): void {
     this.#entries.clear();
+    this.#owners.clear();
     this.#size = 0;
   }
 }

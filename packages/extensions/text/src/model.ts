@@ -136,7 +136,8 @@ export function newTextData(options: {
   readonly color?: string;
   readonly align?: Align;
 }): ElementData {
-  const content = (options.text ?? "").replace(/\r\n?/g, "\n");
+  // Tabs become spaces: the canvas cannot draw a tab stop (docs/adr/0011).
+  const content = (options.text ?? "").replace(/\r\n?/g, "\n").replace(/\t/g, " ");
   return {
     text: {
       $y: "text",
