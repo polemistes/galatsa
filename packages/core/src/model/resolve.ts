@@ -113,9 +113,10 @@ export function withoutMarks(
 
 /**
  * Resolves one state of the document. Results are cached, so create a new
- * Resolver after the document changes. Everything is computed on demand: asking
- * about one element reads only that element and the containers above it, unless
- * the question is about children.
+ * Resolver after the document changes (or use the live resolver, which is kept
+ * up to date). Everything is computed on demand: asking about one element reads
+ * only that element and the containers above it, unless the question is about
+ * children.
  */
 export class Resolver {
   readonly #lookup: ElementLookup;
@@ -230,6 +231,17 @@ export class Resolver {
       this.#children.set(parent, this.#sortSiblings(list));
       return list;
     }
+    this.indexChildren();
+    return this.#children.get(parent) ?? NO_CHILDREN;
+  }
+
+  /**
+   * Builds the children of every container at once (and with it the effective
+   * parent of every element). `children` does this by itself when asked about a
+   * third container.
+   */
+  protected indexChildren(): void {
+    if (this.#indexed) return;
     const index = new Map<ElementId | null, ElementId[]>();
     for (const id of this.#lookup.ids()) {
       if (!this.get(id)) continue;
@@ -238,9 +250,77 @@ export class Resolver {
       if (!list) index.set(key, (list = []));
       list.push(id);
     }
+    this.#children.clear();
     for (const [key, list] of index) this.#children.set(key, this.#sortSiblings(list));
     this.#indexed = true;
-    return this.#children.get(parent) ?? NO_CHILDREN;
+  }
+
+  /**
+   * Drops everything cached about the given elements after the lookup's content
+   * changed, so that the next question reads them again. Only for a subclass that
+   * keeps one Resolver up to date (the live resolver): `ids` must hold every
+   * element whose resolution can differ from what is cached, which takes knowing
+   * what depends on what. Everybody else creates a new Resolver.
+   *
+   * With a full children index, the index is updated (each list that changes is
+   * replaced, never changed in place, so a list handed out earlier stays as it
+   * was); without one, children are looked up anew.
+   */
+  protected forget(ids: ReadonlySet<ElementId>): void {
+    const touched = new Set<ElementId | null>();
+    for (const id of ids) {
+      const parent = this.#parent.get(id);
+      if (parent !== undefined) touched.add(parent);
+      this.#envelope.delete(id);
+      this.#parent.delete(id);
+      this.#local.delete(id);
+      this.#simpleLocal.delete(id);
+      this.#deleters.delete(id);
+      this.#digest.delete(id);
+    }
+    if (!this.#indexed) {
+      this.#children.clear();
+      this.#asked = 0;
+      return;
+    }
+    const lists = new Map<ElementId | null, ElementId[]>();
+    for (const parent of touched) {
+      const list = this.#children.get(parent);
+      if (list) lists.set(parent, list.filter((id) => !ids.has(id)));
+    }
+    const added = new Map<ElementId | null, ElementId[]>();
+    for (const id of ids) {
+      if (!this.get(id)) continue;
+      const parent = this.parentOf(id);
+      let list = added.get(parent);
+      if (!list) added.set(parent, (list = []));
+      list.push(id);
+    }
+    const key = (id: ElementId) => ({ id, order: this.get(id)?.order ?? "" });
+    for (const [parent, newcomers] of added) {
+      let list = lists.get(parent);
+      if (!list) lists.set(parent, (list = [...(this.#children.get(parent) ?? [])]));
+      if (newcomers.length > 8) {
+        list.push(...newcomers);
+        this.#sortSiblings(list);
+        continue;
+      }
+      for (const id of newcomers) {
+        const item = key(id);
+        let low = 0;
+        let high = list.length;
+        while (low < high) {
+          const mid = (low + high) >>> 1;
+          if (compareOrdered(key(list[mid]!), item) < 0) low = mid + 1;
+          else high = mid;
+        }
+        list.splice(low, 0, id);
+      }
+    }
+    for (const [parent, list] of lists) {
+      if (list.length > 0) this.#children.set(parent, list);
+      else this.#children.delete(parent);
+    }
   }
 
   /**
