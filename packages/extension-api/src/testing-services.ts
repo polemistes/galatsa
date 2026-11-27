@@ -23,6 +23,8 @@ export interface TestServices extends EditorServices {
     previews: number;
     /** How many times overlays asked to be drawn again. */
     overlayRequests: number;
+    /** Messages shown to the user, oldest first. */
+    notices: { message: string; values?: unknown }[];
   };
 }
 
@@ -59,6 +61,7 @@ export function createTestServices(
     preview: null,
     previews: 0,
     overlayRequests: 0,
+    notices: [],
   };
   const resolver = (): Resolver => new Resolver(yLookup(doc));
   const selectable = (r: Resolver): ElementId[] =>
@@ -165,6 +168,11 @@ export function createTestServices(
     overlays: {
       invalidate: () => {
         state.overlayRequests += 1;
+      },
+    },
+    notices: {
+      show: (message, values) => {
+        state.notices.push(values === undefined ? { message } : { message, values });
       },
     },
   };

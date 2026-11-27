@@ -22,6 +22,12 @@ export interface PanelProps {
    * user chose (docs/adr/0013: a custom panel had no way to its text).
    */
   readonly i18n: I18n;
+  /**
+   * Gives the canvas the keyboard focus. A panel calls it after the user
+   * acted with a button or a list, so that undo and the canvas's other keys
+   * work at once, without a click on the canvas (docs/adr/0013).
+   */
+  focusCanvas(): void;
 }
 
 declare module "@galatsa/extension-api/editing" {

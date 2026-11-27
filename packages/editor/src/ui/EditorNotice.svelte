@@ -13,7 +13,7 @@
 
 {#if notice !== null}
   <div role="alert" class="galatsa-editor-notice">
-    {t(notice.message)}
+    {t(notice.message, notice.values)}
     <button type="button" onclick={() => editor.dismissNotice()}>
       {t("editor:action.dismissNotice")}
     </button>

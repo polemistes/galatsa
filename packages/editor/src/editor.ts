@@ -116,9 +116,10 @@ export interface PointerInput {
 
 export type EditorChange = StateChange | "tool" | "cursor" | "notice";
 
-/** A message the interface shows (a message key of the editor's bundle). */
+/** A message the interface shows (a message key, of the editor's bundle or an extension's). */
 export interface EditorNotice {
   readonly message: string;
+  readonly values?: MessageValues;
 }
 
 /** The notice for each reason a paste is refused. */
@@ -187,6 +188,7 @@ export class Editor {
   #clipboard: { readonly fragment: Fragment; readonly origin: ClipboardOrigin } | null =
     null;
   #notice: EditorNotice | null = null;
+  #focusCanvas: (() => void) | null = null;
   /** The context menu (right click), drawn by the interface. */
   readonly contextMenu = new ContextMenu();
   #disposed = false;
@@ -280,6 +282,7 @@ export class Editor {
         placeCamera: (view) => this.#view.place(view),
         previewChanged: () => this.#view.follow(),
         toScreen: (point) => this.#view.toScreen(point),
+        notify: (message, values) => this.#notify(message, values),
       },
       this.#state,
     );
@@ -870,9 +873,23 @@ export class Editor {
     this.#emit("notice");
   }
 
-  #notify(message: string): void {
-    this.#notice = { message };
+  #notify(message: string, values?: MessageValues): void {
+    this.#notice = values === undefined ? { message } : { message, values };
     this.#emit("notice");
+  }
+
+  /**
+   * Gives the canvas the keyboard focus, so its keys (undo, the tools'
+   * shortcuts) work again after the user acted in a panel or a dialog. Does
+   * nothing until the canvas is mounted in a page.
+   */
+  focusCanvas(): void {
+    this.#focusCanvas?.();
+  }
+
+  /** How to focus the canvas; set by the page that mounts it (`mountEditor`). */
+  setCanvasFocus(focus: (() => void) | null): void {
+    this.#focusCanvas = focus;
   }
 
   /**

@@ -5,7 +5,7 @@
 // elements of a missing extension, types that forbid it, bad arguments).
 
 import { GROUP_TYPE, type ElementId, type Fragment } from "@galatsa/core";
-import { forkDoc, setLocked, syncDocs, toSnapshot } from "@galatsa/core/ydoc";
+import { forkDoc, setLocked, syncDocs } from "@galatsa/core/ydoc";
 import { describe, expect, it } from "vitest";
 import { BASICS, DUPLICATE_OFFSET, readFragment, type PasteOutcome } from "./index.ts";
 import {
@@ -718,7 +718,7 @@ describe("copy and paste", () => {
     expect(t.element(rootIds[0]!).pos.space).toBeNull();
   });
 
-  it("reads rectangle stops in an outside space or a shape's space in the paste's space", () => {
+  it("refuses rectangle stops in the space of an element outside the fragment", () => {
     const t = setupBasics();
     const outside = t.frame(300, 300);
     const f = t.frame(0, 0);
@@ -743,24 +743,22 @@ describe("copy and paste", () => {
       deleted: {},
       ext: {},
     });
-    const pastedViews = (variant: unknown) => {
-      const before = new Set(Object.keys(toSnapshot(t.doc).stops));
-      const { ids } = t.must<PasteOutcome>(BASICS.paste, { fragment: variant });
-      const stops = toSnapshot(t.doc).stops;
-      return {
-        ids,
-        views: Object.keys(stops)
-          .filter((id) => !before.has(id))
-          .map((id) => stops[id]!.view),
-      };
-    };
-    for (const space of [outside, shapeId, "missingElement00000000", null]) {
+    for (const space of [outside, shapeId, "missingElement00000000"]) {
       const withStop = { ...fragment, stops: { stop1: stop(space) } };
-      expect(readFragment(withStop).problems).toEqual([]);
-      expect(pastedViews(withStop).views).toEqual([rect(null)]);
+      expect(readFragment(withStop).problems).toEqual([
+        "stops.stop1: space must be a frame or group of the fragment",
+      ]);
+      refused(t, BASICS.paste, { fragment: withStop });
+      const withFallback = { ...fragment, fallbackViews: { stop1: rect(space) } };
+      expect(readFragment(withFallback).problems).toEqual([
+        "fallbackViews.stop1: space must be a frame or group of the fragment",
+      ]);
     }
-    const inFrame = pastedViews({ ...fragment, stops: { stop1: stop(frameId) } });
-    expect(inFrame.views).toEqual([{ ...rect(null), space: inFrame.ids[0] }]);
+    for (const space of [null, frameId]) {
+      expect(
+        readFragment({ ...fragment, stops: { stop1: stop(space) } }).problems,
+      ).toEqual([]);
+    }
   });
 
   it("refuses frame and group data that is not theirs", () => {

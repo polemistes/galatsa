@@ -127,3 +127,20 @@ describe("extension overlays", () => {
     expect(errors.length).toBe(1);
   });
 });
+
+describe("notices and the canvas's focus for extensions", () => {
+  it("shows an extension's message with values, and focuses the canvas when mounted", () => {
+    const t = setup();
+    const changes: string[] = [];
+    t.editor.subscribe((change) => changes.push(change));
+    t.editor.services.notices.show("lines:failed", { n: 2 });
+    expect(t.editor.notice).toEqual({ message: "lines:failed", values: { n: 2 } });
+    expect(changes).toContain("notice");
+    // Nothing to focus without a page; then the page's function.
+    expect(() => t.editor.focusCanvas()).not.toThrow();
+    let focused = 0;
+    t.editor.setCanvasFocus(() => focused++);
+    t.editor.focusCanvas();
+    expect(focused).toBe(1);
+  });
+});
