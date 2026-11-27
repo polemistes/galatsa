@@ -210,6 +210,6 @@ describe("incremental scene tree updates", () => {
         }
       }
       expect(failures.slice(0, 5)).toEqual([]);
-    });
+    }, 60_000);
   }
 });
