@@ -54,7 +54,10 @@ describe("PointerTracker", () => {
     expect(kinds(t.down(finger(7, 100, 100), false))).toEqual(["capture", "tool-down"]);
     expect(kinds(t.move(finger(7, 110, 100)))).toEqual(["tool-move"]);
     // The second finger: the tool's drag is cancelled, the two fingers hold the canvas.
-    expect(kinds(t.down(finger(8, 210, 100), true))).toEqual(["tool-cancel", "capture"]);
+    expect(kinds(t.down(finger(8, 210, 100), true))).toEqual([
+      "tool-withdraw",
+      "capture",
+    ]);
     expect(t.pinching).toBe(true);
     // Spreading the fingers zooms about the point between them; moving both pans.
     expect(t.move(finger(8, 310, 100))).toEqual([

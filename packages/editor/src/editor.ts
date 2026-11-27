@@ -170,6 +170,8 @@ export class Editor {
   readonly #view: CameraControl;
   /** A pointer is down and belongs to the tool. */
   #toolPointer = false;
+  /** The selection when the tool's pointer went down. */
+  #selectionAtDown: readonly ElementId[] = [];
 
   constructor(options: EditorOptions) {
     const doc = options.doc;
@@ -552,6 +554,7 @@ export class Editor {
     if (!this.#inputEnabled) return;
     if (this.#view.handDown({ x: e.x, y: e.y })) return;
     this.#toolPointer = true;
+    this.#selectionAtDown = this.#state.selection;
     this.tools.pointerDown(this.#toolEvent(e));
   }
 
@@ -572,6 +575,16 @@ export class Editor {
     if (this.#view.handUp(null)) return;
     this.#toolPointer = false;
     this.tools.pointerCancel();
+  }
+
+  /**
+   * The tool's press turned out to be the first finger of a pinch: its drag
+   * is cancelled, and the selection is put back as it was before the press.
+   */
+  pointerWithdraw(): void {
+    if (!this.#toolPointer) return;
+    this.pointerCancel();
+    this.services.selection.set(this.#selectionAtDown);
   }
 
   /** The canvas lost focus: keys held down (Space) are let go. */

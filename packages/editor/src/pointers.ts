@@ -12,9 +12,10 @@
 //   same pointer goes down again, when it moves with no button down, or when
 //   the page no longer holds its capture; the tool's drag is then cancelled,
 //   and the new press is taken.
-// - Two fingers hold the canvas: a second touch while a finger is down cancels
-//   the tool's drag (if the first finger had started one) and from then on the
-//   two fingers pan and pinch the view. When one is lifted, the other drags the
+// - Two fingers hold the canvas: a second touch while a finger is down takes
+//   the first finger's press back from the tool (its drag is cancelled, and a
+//   selection it made is undone), and from then on the two fingers pan and
+//   pinch the view. When one is lifted, the other drags the
 //   canvas until it is lifted too; a third finger is ignored. Touch pointers
 //   are not checked for a lost capture, because browsers end them with
 //   pointercancel.
@@ -39,6 +40,11 @@ export type PointerAction =
   | { readonly kind: "tool-move" }
   | { readonly kind: "tool-up" }
   | { readonly kind: "tool-cancel" }
+  /**
+   * The first finger's press was the start of a pinch: the tool's drag is
+   * cancelled and what the press did (a selection) is taken back.
+   */
+  | { readonly kind: "tool-withdraw" }
   /** A mouse moving with nothing down: tools may show where they would act. */
   | { readonly kind: "hover" }
   | { readonly kind: "pan"; readonly dx: number; readonly dy: number }
@@ -117,7 +123,7 @@ export class PointerTracker {
         { id: e.id, x: e.x, y: e.y },
       ];
       return [
-        ...(active.pan ? [] : [{ kind: "tool-cancel" } as const]),
+        ...(active.pan ? [] : [{ kind: "tool-withdraw" } as const]),
         { kind: "capture" },
       ];
     }

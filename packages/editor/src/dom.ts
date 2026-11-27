@@ -144,6 +144,9 @@ export function mountEditor(
         case "tool-cancel":
           editor.pointerCancel();
           break;
+        case "tool-withdraw":
+          editor.pointerWithdraw();
+          break;
         case "pan":
           editor.pan(action.dx, action.dy);
           break;

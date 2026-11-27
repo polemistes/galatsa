@@ -57,17 +57,17 @@ export default defineConfig({
       use: { ...devices["Desktop Firefox"] },
     },
     {
-      // The editor's development page in Firefox and WebKit too. Chromium runs it
+      // The editor's development page (and its camera) in Firefox and WebKit too. Chromium runs it
       // in the "chromium" project above.
       name: "editor-firefox",
-      testMatch: "editor.spec.ts",
+      testMatch: ["editor.spec.ts", "camera.spec.ts"],
       use: { ...devices["Desktop Firefox"] },
     },
     ...(WEBKIT
       ? [
           {
             name: "editor-webkit",
-            testMatch: "editor.spec.ts",
+            testMatch: ["editor.spec.ts", "camera.spec.ts"],
             use: { ...devices["Desktop Safari"] },
           },
         ]

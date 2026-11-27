@@ -9,6 +9,7 @@ import { SHAPE_TYPE } from "@galatsa/extension-examples";
 import { addElement } from "@galatsa/core/ydoc";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Editor } from "./editor.ts";
+import { wheelZoomFactor } from "./dom.ts";
 import { NAVIGATION } from "./navigation.ts";
 import { key, pointer, testEditor } from "./test-support.ts";
 
@@ -157,6 +158,33 @@ describe("navigation from the keyboard", () => {
     expect(editor.camera.cy).toBeGreaterThan(400);
     editor.keyDown(key("ArrowUp", { code: "ArrowUp" }));
     expect(editor.camera.cy).toBe(400);
+  });
+});
+
+describe("two fingers", () => {
+  it("take back what the first finger's press did when the second comes", () => {
+    const editor = setup();
+    const id = shape(editor, 100, 100, 200, 200);
+    editor.pointerDown(pointer(150, 150, { pointerType: "touch" }));
+    expect(editor.selection).toEqual([id]);
+    editor.pointerWithdraw();
+    expect(editor.selection).toEqual([]);
+    expect(editor.services.scene.placement(id)).toMatchObject({ x: 100, y: 100 });
+    // The next press is the tool's as before.
+    editor.pointerDown(pointer(150, 150, { pointerType: "touch" }));
+    editor.pointerUp(pointer(150, 150, { pointerType: "touch" }));
+    expect(editor.selection).toEqual([id]);
+  });
+});
+
+describe("the wheel", () => {
+  it("zooms by the same step for a notch of every browser's mouse wheel, and finely for a pinch", () => {
+    // Chromium: 100 pixels a notch; Firefox: 3 lines of 16 pixels.
+    expect(wheelZoomFactor(-100)).toBeCloseTo(Math.exp(0.25), 12);
+    expect(wheelZoomFactor(-48)).toBeCloseTo(Math.exp(0.25), 12);
+    expect(wheelZoomFactor(100)).toBeCloseTo(Math.exp(-0.25), 12);
+    // A trackpad pinch: small steps, as they come.
+    expect(wheelZoomFactor(-4)).toBeCloseTo(Math.exp(0.04), 12);
   });
 });
 
