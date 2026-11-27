@@ -50,20 +50,23 @@ interface DevEditor {
   screen: { width: number; height: number };
 }
 
-declare global {
-  interface Window {
-    galatsaDev?: { editor(): unknown };
-  }
+/** What the development page offers tests (`window.galatsaDev`). */
+interface Dev {
+  galatsaDev: { editor(): DevEditor | null };
 }
 
 /** Opens an empty document, and puts root space one to one on the canvas. */
 async function open(page: Page): Promise<{ x: number; y: number }> {
   await page.goto(URL);
-  await page.waitForFunction(() => Boolean(window.galatsaDev?.editor()), null, {
-    timeout: 90_000,
-  });
+  await page.waitForFunction(
+    () => Boolean((window as unknown as Partial<Dev>).galatsaDev?.editor()),
+    null,
+    {
+      timeout: 90_000,
+    },
+  );
   await page.evaluate(() => {
-    const editor = window.galatsaDev!.editor() as DevEditor;
+    const editor = (window as unknown as Dev).galatsaDev.editor()!;
     const { width, height } = editor.screen;
     editor.services.camera.set({ space: null, cx: width / 2, cy: height / 2, zoom: 1 });
   });
@@ -75,7 +78,7 @@ async function open(page: Page): Promise<{ x: number; y: number }> {
 async function insertRect(page: Page, x: number, y: number, w: number, h: number) {
   return page.evaluate(
     ([px, py, pw, ph]) => {
-      const editor = window.galatsaDev!.editor() as DevEditor;
+      const editor = (window as unknown as Dev).galatsaDev.editor()!;
       const outcome = editor.run("examples.shape/insert", {
         kind: "rect",
         x: px,
@@ -91,12 +94,14 @@ async function insertRect(page: Page, x: number, y: number, w: number, h: number
 }
 
 async function selection(page: Page): Promise<string[]> {
-  return page.evaluate(() => [...(window.galatsaDev!.editor() as DevEditor).selection]);
+  return page.evaluate(() => [
+    ...(window as unknown as Dev).galatsaDev.editor()!.selection,
+  ]);
 }
 
 async function placed(page: Page, id: string): Promise<Placed | null> {
   return page.evaluate((elementId) => {
-    const editor = window.galatsaDev!.editor() as DevEditor;
+    const editor = (window as unknown as Dev).galatsaDev.editor()!;
     const p = editor.services.scene.placement(elementId);
     return p === null ? null : { x: p.worldX, y: p.worldY, w: p.w, h: p.h, rot: p.rot };
   }, id);
@@ -105,7 +110,7 @@ async function placed(page: Page, id: string): Promise<Placed | null> {
 /** Elements the user sees, by type. */
 async function count(page: Page, type?: string): Promise<number> {
   return page.evaluate((only) => {
-    const editor = window.galatsaDev!.editor() as DevEditor;
+    const editor = (window as unknown as Dev).galatsaDev.editor()!;
     return [...editor.live.ids()].filter(
       (id) =>
         !editor.live.isGone(id) &&
@@ -116,7 +121,8 @@ async function count(page: Page, type?: string): Promise<number> {
 
 async function locked(page: Page, id: string): Promise<boolean> {
   return page.evaluate(
-    (elementId) => (window.galatsaDev!.editor() as DevEditor).live.isLocked(elementId),
+    (elementId) =>
+      (window as unknown as Dev).galatsaDev.editor()!.live.isLocked(elementId),
     id,
   );
 }

@@ -19,7 +19,8 @@ visible window, from the repository root:
     env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a \\
         python3 tests/e2e/webkitgtk/editor_check.py
 
-It starts the web app's Vite server on port 5198 itself, unless one is running.
+It starts the web app's Vite server on port 5198 (or E2E_WEB_PORT) itself,
+unless one is running there.
 Exit code 0 when every step passes.
 """
 
@@ -38,7 +39,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("WebKit", "6.0")
 from gi.repository import GLib, Gtk, WebKit  # noqa: E402
 
-PORT = 5198
+PORT = int(os.environ.get("E2E_WEB_PORT", "5198"))
 URL = f"http://localhost:{PORT}/?lang=en&fresh"
 TITLE = "Galatsa editor check"
 WIDTH, HEIGHT = 1000, 700

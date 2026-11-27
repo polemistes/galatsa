@@ -63,7 +63,7 @@ The arrow keys move the selection by one screen pixel, ten with Shift, each pres
 A copy writes the fragment that the basics' `copy` returns into a small envelope, `{ "kind": "galatsa/fragment", "version": 1, "fragment": … }`, as JSON, twice:
 
 - under the program's own type `application/x-galatsa-fragment+json`, which the browser's copy and paste events carry;
-- as plain text. The asynchronous clipboard (used by the context menu's paste, below) reads plain text in every browser, but not types of the page's own; and a type of the page's own can be dropped on the way, where plain text is kept.
+- as plain text. The asynchronous clipboard (used by the context menu's paste, below) reads plain text (`readText`) in every browser the program runs in, but not a type of the page's own; and plain text is the form most likely to survive where a type of the page's own is not passed on.
 
 A paste reads the program's type first, then plain text that is an envelope of this version. The fragment is still unchecked; the basics' `paste` reads it with the document's grammar and refuses what does not read (0005 section 12.1). Plain text that is not an envelope, and files, are described in what the paste found (`ClipboardContent`: `text` and `files`) and not pasted yet, and the browser's default goes on: pasting text as a text box and images as image elements belongs to the text and image extensions, which can take them from there.
 
@@ -86,7 +86,7 @@ The menu is a Svelte component over the canvas, drawn from a small store on the 
 - **Free resizing from corners by default, Shift for proportions**, as some drawing programs do. A presentation is mostly pictures, text and groups, whose proportions are meant to stay, and a group can only be scaled with its proportions; one rule for every corner is easier to learn.
 - **Turning each element of a selection about its own centre.** Simpler (no change to `rotate`), but the selection then falls apart instead of turning as one.
 - **Selecting locked elements with an ordinary click** (and not dragging them). A locked background would then be selected by every click on empty parts of the slide and by every rubber band started over it, which is what locking it was meant to prevent.
-- **The fragment in HTML (`text/html`) instead of plain text**, so that plain text could hold readable text. Browsers clean HTML read through the asynchronous clipboard, and what they keep differs between them; plain text arrives unchanged everywhere. The cost is that pasting into another program gives the envelope's JSON.
+- **The fragment in HTML (`text/html`) instead of plain text**, so that plain text could hold readable text. HTML read through the asynchronous clipboard may be cleaned by the browser before the page gets it (not checked in each browser), while plain text arrives as it was written. The cost is that pasting into another program gives the envelope's JSON.
 - **A fresh offset for every paste**, so repeated pastes step down and to the right. Duplicate already does that; paste keeps the place, which is what pasting into another document needs.
 
 ## Known limitations
@@ -97,7 +97,7 @@ The menu is a Svelte component over the canvas, drawn from a small store on the 
 - The rubber band selects when it is let go; it does not show what it would select while dragging.
 - Each arrow key press is an undo step of its own.
 - The context menu shows no shortcuts and has no submenus; there is no long press for touch, and only the first pointer is used (0007).
-- The context menu's paste needs the browser's permission to read the clipboard: Chromium asks once, Firefox and WebKit show a paste button of their own; where it is refused, the menu pastes the last copy made in the same editor.
+- The context menu's paste needs the browser's permission to read the clipboard: Chromium can be given it once, and other browsers may ask the user each time (not tested: see Tests); where it is refused, the menu pastes the last copy made in the same editor.
 - Handles are placed and hit in root space, as tool pointer events are (0007, precision of `ToolPointerEvent.world`); under a camera anchored deep in a frame they inherit that limit.
 - A selection holding a group can be scaled but not rotated, because groups are not rotated (0005 section 12.1).
 
@@ -109,4 +109,4 @@ The menu is a Svelte component over the canvas, drawn from a small store on the 
 - `tests/e2e/selection.spec.ts` (Playwright, the development page): click, Shift-click and a rubber band; Ctrl+G and scaling the group from a corner with its proportions kept, one Ctrl+Z taking it back; Ctrl+Shift+G; rotating with the handle; Ctrl+Shift+L, a locked element that is not dragged, a right click and the menu's Unlock, undone and redone; Ctrl+D and Delete, each undone; Ctrl+C, and in Chromium the system clipboard read back as the envelope; Ctrl+V in a second page with an empty document of its own, so that only the system clipboard can carry the copy; copy from the context menu and paste in the second page; in Chromium, paste from the context menu through the asynchronous clipboard. Runs in Chromium and Firefox (`chromium` and `editor-firefox`), and in WebKit (`editor-webkit`) where Playwright's WebKit runs.
 - `tests/e2e/webkitgtk/editor_check.py`: in the system's WebKitGTK under Xvfb, with real input, besides the steps of 0007: copy and paste through the system clipboard, scaling from a corner handle and rotating with the handle, each undone, and the context menu opened with a right click and closed with Escape.
 
-What the tests cannot cover headless: pasting from or into another program (the browsers' headless clipboards are their own); the permission prompts of Firefox and WebKit for the context menu's paste, which a headless browser does not show (so that path is tested in Chromium only, with the permission granted); and Playwright's WebKit, which needs the libraries of the Ubuntu release it was built for and runs in CI only (WebKitGTK is checked instead).
+What the tests cannot cover headless: pasting from or into another program (the tests copy and paste inside one browser); the permission prompts of Firefox and WebKit for the context menu's paste, which a headless browser does not show (so that path is tested in Chromium only, with the permission granted); and Playwright's WebKit, which needs the libraries of the Ubuntu release it was built for and runs in CI only (WebKitGTK is checked instead).
