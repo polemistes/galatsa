@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Runs the image steps of tests/e2e/images.spec.ts in WebKitGTK.
 
-WebKit has no ImageDecoder and cannot encode WebP, so images take other paths
-there than in Chromium and Firefox: reduced versions are encoded as JPEG (or
-PNG for images with transparency), and decoding runs in a worker. On an empty
+WebKit has no ImageDecoder, so decoding runs in a worker there; and a WebKit
+that cannot encode WebP makes JPEG versions (PNG for images with
+transparency). On an empty
 document of the development page (apps/web), in the system's WebKitGTK:
 
 - the same JPEG imported five times is one asset, with reduced versions made
-  once, as JPEG; a PNG with transparency gets PNG versions;
+  once; a PNG with transparency gets its versions too;
 - an SVG is drawn (a pixel of its red square is red on the canvas);
 - a crop keeps the image's place and is one undo step;
 - a document of 60 images saved as a file and opened again draws every image
-  from its stored versions, reading and decoding no original.
+  from its stored versions, reading and decoding no original but the small
+  SVG's, which has no versions.
 
 The images are drawn in the page; nothing is downloaded. It uses the window,
 server and event loop of editor_check.py. Run it without a visible window,
@@ -158,15 +159,21 @@ def scenario():
     print(state, flush=True)
     assert "error" not in state, state
     assert state["assets"] == 1, state
-    # WebKit cannot encode WebP: opaque images get JPEG versions, others PNG.
-    assert state["jpegVersions"] == ["256:image/jpeg", "512:image/jpeg", "1024:image/jpeg"], state
-    assert state["pngVersions"] == ["256:image/png", "512:image/png"], state
+    # WebKitGTK 2.54 encodes WebP; a WebKit that cannot gets JPEG versions for
+    # opaque images and PNG for others.
+    sizes = lambda versions: [v.split(":")[0] for v in versions]  # noqa: E731
+    assert sizes(state["jpegVersions"]) == ["256", "512", "1024"], state
+    assert sizes(state["pngVersions"]) == ["256", "512"], state
+    assert all(v.split(":")[1] in ("image/webp", "image/jpeg") for v in state["jpegVersions"]), state
+    assert all(v.split(":")[1] in ("image/webp", "image/png") for v in state["pngVersions"]), state
     assert state["svgSettled"] and state["svgPixel"] == [255, 0, 0], state
     assert state["crop"] == {"ok": True, "steps": 1, "right": True, "narrower": True}, state
     reopened = state["reopened"]
     assert state["reopenedSettled"], state
     assert reopened["images"] == 67, state
-    assert reopened["originalReads"] == 0 and reopened["originalDecodes"] == 0, state
+    # The SVG is too small for reduced versions: its original is the only one
+    # read and decoded. Every other image is drawn from its stored versions.
+    assert reopened["originalReads"] == 1 and reopened["originalDecodes"] == 1, state
 
 
 base.scenario = scenario
