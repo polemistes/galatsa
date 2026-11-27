@@ -2,8 +2,9 @@
 
 // The viewing parts of the extension interface stay free of editing code: a
 // bundle of what a player imports (the viewing host, the comfort guard, the
-// placeholder, and the viewing parts of the example extensions) contains no Yjs
-// and none of the document's operations, and stays small. A bundle of the
+// placeholder, the built-in transitions with their comfort settings, and the
+// viewing parts of the example extensions) contains no Yjs and none of the
+// document's operations, and stays small. A bundle of the
 // editing entry is built the same way as a control. See section 10 of
 // docs/adr/0005-extension-interface.md.
 
@@ -15,6 +16,7 @@ import { workspaceConfig } from "../../vite.shared.ts";
 const root = join(import.meta.dirname, "..", "..");
 const API = join(root, "packages/extension-api/src");
 const EXAMPLES = join(root, "packages/extensions/examples/src");
+const TRANSITIONS = join(root, "packages/extensions/transitions/src");
 
 /** Builds a virtual entry with the workspace settings and returns the code. */
 async function bundle(entry: string): Promise<string> {
@@ -62,13 +64,16 @@ describe("viewer bundle", () => {
     const code = await bundle(`
       import { ViewHost, guardComfort, drawPlaceholder } from ${JSON.stringify(join(API, "index.ts"))};
       import { exampleViewExtensions } from ${JSON.stringify(join(EXAMPLES, "view.ts"))};
+      import { transitionsExtension, resolveComfort, readComfortPreferences, watchSystemReducedMotion } from ${JSON.stringify(join(TRANSITIONS, "index.ts"))};
       const host = new ViewHost();
-      host.load(exampleViewExtensions);
-      globalThis.viewer = [host, guardComfort, drawPlaceholder];
+      host.load([transitionsExtension, ...exampleViewExtensions]);
+      globalThis.viewer = [host, guardComfort, drawPlaceholder, resolveComfort, readComfortPreferences, watchSystemReducedMotion];
     `);
     for (const mark of EDITING_MARKS) expect(code, mark).not.toContain(mark);
-    // The examples' drawing code is there.
+    // The examples' drawing code and the flight path are there.
     expect(code).toContain("roundRect");
+    expect(code).toContain("Math.asinh");
+    expect(code).toContain("prefers-reduced-motion");
     expect(code.length).toBeLessThan(80_000);
   }, 60_000);
 
