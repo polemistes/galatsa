@@ -516,3 +516,49 @@ test("the crop tool crops by dragging an edge, as one undo step", async ({ page 
   }, before.id);
   expect(undone).toBeNull();
 });
+
+test("WebP and SVG files are imported and drawn", async ({ page }) => {
+  await start(page);
+  const result = await page.evaluate(async () => {
+    const dev = window as unknown as Dev;
+    const editor = dev.galatsaDev.editor()!;
+    editor.services.camera.set({ space: null, cx: 0, cy: 0, zoom: 1 });
+    const webp = await dev.galatsaTestImage(1000, 800, 21, "image/webp");
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">' +
+      '<rect width="40" height="20" fill="#ff0000"/></svg>';
+    await editor.importFiles([
+      new File([webp], "picture.webp", { type: "image/webp" }),
+      new File([svg], "red.svg", { type: "" }),
+    ]);
+    const [, svgId] = editor.selection;
+    const element = editor.scene.element(svgId!)!;
+    const bounds = editor.services.scene.bounds(svgId!)!;
+    editor.services.selection.set([]);
+    // The SVG, 40 by 20 by its viewBox, zoomed far in: drawn sharp from the vector.
+    editor.services.camera.set({
+      space: null,
+      cx: bounds.x + bounds.w / 2,
+      cy: bounds.y + bounds.h / 2,
+      zoom: 16,
+    });
+    return { type: element.type, webpType: webp.type };
+  });
+  expect(result.type).toBe(IMAGE);
+  expect(result.webpType).toBe("image/webp");
+  await settle(page);
+  const pixel = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>(".galatsa-canvas canvas")!;
+    const editor = (window as unknown as Dev).galatsaDev.editor()!;
+    editor.renderNow();
+    const data = canvas
+      .getContext("2d")!
+      .getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data;
+    return {
+      rgb: [data[0], data[1], data[2]],
+      failures: editor.renderer.images!.stats.failures,
+    };
+  });
+  expect(pixel.rgb).toEqual([255, 0, 0]);
+  expect(pixel.failures).toBe(0);
+});
