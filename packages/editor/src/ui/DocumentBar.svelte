@@ -23,13 +23,6 @@
     const message = statusMessage(state);
     return message === null ? null : t(message.key, message.values);
   });
-
-  function saveThenClose(): void {
-    void doc.saveAsFile().then((result) => {
-      // Saved: the file holds everything, so the document can go.
-      if (result?.ok) void doc.closeAnyway();
-    });
-  }
 </script>
 
 <div class="notices">
@@ -59,14 +52,27 @@
 {#if state.phase === "offer-save"}
   <Dialog heading={t("editor:close.heading")}>
     <p>{t("editor:close.detail")}</p>
+    {#each state.notices as notice, index (index)}
+      <p role={notice.severity === "error" ? "alert" : "status"}>
+        {noticeText(i18n, notice)}
+      </p>
+    {/each}
     <div class="buttons">
-      <button type="button" disabled={state.savingFile} onclick={saveThenClose}>
+      <button
+        type="button"
+        disabled={state.savingFile}
+        onclick={() => void doc.saveThenClose()}
+      >
         {t("editor:action.saveAsFile")}
       </button>
-      <button type="button" onclick={() => void doc.closeAnyway()}>
+      <button
+        type="button"
+        disabled={state.savingFile}
+        onclick={() => void doc.closeAnyway()}
+      >
         {t("editor:close.anyway")}
       </button>
-      <button type="button" onclick={() => doc.keepOpen()}>
+      <button type="button" disabled={state.savingFile} onclick={() => doc.keepOpen()}>
         {t("editor:close.keepOpen")}
       </button>
     </div>

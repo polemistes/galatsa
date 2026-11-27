@@ -79,12 +79,40 @@ describe("closing a document", () => {
     expect(await doc.close()).toBe("offer-save");
     expect(doc.state.phase).toBe("offer-save");
     expect(session.closed).toBe(false);
-    const saved = await doc.saveAsFile();
-    expect(saved?.ok).toBe(true);
+    // A file that is checked after writing: the offer closes the document.
+    expect(await doc.saveThenClose()).toBe("closed");
     expect(file.bytes).not.toBeNull();
+    expect(session.closed).toBe(true);
+  });
+
+  it("stays at the offer after a save by download, which nothing can confirm", async () => {
+    const { store, storage, i18n } = setup();
+    const session = await storage.create({ title: "Talk" });
+    const downloads: Uint8Array[] = [];
+    const doc = new EditorDocument(session, {
+      i18n,
+      pickTarget: async (name) => ({
+        name,
+        canRead: false,
+        read: () => Promise.reject(new Error("a download cannot be read back")),
+        write: async (bytes) => {
+          downloads.push(bytes);
+        },
+      }),
+      requestPersistence: async () => true,
+      warnOnUnload: false,
+    });
+    await session.flush();
+    store.failWrites(1_000_000, "full");
+    addBox(session.doc);
+    expect(await doc.close()).toBe("offer-save");
+    expect(await doc.saveThenClose()).toBe("offer-save");
+    expect(downloads).toHaveLength(1);
+    expect(session.closed).toBe(false);
+    expect(doc.state.notices.map((n) => n.code)).toContain("save-downloaded");
+    // The user closes when they have checked the downloads folder.
     await doc.closeAnyway();
     expect(doc.state.phase).toBe("closed");
-    expect(session.closed).toBe(true);
   });
 
   it("goes back to editing when the user keeps it open", async () => {

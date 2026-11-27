@@ -258,6 +258,22 @@ export class EditorDocument {
     return "closed";
   }
 
+  /**
+   * After the offer: saves as a file, and closes if the file is known to hold
+   * everything. A download is not: nothing can confirm that it arrived (the
+   * user may cancel the browser's dialog), so the offer stays, with the notice
+   * that tells the user to check the downloads folder, and the user closes.
+   */
+  async saveThenClose(): Promise<DocumentPhase> {
+    if (this.#state.phase !== "offer-save" || this.#state.savingFile)
+      return this.#state.phase;
+    const result = await this.saveAsFile();
+    const confirmed =
+      result?.ok === true && !result.notices.some((n) => n.code === "save-downloaded");
+    if (confirmed && this.#state.phase === "offer-save") await this.closeAnyway();
+    return this.#state.phase;
+  }
+
   /** After the offer: closes although not everything is stored. */
   async closeAnyway(): Promise<void> {
     this.#set({ phase: "closing" });
