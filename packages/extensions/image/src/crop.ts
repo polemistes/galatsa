@@ -193,8 +193,8 @@ export function cropTool(parts: CropToolParts): ToolDefinition {
       const services = () => session.environment().services;
       /** World units per CSS pixel. */
       const px = (): number => {
-        const s = session.scale();
-        return s > 0 ? 1 / services().camera.get().zoom : 1;
+        const zoom = services().camera.get().zoom;
+        return Number.isFinite(zoom) && zoom > 0 ? 1 / zoom : 1;
       };
       const selected = (): CropTarget | null => {
         const ids = services().selection.get();
