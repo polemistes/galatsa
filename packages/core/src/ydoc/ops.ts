@@ -445,6 +445,34 @@ export function setRefs(
   });
 }
 
+/**
+ * Raises the version of the element's data layout (section 9.4). An extension
+ * calls it when it upgrades an element's data as part of a user's edit, together
+ * with the data writes, inside one `edit()` so that peers never see the new
+ * version without the new data. The version never goes down: a lower version
+ * than the stored one throws, because data written in a newer layout would then
+ * be read with an older one. Frames and groups have no versioned data.
+ */
+export function setTypeVersion(
+  doc: Y.Doc,
+  id: ElementId,
+  typeVersion: number,
+  options?: OpOptions,
+): void {
+  if (!Number.isInteger(typeVersion) || typeVersion < 1)
+    invalid("type version", "must be an integer >= 1");
+  const map = elementMap(doc, id);
+  const type = map.get("type");
+  if (type === GROUP_TYPE || type === FRAME_TYPE)
+    invalid("type version", "frames and groups have no versioned data");
+  const stored = map.get("typeVersion");
+  const current = Number.isInteger(stored) && (stored as number) >= 1 ? stored : 1;
+  if (typeVersion < (current as number))
+    invalid("type version", "must not be lower than the stored version");
+  if (typeVersion === stored) return;
+  setKey(doc, id, "typeVersion", typeVersion, options);
+}
+
 /** Nesting level of a value directly in a data or ext map of a record. */
 const VALUE_LEVEL = 5;
 

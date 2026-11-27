@@ -631,7 +631,7 @@ Opening read-only was rejected: the reader cannot know what it would misdraw.
 **Policy for keeping merge identity** (decided now, before any extension ships):
 
 1. Format changes are made additive wherever possible, so they never reset merge identity.
-2. Readers do not migrate element data on load. An extension MUST read every older `typeVersion` of its own data, and a live document may mix `typeVersion`s of one type. An extension upgrades an element's data only as part of a user's edit of that element, in the same local transaction (so it merges like any edit, and is attributed and undoable). Extensions SHOULD design upgrades so that two users upgrading concurrently converge (add keys rather than rewrite them).
+2. Readers do not migrate element data on load. An extension MUST read every older `typeVersion` of its own data, and a live document may mix `typeVersion`s of one type. An extension upgrades an element's data only as part of a user's edit of that element, in the same local transaction (the data writes and `setTypeVersion`, which never lowers the version, inside one `edit()`), so it merges like any edit and is attributed and undoable. Extensions SHOULD design upgrades so that two users upgrading concurrently converge (add keys rather than rewrite them).
 3. An element whose `typeVersion` is higher than its extension knows is treated as an element of a missing extension (section 9.5) and never down-migrated.
 4. An incompatible format change that cannot avoid a migration resets merge identity; old copies are then refused by sync rather than merged wrongly, and `importCopy` is the way to bring their work over. Migrating live shared documents is an open question (section 13).
 
