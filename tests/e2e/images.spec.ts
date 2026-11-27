@@ -53,6 +53,7 @@ interface Session {
   checkpoint(): Promise<void>;
   close(): Promise<unknown>;
   previewFacts(id: string): Promise<Array<{ width: number; height: number }>>;
+  getPreviews(id: string): Promise<Array<{ width: number; bytes: Uint8Array }>>;
 }
 
 interface Editor {
@@ -329,7 +330,13 @@ test("an image of 12 megapixels does not stall the frames while zooming", async 
       last = now;
     }
     const stats = editor.renderer.images!.stats;
+    // What the reduced versions cost beside the original.
+    const app = await dev.galatsaDev.ready;
+    const asset = String(editor.scene.element(id)!.data["asset"]);
+    const versions = await app.state.document!.session.getPreviews(asset);
     return {
+      originalBytes: blob.size,
+      versions: versions.map((v) => `${v.width}:${v.bytes.length}`),
       intervals,
       renders,
       decoder: editor.renderer.images!.decoderKind,
@@ -343,7 +350,8 @@ test("an image of 12 megapixels does not stall the frames while zooming", async 
     `12 MP zoom (${result.decoder}): frames over 33 ms ${over(33)}, over 50 ms ${over(50)}, ` +
       `over 100 ms ${over(100)} of ${result.intervals.length}; longest frame ` +
       `${Math.max(...result.intervals).toFixed(1)} ms; render() max ${maxRender.toFixed(1)} ms; ` +
-      `decodes ${result.decodes}, of the original at full size ${result.originalDecodes}`,
+      `decodes ${result.decodes}, of the original at full size ${result.originalDecodes}; ` +
+      `original ${result.originalBytes} bytes, versions (long side:bytes) ${result.versions.join(" ")}`,
   );
   // Decoding happens off the main thread: no frame stalls while new versions
   // load, and drawing stays well within a frame.
