@@ -2,7 +2,7 @@
 
 - Status: proposed
 - Date: 2026-11-27
-- Code: `packages/player` (`@galatsa/player`, and `@galatsa/player/core` for the part without the DOM); `EditorServices.presentation` and `PresentationRequest` in `packages/extension-api`; `present.ts`, `Editor.setPresenter`, `Editor.present`, `Editor.presenting` and `Editor.viewing` in `packages/editor`; the commands `present` and `present-from-here` and the panel's button in `packages/extensions/routes`; `scripts/lib/viewer-bundle.test.ts`; `tests/e2e/presentation.spec.ts`
+- Code: `packages/player` (`@galatsa/player`, and `@galatsa/player/core` for the part without the DOM); `EditorServices.presentation` and `PresentationRequest` in `packages/extension-api`; `present.ts`, `Editor.setPresenter`, `Editor.present`, `Editor.presenting` and `Editor.viewing` in `packages/editor`; the commands `present` and `present-from-here` and the panel's button in `packages/extensions/routes`; `scripts/lib/viewer-bundle.test.ts`; `tests/e2e/presentation.spec.ts`; `tests/e2e/webkitgtk/presentation_check.py`
 
 ## Context
 
@@ -186,7 +186,7 @@ To be put to the users ("brukeratferd, Claudes valg"):
 - **The camera does not follow an anchor frame that moves while roaming** (an edit by someone else during a presentation): it is in that frame's space and moves with it.
 - **Safari's gesture events** (a pinch on a trackpad in Safari) are not handled by the player yet; Ctrl with the wheel and two fingers on a touch screen are.
 - **The user's comfort settings** have nowhere to be stored yet: the player uses the defaults with the system's setting and the presenter's toggle; `PlayerOptions.preferences` takes the stored ones when there is a settings view.
-- **Escape with the list open** ends the presentation (see "Full screen and Escape").
+- **Escape with the list open** ends the presentation (see "Full screen and Escape"). In a browser that does not tell the page about Escape in full screen, an Escape pressed within a second after another presentation in the same page ended only leaves full screen; the next one ends it.
 - **No rehearsal aids** (a timer per stop, a countdown), and no choice of screen for full screen: the browser puts it on the screen the window is on.
 - **The bundle is over the limit** (see "The size of the player").
 - The reader of the stops reads all stops and routes again on every change of the document while presenting, as the routes panel does; slow with very many stops, not measured.
@@ -200,6 +200,7 @@ To be put to the users ("brukeratferd, Claudes valg"):
 - `packages/extensions/routes/src/routes.test.ts`: F5 presents the route shown from its first stop without an undo step and is disabled while presenting; Shift+F5 from the chosen stop; a given route and step, and a route that is not there; a document without routes; a failure when there is nowhere to present.
 - `scripts/lib/viewer-bundle.test.ts`: the player's core and the whole player bundled with the extensions' viewing parts, without editing code, Yjs, Svelte or the editor.
 - `tests/e2e/presentation.spec.ts` (Playwright, the development page; Chromium and Firefox, and WebKit where Playwright's WebKit runs), three tests: (1) F5 starts the player in full screen on the route chosen in the panel; PageDown, the arrows and PageUp; what a stop shows and hides, read from the colour in the middle of the canvas; the black screen with B and the full stop; a number and Enter; Home and End; nothing after the last stop; the list with the stops' names, the arrow keys in it and Enter; another route that visits the stop shown; Escape back to the editor with the keys, out of full screen and with no undo step. (2) Keys pressed in the middle of transitions, with every frame's picture recorded and no step larger than a transition can make; the mouse taking the camera in the middle of a flight, the route paused, Backspace back to the stop; the wheel and Ctrl with the wheel, and "next" from roaming; a click; the controls; reduced motion with the still layer of a cross-fade and only its two views shown. (3) The panel's button and Shift+F5 from the chosen stop; the laser pointer under the mouse, and a drag that does not move the canvas; touch taps on the right and in the left quarter, and two fingers that zoom by three about the point between them; the notes in a window of their own with the notes, the position, the next stop, the time and the time used, driven from that window with its buttons and keys, closed with its window and with the presentation. No errors in the console.
+- `tests/e2e/webkitgtk/presentation_check.py` (the system's WebKitGTK, the engine of the Linux desktop app, with real keys and a real mouse through xdotool): F5 and full screen; PageDown, the arrows and PageUp; keys in the middle of a transition, ending exactly at the stop; a drag in the middle of a flight, the route paused, and Backspace; the wheel and "next" after roaming; reduced motion; a click; the notes shown over the presentation, since that window opens no other; Escape back to the canvas.
 
 ## Rejected alternatives
 

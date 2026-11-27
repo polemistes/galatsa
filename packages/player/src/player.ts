@@ -19,7 +19,7 @@ import type { ImageSource, SceneAssets, SceneSource } from "@galatsa/renderer";
 import { keyAction, type KeyAction } from "./keys.ts";
 import { playerMessages } from "./messages/index.ts";
 import type { PresentationSource } from "./model.ts";
-import { openNotes, stepName, type NotesView } from "./notes.ts";
+import { openNotes, positionText, stepName, type NotesView } from "./notes.ts";
 import { Presentation } from "./presentation.ts";
 import { Stage } from "./stage.ts";
 
@@ -360,10 +360,7 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     root.dataset["phase"] = phase;
     root.dataset["position"] = String(position);
     root.dataset["route"] = state.route ?? "";
-    positionButton.textContent =
-      position < 0
-        ? t("position.none")
-        : t("position", { number: position + 1, count: steps.length });
+    positionButton.textContent = positionText(t, position, steps.length);
     previousButton.disabled = !roaming && position <= 0;
     nextButton.disabled = roaming ? position < 0 : position + 1 >= steps.length;
     backButton.disabled = !roaming || position < 0;

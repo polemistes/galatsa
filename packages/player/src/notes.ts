@@ -20,6 +20,15 @@ export function stepName(t: T, step: Step, index: number): string {
   return step.name !== "" ? step.name : t("stop.numbered", { number: index + 1 });
 }
 
+/**
+ * Where the presentation is in its route: "3 of 12"; a dash for the number
+ * when none of the route's stops has been shown yet.
+ */
+export function positionText(t: T, position: number, count: number): string {
+  if (count === 0) return t("position.none");
+  return t("position", { number: position < 0 ? "–" : position + 1, count });
+}
+
 /** Minutes and seconds (and hours, past the first), in digits. */
 export function elapsedDigits(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -142,8 +151,8 @@ function build(
     elapsed.textContent = elapsedDigits(performance.now() - options.started());
     where.textContent =
       step === undefined
-        ? t("position.none")
-        : `${t("position", { number: position + 1, count: steps.length })} · ${stepName(t, step, position)}`;
+        ? positionText(t, position, steps.length)
+        : `${positionText(t, position, steps.length)} · ${stepName(t, step, position)}`;
     paused.hidden = state.phase !== "roaming" || step === undefined;
     const notes = step?.notes ?? "";
     text.textContent = notes !== "" ? notes : t("notes.none");

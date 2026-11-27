@@ -78,6 +78,20 @@ describe("presenting from the editor", () => {
     expect(t.editor.services.presentation.active()).toBe(false);
   });
 
+  it("is not running when the presentation ended while it started, and is told only once", () => {
+    const t = setup();
+    let focused = 0;
+    t.editor.setCanvasFocus(() => focused++);
+    t.editor.setPresenter((_request, ended) => {
+      ended();
+      ended();
+      return { exit: () => ended() };
+    });
+    expect(t.editor.present()).toBe(false);
+    expect(t.editor.presenting).toBe(null);
+    expect(focused).toBe(1);
+  });
+
   it("ends the presentation when the editor goes away", () => {
     const t = setup();
     t.present();

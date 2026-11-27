@@ -1064,13 +1064,16 @@ export class Editor {
       return false;
     // A gesture left open would be drawn in the presentation and committed after it.
     this.pointerCancel();
+    // Told once that it is over, also if that happens before the presenter returns.
+    let over = false;
     const running = this.#presenter(request, () => {
-      if (this.#presenting !== running) return;
+      if (over) return;
+      over = true;
       this.#presenting = null;
       this.focusCanvas();
     });
-    this.#presenting = running;
-    return running !== null;
+    this.#presenting = over ? null : running;
+    return this.#presenting !== null;
   }
 
   /**
