@@ -46,7 +46,9 @@ export const selectAll = defineCommand<undefined, void>({
     const everywhere = { x: -1e300, y: -1e300, w: Number.MAX_VALUE, h: Number.MAX_VALUE };
     const r = resolve(ctx);
     ctx.services.selection.set(
-      ctx.services.scene.elementsIn(everywhere, "touching").filter((id) => !r.isLocked(id)),
+      ctx.services.scene
+        .elementsIn(everywhere, "touching")
+        .filter((id) => !r.isLocked(id)),
     );
   },
 });

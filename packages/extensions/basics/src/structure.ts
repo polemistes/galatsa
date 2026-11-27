@@ -63,7 +63,8 @@ function planReparent(ctx: CommandContext, args: unknown): ReparentPlan | undefi
   const ids = readIds(args);
   const { target, index } = (args ?? {}) as Partial<ReparentArgs>;
   if (ids === undefined || (target !== null && !isId(target))) return undefined;
-  if (index !== undefined && (!Number.isSafeInteger(index) || index < 0)) return undefined;
+  if (index !== undefined && (!Number.isSafeInteger(index) || index < 0))
+    return undefined;
   const r = resolve(ctx);
   if (!isOpenContainer(r, target) || !canTargetAll(ctx, r, ids)) return undefined;
   // Nothing can go into itself or into something inside it.
@@ -85,6 +86,7 @@ export const reparent = defineCommand<ReparentArgs, void>({
   name: "reparent",
   label: label("reparent"),
   undoLabel: label("reparent.step"),
+  quick: true,
   enabled: (ctx, args) => planReparent(ctx, args) !== undefined,
   execute(ctx, args) {
     const plan = planReparent(ctx, args) ?? refuse("reparent");
@@ -159,12 +161,14 @@ function restackCommand(
   name: "bring-to-front" | "send-to-back" | "bring-forward" | "send-backward",
   dir: Direction,
   shortcuts: readonly string[],
+  quick: boolean,
 ): CommandDefinition<IdsArgs, void> {
   return defineCommand<IdsArgs, void>({
     name,
     label: label(name),
     undoLabel: label(`${name}.step`),
     shortcuts,
+    quick,
     enabled: (ctx, args) => readRestack(ctx, args, dir) !== undefined,
     execute(ctx, args) {
       const ids = readRestack(ctx, args, dir) ?? refuse(name);
@@ -192,14 +196,30 @@ function restackCommand(
   });
 }
 
-export const bringToFrontCommand = restackCommand("bring-to-front", "front", [
-  "Mod+Shift+]",
-]);
-export const sendToBackCommand = restackCommand("send-to-back", "back", ["Mod+Shift+["]);
-export const bringForwardCommand = restackCommand("bring-forward", "forward", ["Mod+]"]);
-export const sendBackwardCommand = restackCommand("send-backward", "backward", [
-  "Mod+[",
-]);
+export const bringToFrontCommand = restackCommand(
+  "bring-to-front",
+  "front",
+  ["Mod+Shift+]"],
+  true,
+);
+export const sendToBackCommand = restackCommand(
+  "send-to-back",
+  "back",
+  ["Mod+Shift+["],
+  true,
+);
+export const bringForwardCommand = restackCommand(
+  "bring-forward",
+  "forward",
+  ["Mod+]"],
+  false,
+);
+export const sendBackwardCommand = restackCommand(
+  "send-backward",
+  "backward",
+  ["Mod+["],
+  false,
+);
 
 // ---------------------------------------------------------------------------
 // Groups
@@ -283,7 +303,9 @@ export const lock = defineCommand<IdsArgs, void>({
       for (const id of ids) setLocked(ctx.doc, id, true);
     });
     const locked = new Set(ids);
-    ctx.services.selection.set(ctx.services.selection.get().filter((id) => !locked.has(id)));
+    ctx.services.selection.set(
+      ctx.services.selection.get().filter((id) => !locked.has(id)),
+    );
   },
 });
 
@@ -344,6 +366,8 @@ export const deleteCommand = defineCommand<IdsArgs, void>({
     const ids = readDelete(ctx, args) ?? refuse("delete");
     deleteElements(ctx.doc, ids);
     const r = resolve(ctx);
-    ctx.services.selection.set(ctx.services.selection.get().filter((id) => !r.isGone(id)));
+    ctx.services.selection.set(
+      ctx.services.selection.get().filter((id) => !r.isGone(id)),
+    );
   },
 });

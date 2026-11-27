@@ -236,7 +236,11 @@ function planPaste(ctx: CommandContext, args: unknown): PastePlan | undefined {
   if (args === null || typeof args !== "object") return undefined;
   const a = args as Partial<PasteArgs>;
   const parent = a.parent ?? null;
-  if ((parent !== null && !isId(parent)) || !optionalNumber(a.dx) || !optionalNumber(a.dy))
+  if (
+    (parent !== null && !isId(parent)) ||
+    !optionalNumber(a.dx) ||
+    !optionalNumber(a.dy)
+  )
     return undefined;
   if (!isOpenContainer(resolve(ctx), parent)) return undefined;
   const { fragment } = readFragment(a.fragment);
