@@ -110,6 +110,9 @@ const ZOOM_PER_PIXEL = 0.01;
 const MAX_ZOOM_PIXELS = 25;
 const KEY_ZOOM = 1.5;
 
+/** When a presentation in this page last ended (the page's clock). */
+let lastEnd = -Infinity;
+
 /** Starts a presentation in `parent`, over everything else in it. */
 export function mountPlayer(parent: HTMLElement, options: PlayerOptions): MountedPlayer {
   const doc = parent.ownerDocument;
@@ -169,8 +172,11 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
     frame = 0;
     if (disposed) return;
     presentation.resize(stage.screen);
+    // Asked before the picture is taken: a motion that ends between the two
+    // still gets the frame that shows where it ended (and tells that it did).
+    const moving = presentation.moving;
     stage.draw(presentation.picture());
-    if (presentation.moving) kick();
+    if (moving) kick();
   }
 
   // ---------------------------------------------------------------------------
@@ -381,7 +387,9 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
    * the F key, or a notes window that the browser leaves full screen for.
    */
   let wasFull = false;
-  let leaving = 0;
+  // Nor when a presentation in this page has just ended: it may still be on
+  // its way out of full screen, and would take this one with it.
+  let leaving = lastEnd + 1000;
   const enterFullscreen = (): void => {
     try {
       void root.requestFullscreen?.()?.catch(() => {});
@@ -467,6 +475,7 @@ export function mountPlayer(parent: HTMLElement, options: PlayerOptions): Mounte
   function exit(): void {
     if (disposed) return;
     disposed = true;
+    lastEnd = win.performance.now();
     win.cancelAnimationFrame(frame);
     win.clearInterval(clock);
     win.clearTimeout(idleTimer);

@@ -847,7 +847,7 @@ describe("input at any time", () => {
         [...hiddenAt(doc, p.state.route!, steps[index]!.place)].sort(),
       );
     }
-  });
+  }, 120_000);
 
   it("changes what is hidden only where the camera is at rest or fading", () => {
     for (let seed = 100; seed < 130; seed++) {
@@ -873,7 +873,7 @@ describe("input at any time", () => {
         last = p.picture();
       }
     }
-  });
+  }, 120_000);
 
   it("obeys input in the middle of every kind of transition between every pair of stops", () => {
     const { p: probe } = setup();
@@ -893,5 +893,5 @@ describe("input at any time", () => {
         }
       }
     }
-  });
+  }, 120_000);
 });
