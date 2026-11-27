@@ -577,13 +577,13 @@ describe("changing the kind", () => {
       x: 0,
       y: 0,
       size: { w: 10, h: 0 },
-      data: { kind: "arrow", head: "big" },
+      data: { kind: "future-line", head: "big" },
     });
     expect(t.run(SHAPE_SET, { ids: [id], key: "kind", value: "rect" })).toMatchObject({
       ok: false,
       reason: "disabled",
     });
-    expect(t.element(id).data).toEqual({ kind: "arrow", head: "big" });
+    expect(t.element(id).data).toEqual({ kind: "future-line", head: "big" });
   });
 });
 
@@ -716,7 +716,7 @@ describe("a kind from a newer version", () => {
 describe("a kind from a newer version drawn as a line", () => {
   it("is a solid line along the box, at least 2 device pixels wide, with the label above it", () => {
     const ctx = createRecordingDrawContext({ scale: 2, t: (label) => label });
-    const { model } = read({ kind: "arrow", stroke: "#000000", strokeWidth: 0.25 });
+    const { model } = read({ kind: "future-line", stroke: "#000000", strokeWidth: 0.25 });
     shapeView.draw(model, ctx, box(120, 0));
     const stroke = ctx.calls.find((c) => c.op === "stroke");
     expect(stroke).toMatchObject({ path: ["moveTo(0,0)", "lineTo(120,0)"] });
@@ -726,7 +726,11 @@ describe("a kind from a newer version drawn as a line", () => {
     expect(text?.op === "text" && text.y).toBeLessThan(0);
     // A thick outline keeps its width.
     const thick = createRecordingDrawContext({ scale: 2 });
-    shapeView.draw(read({ kind: "arrow", strokeWidth: 9 }).model, thick, box(120, 0));
+    shapeView.draw(
+      read({ kind: "future-line", strokeWidth: 9 }).model,
+      thick,
+      box(120, 0),
+    );
     expect(thick.calls.find((c) => c.op === "stroke")).toMatchObject({
       style: { width: 9 },
     });
@@ -965,6 +969,43 @@ describe("the drawing tool", () => {
       const e = t.element(t.services.state.selection[0]!);
       expect(e.data["strokeWidth"]).toBeCloseTo(2 / zoom, 12);
     }
+  });
+
+  it("gives a new shape its kind's own defaults, lengths the same on screen at any zoom", () => {
+    for (const zoom of [0.01, 1, 4]) {
+      const t = setup();
+      t.services.state.camera = { space: null, cx: 0, cy: 0, zoom };
+      for (const [kind, radius] of [
+        ["speech-bubble", 16],
+        ["rect", 0],
+      ] as const) {
+        const { handler } = tool(t, kind);
+        handler.pointerDown!(pointer({ x: 0, y: 0 }));
+        handler.pointerUp!(pointer({ x: 50, y: 50 }));
+        const e = t.element(t.services.state.selection[0]!);
+        expect(e.data["cornerRadius"], kind).toBeCloseTo(radius / zoom, 12);
+        expect(e.data["strokeWidth"], kind).toBeCloseTo(2 / zoom, 12);
+      }
+    }
+    // The insert command gives them too, unless the style says otherwise;
+    // data without the key still means the common default.
+    const t = setup();
+    const insert = (style?: object) =>
+      t.element(
+        t.must<ElementId>(SHAPE_INSERT, {
+          kind: "speech-bubble",
+          x: 0,
+          y: 0,
+          w: 10,
+          h: 10,
+          ...(style !== undefined ? { style } : {}),
+        }),
+      ).data["cornerRadius"];
+    expect(insert()).toBe(16);
+    expect(insert({ cornerRadius: 3 })).toBe(3);
+    expect(shapeView.read({ kind: "speech-bubble" }, 1, () => {}).cornerRadius).toBe(
+      DEFAULT_STYLE.cornerRadius,
+    );
   });
 
   it("makes a shape of a fixed size on screen for a click", () => {

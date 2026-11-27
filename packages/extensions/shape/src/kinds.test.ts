@@ -523,6 +523,23 @@ describe("the table of kinds", () => {
     expect(() => kindTable([kind("a"), kind("a")])).toThrow(/listed twice/);
   });
 
+  it("refuses defaults that are not style keys or do not fit, and writes the ones that do", () => {
+    const withDefaults = (defaults: object): ShapeKind => ({
+      ...kind("a"),
+      defaults,
+    });
+    expect(() => kindTable([withDefaults({ kind: "rect" })])).toThrow(/not a style key/);
+    expect(() => kindTable([withDefaults({ tail: 1 })])).toThrow(/not a style key/);
+    expect(() => kindTable([withDefaults({ cornerRadius: -1 })])).toThrow(/does not fit/);
+    expect(() => kindTable([withDefaults({ fill: "red" })])).toThrow(/does not fit/);
+    const table = kindTable([withDefaults({ cornerRadius: 5, fill: null }), kind("b")]);
+    expect(newShapeData(table, "a")).toMatchObject({ cornerRadius: 5, fill: null });
+    expect(newShapeData(table, "a", { cornerRadius: 2 })).toMatchObject({
+      cornerRadius: 2,
+    });
+    expect(newShapeData(table, "b")).toMatchObject({ cornerRadius: 0 });
+  });
+
   it("refuses a parameter under a common key, a key that means two things, and a default that does not fit", () => {
     const param = (key: string, def = 0): ShapeParam => ({
       type: "number",
