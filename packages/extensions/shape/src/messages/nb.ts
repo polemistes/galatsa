@@ -30,4 +30,10 @@ export default {
   "param.endHead.none": "Ingen",
   "param.endHead.arrow": "Pilspiss",
   "param.headSize": "Størrelse på pilspiss",
+  "kind.bracket": "Klamme",
+  "param.bracket": "Type klamme",
+  "param.bracket.curly": "Krøllparentes",
+  "param.bracket.square": "Hakeparentes",
+  "param.bracket.round": "Rund parentes",
+  "param.pointY": "Plassering av spissen",
 };

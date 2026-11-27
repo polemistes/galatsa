@@ -30,4 +30,10 @@ export default {
   "param.endHead.none": "None",
   "param.endHead.arrow": "Arrowhead",
   "param.headSize": "Arrowhead size",
+  "kind.bracket": "Bracket",
+  "param.bracket": "Bracket type",
+  "param.bracket.curly": "Curly",
+  "param.bracket.square": "Square",
+  "param.bracket.round": "Round",
+  "param.pointY": "Tip position",
 };
