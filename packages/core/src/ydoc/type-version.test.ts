@@ -6,13 +6,7 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { FRAME_TYPE, InvalidDocumentError } from "../model/index.ts";
-import {
-  addElement,
-  edit,
-  initDocument,
-  setData,
-  setTypeVersion,
-} from "./ops.ts";
+import { addElement, edit, initDocument, setData, setTypeVersion } from "./ops.ts";
 import { toSnapshot } from "./snapshot.ts";
 import { createUndoManager } from "./track.ts";
 

@@ -1,0 +1,8 @@
+{
+  // Environment-agnostic, like the extension interface it is written against.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.mts", "src/**/*.cts"]
+}
