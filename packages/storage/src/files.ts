@@ -121,6 +121,9 @@ function pickerTypes(description: string) {
   return [{ description, accept: { [MIMETYPE]: [FILE_EXTENSION] } }];
 }
 
+/** How long a file chooser's "cancel" waits for a "change" that may follow it. */
+const CANCEL_GRACE_MS = 1000;
+
 /** True where the browser can open and save files in place (File System Access API). */
 export function canSaveInPlace(): boolean {
   return typeof (globalThis as PickerWindow).showSaveFilePicker === "function";
@@ -149,11 +152,23 @@ export async function pickFileToOpen(
     const input = document.createElement("input");
     input.type = "file";
     input.accept = `${FILE_EXTENSION},${MIMETYPE}`;
+    input.style.display = "none";
     input.addEventListener("change", () => {
       const file = input.files?.[0];
+      input.remove();
       resolve(file ? uploadedFile(file) : null);
     });
-    input.addEventListener("cancel", () => resolve(null));
+    // A "cancel" can come before the "change" of a file that was chosen
+    // (Firefox driven by Playwright does this), so a cancel counts only when
+    // no file follows within a moment.
+    input.addEventListener("cancel", () => {
+      setTimeout(() => {
+        if (input.files?.length) return;
+        input.remove();
+        resolve(null);
+      }, CANCEL_GRACE_MS);
+    });
+    document.body.append(input);
     input.click();
   });
 }
