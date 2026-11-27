@@ -41,6 +41,24 @@ export {
 } from "./extensions.ts";
 export { mountEditor } from "./dom.ts";
 export {
+  FRAGMENT_MIME,
+  decodeFragment,
+  encodeFragment,
+  readClipboard,
+  writeFragment,
+  type ClipboardContent,
+  type ClipboardSource,
+  type ClipboardTarget,
+} from "./clipboard.ts";
+export {
+  ContextMenu,
+  menuEntries,
+  openContextMenu,
+  type MenuClipboard,
+  type MenuEntry,
+  type MenuState,
+} from "./context-menu.ts";
+export {
   EditorDocument,
   type DocumentOptions,
   type DocumentPhase,
