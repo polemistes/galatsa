@@ -77,9 +77,9 @@ This settles the matching part of 0005 section 13, "Can wait" 1, as far as the e
 
 ### The interface: Svelte
 
-The user interface around the canvas is Svelte 5, with runes (the users' choice: they want to reuse Galatsa's interface components in their own Svelte programs, and Svelte is faster). It is mounted with Svelte's `mount` into its own element over the canvas (`renderEditorUi`), and holds the save status, notices, the close and recovery dialogs, extensions that were not loaded and shortcut conflicts, and open custom panels. The components read the editor's own stores (the program, a document, the editor, the translations) through `Watched`, a small adapter over `createSubscriber` from `svelte/reactivity`, so the stores stay plain TypeScript that the tests run in Node. All text comes from message bundles (`editor` for the editor's own, `storage` for the storage layer's), in Norwegian and English, and changes with the language. The Svelte binding for custom panels adds `svelte?: Component<PanelProps>` to `CustomPanelViews` by declaration merging (0005 section 8); `PanelProps` gives the panel the command context. No binding for other UI libraries is built. Panels of fields need the field renderer and are not drawn yet. There is no toolbar and no properties panel yet.
+The user interface around the canvas is Svelte 5, with runes, chosen by the project: Svelte compiles components to direct updates of the elements that depend on a changed value, without a virtual DOM to compare, so interface updates are small and fast, and the runtime the program ships is small. It is mounted with Svelte's `mount` into its own element over the canvas (`renderEditorUi`), and holds the save status, notices, the close and recovery dialogs, extensions that were not loaded and shortcut conflicts, and open custom panels. The components read the editor's own stores (the program, a document, the editor, the translations) through `Watched`, a small adapter over `createSubscriber` from `svelte/reactivity`, so the stores stay plain TypeScript that the tests run in Node. All text comes from message bundles (`editor` for the editor's own, `storage` for the storage layer's), in Norwegian and English, and changes with the language. The Svelte binding for custom panels adds `svelte?: Component<PanelProps>` to `CustomPanelViews` by declaration merging (0005 section 8); `PanelProps` gives the panel the command context. No binding for other UI libraries is built. Panels of fields need the field renderer and are not drawn yet. There is no toolbar and no properties panel yet.
 
-**Tooling.** `@sveltejs/vite-plugin-svelte` compiles the components in the web app and in Vitest; `svelte-check` checks their types in the editor's `typecheck` (warnings fail it); `eslint-plugin-svelte` and `prettier-plugin-svelte` lint and format them. The TypeScript compiler alone sees an import of a `.svelte` file through the declaration Svelte ships for `*.svelte`. The editor's build compiles its TypeScript with `tsc` and copies the `.svelte` files next to the output, as Svelte libraries ship them; a program that uses the built package compiles them with the Svelte plugin. The package marks `.svelte` and `.css` files as having side effects, so a bundler keeps the components' styles.
+**Tooling.** `@sveltejs/vite-plugin-svelte` compiles the components in the web app and in Vitest; `svelte-check` checks their types in the editor's `typecheck` (warnings fail it); `eslint-plugin-svelte` and `prettier-plugin-svelte` lint and format them. The TypeScript compiler alone sees an import of a `.svelte` file through the declaration Svelte ships for `*.svelte`. The web app compiles the editor's components from source, like the rest of the workspace; the editor's own build runs `tsc` alone. The package marks `.svelte` and `.css` files as having side effects, so a bundler keeps the components' styles.
 
 **The hard-coded text check** reads components with `svelte/compiler`'s parser. Text in the markup, text attributes and component props (the same names as in JSX, with the same leniency for names that hold text only by convention), `{@html}`, the value of button-like inputs and actions named like text (`use:tooltip`) are text places. The `<script>` blocks and every expression of the markup (handlers, block conditions, `{@const}`) are checked as one TypeScript script with the rules of `.tsx` files, so a markup expression follows the script's constants and functions, and an `alert("...")` in a handler is found as in JSX; `$state` and `$derived` are followed like their value. `<!-- i18n-ignore: reason -->` works in markup. A component the parser rejects is reported. The workspace check reads the scripts, styles and element paths of components, and no package that Node runs from source may reach one.
 
@@ -97,12 +97,19 @@ Images are drawn from the storage session's asset bytes, one stored version each
 
 ## Known limitations
 
-- The clipboard for copy and paste is in the editor's memory, not the system's.
+- Copy, cut and paste come through the browser's clipboard events, but the fragment is kept in the editor's memory, not on the system clipboard.
 - In-place text editing is not built; the text sketch's tool inserts a text box, and asking to edit it does nothing.
 - The camera is the minimum: no touch gestures, no keyboard camera, no anchoring in frames.
 - Only the first pointer is used; multi-touch is later.
 - Field panels are not drawn.
 - The development page's sample scene is regenerated per `?fresh`, and every copy stays in the store until deleted (0006 section 11, item 4).
+- Opening another document (a restored offer) disposes the editor of the one before but does not close its storage session, and a second click on a recovery choice while the first is still running can open the default document twice.
+- In the recovery dialog, a problem from a failed restore stays shown with the next offer, and discarding that ends in "the document is open" or "never saved to a file" shows no message.
+- A preview of a container reads every element inside it again on each pointer move, although their positions in the container do not change: about 29 ms per move for a frame with 5,000 elements (measured in Node, without drawing).
+- The Svelte components have no tests of their own in a browser; the end-to-end test covers the status bar only.
+- The list of load problems is keyed by extension id, so two problems for the same id would break it.
+- Keyboard layouts without Latin letters (Russian, Greek): Ctrl+Z gives the layout's letter, so letter shortcuts do not match (only copy, cut and paste are found by place).
+- On Windows, Ctrl together with AltGr cannot be told from AltGr alone; `Mod+[` on a Norwegian keyboard is Ctrl and the key right of P there.
 
 ## Tests
 
@@ -121,10 +128,9 @@ Images are drawn from the storage session's asset bytes, one stored version each
 - **A preview service inside the renderer** (`setPreview`). The scene source already stands between the document and the renderer; laying the preview over it there needs no change to the renderer, and the renderer keeps reading one source.
 - **Drawing overlays on a second canvas** above the renderer's. It would need a second implementation of the drawing context, or exporting the renderer's internal one; and the two canvases would have to agree on size and device pixel ratio.
 - **Matching every shortcut by key place** (`KeyboardEvent.code`), as some editors do. Ctrl+Z would then be Ctrl+W on a French keyboard. Matching letters by character and punctuation also by place gives the expected letter shortcuts on every layout and still reaches bracket shortcuts.
-- **React** for the interface. The first version of this foundation used it; the users chose Svelte instead, to reuse the components in their own Svelte programs and for speed.
+- **React** for the interface. The first version of this foundation used it; Svelte was chosen instead, for smaller and faster interface updates without a virtual DOM.
 - **A framework-neutral panel binding** (custom elements, or a mount function per panel), so panels could be written in any library. Not wanted by the users; the Svelte binding is the only one.
 - **A component library or a state library.** The interface so far is a status bar and two dialogs; plain Svelte over the editor's own stores is enough, and adds nothing to review.
-- **`@sveltejs/package`** to build the editor. Copying the components next to `tsc`'s output gives what a Svelte library ships, without another tool.
 
 ## New dependencies
 
