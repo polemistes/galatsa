@@ -219,8 +219,9 @@ export class ExtensionHost implements ExtensionLookup {
     }
 
     const failed = new Set<ExtensionId>(problems.map((p) => p.extension));
-    // Activate in passes: each pass activates, in the given order, every
-    // extension whose dependencies are settled.
+    // Settle one extension at a time: the first, in the given order, whose
+    // dependencies are settled. So the order only changes where a dependency
+    // requires it.
     let progress = true;
     while (pending.size > 0 && progress) {
       progress = false;
@@ -246,7 +247,7 @@ export class ExtensionHost implements ExtensionLookup {
           failed.add(id);
           pending.delete(id);
           progress = true;
-          continue;
+          break;
         }
         if (!ready) continue;
         pending.delete(id);
@@ -256,6 +257,8 @@ export class ExtensionHost implements ExtensionLookup {
           report(id, "activate-failed", error);
           failed.add(id);
         }
+        // Start again from the first: an earlier extension may be ready now.
+        break;
       }
     }
     // What is left waits for itself: a dependency cycle.
@@ -372,7 +375,7 @@ export class ExtensionHost implements ExtensionLookup {
           undo.push(() => {
             if (
               ![...this.#loaded.values()].some((l) =>
-                l.extension.messages?.includes(bundle),
+                l.extension.messages?.some((b) => b.namespace === bundle.namespace),
               )
             )
               this.#i18n?.unregister(bundle.namespace);

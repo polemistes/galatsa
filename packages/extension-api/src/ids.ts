@@ -63,8 +63,8 @@ export function availableIn(quick: boolean | undefined, mode: Mode): boolean {
 /**
  * A keyboard shortcut: modifiers and one key joined by "+", for example
  * "Mod+Shift+Z" or "Delete". "Mod" is Ctrl on Windows and Linux and Cmd on
- * macOS. The key is a `KeyboardEvent.key` value; single letters are written in
- * lower case.
+ * macOS. The key is a `KeyboardEvent.key` value. Case does not matter for the
+ * modifiers or a single letter; normalizeShortcut gives the canonical spelling.
  */
 export type Shortcut = string;
 
@@ -82,9 +82,9 @@ export function normalizeShortcut(shortcut: string): Shortcut | undefined {
   if (key === undefined || key === "") return undefined;
   const mods = new Set<string>();
   for (const part of parts) {
-    if (!(MODIFIERS as readonly string[]).includes(part) || mods.has(part))
-      return undefined;
-    mods.add(part);
+    const mod = MODIFIERS.find((m) => m.toLowerCase() === part.toLowerCase());
+    if (mod === undefined || mods.has(mod)) return undefined;
+    mods.add(mod);
   }
   const ordered = MODIFIERS.filter((m) => mods.has(m));
   const name = key.length === 1 ? key.toLowerCase() : key;
