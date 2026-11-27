@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { readGalatsaFile, writeGalatsaFile, type WriteOptions } from "./file.ts";
 import { assetIdOf } from "./hash.ts";
+import { fromUtf8 } from "./json.ts";
 import { isKnownEntry } from "./layout.ts";
 import {
   MAX_PREVIEWS_PER_ASSET,
@@ -126,7 +127,7 @@ describe("previews in the file", () => {
     expect(without.previews.size).toBe(0);
     // Previews are not in document.json or ydoc.bin.
     const entries = readZip(write(s).bytes);
-    const document = new TextDecoder().decode(entries.get("document.json"));
+    const document = fromUtf8(entries.get("document.json")!);
     expect(document).not.toContain("previews");
   });
 
