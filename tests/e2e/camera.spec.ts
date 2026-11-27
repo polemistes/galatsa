@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Camera and navigation in a real browser (docs/adr/0010-camera.md): the
+// Camera and navigation in a real browser (docs/adr/0009-camera.md): the
 // mouse wheel and a trackpad's two fingers scroll the canvas, Ctrl with the
 // wheel (what browsers send for a trackpad pinch) zooms about the pointer and
 // the point under it stays within a pixel, the middle button and Space with a

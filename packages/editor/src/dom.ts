@@ -8,7 +8,7 @@
 // - The primary button of the first pointer that goes down is the tool's until
 //   it goes up; other buttons are ignored, and a pointer whose pointerup never
 //   came is dropped (pointers.ts).
-// - The camera (docs/adr/0010): the middle button drags the canvas, and so
+// - The camera (docs/adr/0009): the middle button drags the canvas, and so
 //   does the primary button while Space is held (the editor's hand). Two fingers pan
 //   and pinch. The wheel and two fingers on a trackpad scroll the canvas
 //   (Shift turns a mouse wheel sideways); with Ctrl or Cmd, which is also what

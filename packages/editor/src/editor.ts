@@ -479,7 +479,7 @@ export class Editor {
   }
 
   // -------------------------------------------------------------------------
-  // The camera (camera-control.ts, docs/adr/0010)
+  // The camera (camera-control.ts, docs/adr/0009)
   // -------------------------------------------------------------------------
 
   screenToWorld(point: Point): Point {

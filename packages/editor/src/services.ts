@@ -39,7 +39,7 @@ export interface ServiceHost {
   invalidate(): void;
   /** The editor's state changed (selection, camera, mode, panels): tell listeners. */
   changed(what: StateChange): void;
-  /** The camera as it is set: anchored and within the zoom limits (docs/adr/0010). */
+  /** The camera as it is set: anchored and within the zoom limits (docs/adr/0009). */
   placeCamera(view: CameraView): CameraView;
   /** The preview of a gesture changed (the camera follows its anchor). */
   previewChanged(): void;

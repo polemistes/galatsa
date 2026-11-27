@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The editor's camera controls (docs/adr/0010-camera.md): every camera the
+// The editor's camera controls (docs/adr/0009-camera.md): every camera the
 // editor sets is anchored in the innermost frame around its centre and kept
 // within the zoom limits (anchor.ts); the camera follows its anchor when that
 // moves, so the view stays where it is on screen; zoom about a point on

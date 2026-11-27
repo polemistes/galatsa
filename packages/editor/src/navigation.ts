@@ -6,7 +6,7 @@
 // nothing but the editor services, like any other extension. The editor loads
 // them after the basics and the selection tool and before the program's other
 // extensions, so the basics keep their shortcuts and the selection tool, which
-// nudges a selection with the arrow keys, gets them first. See docs/adr/0010-camera.md.
+// nudges a selection with the arrow keys, gets them first. See docs/adr/0009-camera.md.
 
 import { Resolver, type ElementId, type Rect } from "@galatsa/core";
 import { yLookup } from "@galatsa/core/ydoc";

@@ -1,4 +1,4 @@
-# 0010 Camera and navigation
+# 0009 Camera and navigation
 
 - Status: Accepted
 - Date: 2026-11-27
@@ -28,7 +28,7 @@ Every camera the editor sets, from any source (a gesture, a command, an extensio
 
 ### The pointer for tools
 
-`ToolPointerEvent` gains `local`, the pointer in the camera's own space (`{ space, x, y }`, the frame the camera is anchored in, or the root), exact at any zoom; `world` stays as it was, in root space. `SceneQuery` gains `offset(from, to)`, the offset between two spaces as the user sees them (with the preview), through their lowest common ancestor, so a tool can carry `local` into any container exactly. Both are additive (they raise the interface version to 1.4, [0005](0005-extension-interface.md)); `local` is optional in the type so events built by hand in tests need not have it, and the editor always fills it.
+`ToolPointerEvent` gains `local`, the pointer in the camera's own space (`{ space, x, y }`, the frame the camera is anchored in, or the root), exact at any zoom; `world` stays as it was, in root space. `SceneQuery` gains `offset(from, to)`, the offset between two spaces as the user sees them (with the preview), through their lowest common ancestor, so a tool can carry `local` into any container exactly. Both are additive (they raise the interface version to 1.3, [0005](0005-extension-interface.md)); `local` is optional in the type so events built by hand in tests need not have it, and the editor always fills it.
 
 `world` resolves a pixel wherever `|world| × zoom ≤ 2^46`: at zoom 2^20 that is anywhere within 2^26 units of the root's origin, at zoom 1 everywhere a document can reach. Beyond that (deep zoom in a frame far from the root), root-space queries lose sub-pixel precision. The editor keeps clicks right there anyway: `scene.elementAt` called with the `world` of the current pointer event hit-tests at the pointer's own screen position, not at a position recomputed from root coordinates. Rubber bands, bounds and `placement().worldX` stay in root space and keep the limit; tools that need them exact at deep zoom far out use `local` and `offset`.
 
