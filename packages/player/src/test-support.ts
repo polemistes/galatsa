@@ -157,6 +157,14 @@ function layers(picture: Picture): Layer[] {
   ];
 }
 
+/** Two sets of hidden elements with the same members. */
+function sameHidden(a: Shot["hidden"], b: Shot["hidden"]): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
 /** Views closer than this on screen count as the same view moving on. */
 const SAME_VIEW = 0.02;
 
@@ -178,7 +186,7 @@ export function pictureGap(
   if (la.length === 1 && lb.length === 1)
     return {
       gap: viewGap(resolver, la[0]!.view, lb[0]!.view, width),
-      popped: la[0]!.hidden !== lb[0]!.hidden,
+      popped: !sameHidden(la[0]!.hidden, lb[0]!.hidden),
     };
   // The pairing of the views of the two pictures that explains the change best.
   let best = { gap: Infinity, popped: false };
@@ -207,7 +215,7 @@ export function pictureGap(
         [...used, q],
         moved + Math.abs(p.weight - q.weight),
         shifted + gap * shared,
-        popped || (p.hidden !== q.hidden && shared > 0),
+        popped || (!sameHidden(p.hidden, q.hidden) && shared > 0),
       );
     }
   };
