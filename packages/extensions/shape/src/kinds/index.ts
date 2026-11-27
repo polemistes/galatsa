@@ -4,8 +4,20 @@
 // toolbar. A new kind is one file in this folder, listed here (README.md).
 
 import type { ShapeKind } from "../kind.ts";
+import { arrow } from "./arrow.ts";
+import { bracket } from "./bracket.ts";
 import { ellipse } from "./ellipse.ts";
 import { line } from "./line.ts";
 import { rect } from "./rect.ts";
+import { speechBubble } from "./speech-bubble.ts";
+import { triangle } from "./triangle.ts";
 
-export const SHAPE_KINDS: readonly ShapeKind[] = [rect, ellipse, line];
+export const SHAPE_KINDS: readonly ShapeKind[] = [
+  rect,
+  ellipse,
+  triangle,
+  line,
+  arrow,
+  bracket,
+  speechBubble,
+];

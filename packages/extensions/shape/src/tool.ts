@@ -40,10 +40,29 @@ export interface InsertShapeArgs {
 /** Outline width of a new shape, in screen pixels at the zoom it is drawn at. */
 export const STROKE_PIXELS = 2;
 
+/** The length, in world units, that is `pixels` long on screen at `zoom`. */
+function lengthAt(pixels: number, zoom: number): number {
+  const z = zoom > 0 && Number.isFinite(zoom) ? zoom : 1;
+  return Math.min(MAX_LENGTH, pixels / z);
+}
+
 /** The outline width, in world units, that is STROKE_PIXELS wide on screen at `zoom`. */
 export function strokeWidthAt(zoom: number): number {
-  const z = zoom > 0 && Number.isFinite(zoom) ? zoom : 1;
-  return Math.min(MAX_LENGTH, STROKE_PIXELS / z);
+  return lengthAt(STROKE_PIXELS, zoom);
+}
+
+/**
+ * The lengths of the style a new shape of `kind` gets at `zoom`: the outline
+ * width, and the kind's own default lengths (ShapeKind.defaults), as many
+ * world units as they are screen pixels at zoom 1.
+ */
+export function newStyleAt(kind: ShapeKind, zoom: number): Partial<ShapeStyle> {
+  const { strokeWidth, cornerRadius } = kind.defaults ?? {};
+  return {
+    strokeWidth:
+      strokeWidth !== undefined ? lengthAt(strokeWidth, zoom) : strokeWidthAt(zoom),
+    ...(cornerRadius !== undefined ? { cornerRadius: lengthAt(cornerRadius, zoom) } : {}),
+  };
 }
 
 /** Size of a shape made by a click without dragging, in screen pixels. */
@@ -117,11 +136,7 @@ export function shapeTool(
 ): ToolDefinition {
   // The preview is drawn with the style a new shape gets at the zoom.
   const modelAt = (zoom: number): ShapeModel =>
-    readShape(
-      table,
-      newShapeData(table, kind.kind, { strokeWidth: strokeWidthAt(zoom) }),
-      () => {},
-    );
+    readShape(table, newShapeData(table, kind.kind, newStyleAt(kind, zoom)), () => {});
   const placed = (from: ToolPointerEvent, to: ToolPointerEvent): Placed =>
     kind.drawing === "line"
       ? dragLine(from.world, to.world, to.modifiers.shift)
@@ -166,7 +181,7 @@ export function shapeTool(
           session.run(insertCommand, {
             kind: kind.kind,
             ...box,
-            style: { strokeWidth: strokeWidthAt(zoom) },
+            style: newStyleAt(kind, zoom),
           } satisfies InsertShapeArgs);
           session.done();
         },

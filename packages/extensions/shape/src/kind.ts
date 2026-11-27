@@ -13,6 +13,7 @@ import type { Label, Path, Shortcut, StrokeStyle } from "@galatsa/extension-api"
 import { messageKey } from "@galatsa/extension-api";
 import type { BundleKey } from "@galatsa/i18n";
 import { shapeMessages } from "./messages/index.ts";
+import type { ShapeStyle } from "./model.ts";
 
 /** A label in the shape extension's own bundle; a typo is a type error. */
 export function shapeLabel(key: BundleKey<typeof shapeMessages>): Label {
@@ -120,6 +121,15 @@ export interface ShapeKind {
   /** How the outline's corners and ends are drawn (default "round" for both). */
   readonly join?: StrokeStyle["join"];
   readonly cap?: StrokeStyle["cap"];
+  /**
+   * Style a new shape of this kind gets instead of the common defaults
+   * (DEFAULT_STYLE), as a speech bubble's rounded corners. Lengths
+   * (`strokeWidth`, `cornerRadius`) are world units at zoom 1, that is screen
+   * pixels: the drawing tool scales them so that a new shape looks the same
+   * at whatever zoom it is drawn. Only new shapes are written with these;
+   * data without a key always means the common default.
+   */
+  readonly defaults?: Partial<ShapeStyle>;
   /** Properties only this kind (or a few kinds) has. */
   readonly params?: readonly ShapeParam[];
   /**

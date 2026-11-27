@@ -111,8 +111,8 @@ export const DEVELOPMENT_FREE_LICENSES: ReadonlySet<string> = new Set([
   "EPL-2.0",
   "CDDL-1.0",
   "CC-BY-SA-4.0",
-  // Free (OSI, FSF); the FSF says nothing about GPL compatibility. Fonts shipped
-  // with the program need their own decision.
+  // Free (OSI, FSF); the FSF lists it among licenses for fonts, not for code.
+  // Fonts shipped with the program are accepted by name (FONT_PACKAGES).
   "OFL-1.1",
   // Free (OSI, Fedora); GPL compatibility is unconfirmed (see the note at the top).
   "BlueOak-1.0.0",
@@ -123,6 +123,35 @@ export const DEVELOPMENT_FREE_LICENSES: ReadonlySet<string> = new Set([
   "CC-BY-SA-3.0",
   "PSF-2.0",
 ]);
+
+/**
+ * Font packages that ship with the program under the SIL Open Font License.
+ * The fonts are data the program loads, not code combined with it. The FSF
+ * lists OFL-1.1 as "a free copyleft license for fonts" in its section on font
+ * licenses (https://www.gnu.org/licenses/license-list.html#SILOFL), and the
+ * license allows the fonts to be "bundled, redistributed and/or sold with any
+ * software, provided that each copy contains the above copyright notice and
+ * this license" (Permission & Conditions, item 2). Accepted for these packages
+ * only, so that code under the OFL never comes in under the fonts' decision
+ * (docs/adr/0011-text.md).
+ */
+export const FONT_PACKAGES: ReadonlySet<string> = new Set([
+  "@fontsource/noto-sans",
+  "@fontsource/noto-serif",
+  "@fontsource/noto-sans-mono",
+]);
+
+/** Licenses accepted for the packages in FONT_PACKAGES. */
+export const FONT_LICENSES: ReadonlySet<string> = new Set([
+  ...PRODUCTION_LICENSES,
+  "OFL-1.1",
+]);
+
+/** The package name of an id "name@version" (a scoped name keeps its "@"). */
+export function packageName(id: string): string {
+  const at = id.lastIndexOf("@");
+  return at > 0 ? id.slice(0, at) : id;
+}
 
 /** Exceptions accepted after WITH, for example "GPL-3.0-only WITH GCC-exception-3.1". */
 export const ACCEPTED_EXCEPTIONS: ReadonlySet<string> = new Set([
@@ -245,6 +274,12 @@ export function findViolations(packages: readonly PackageLicense[]): Violation[]
   const violations: Violation[] = [];
   for (const pkg of packages) {
     const policy: Policy = pkg.production ? "production" : "development";
+    if (
+      pkg.production &&
+      FONT_PACKAGES.has(packageName(pkg.id)) &&
+      evaluateLicense(pkg.license, (id) => FONT_LICENSES.has(id))
+    )
+      continue;
     if (!isAcceptable(pkg.license, policy)) {
       violations.push({ id: pkg.id, license: pkg.license, policy });
     }
