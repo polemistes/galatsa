@@ -122,9 +122,6 @@ function onMac(): boolean {
   return /Mac|iPhone|iPad|iPod/i.test(nav?.platform ?? nav?.userAgent ?? "");
 }
 
-/** An Escape this soon after the browser left full screen by itself was the key that made it leave. */
-const ESCAPE_ECHO_MS = 400;
-
 /**
  * Starts a presentation in `parent`, over everything else in it. Everything
  * else in `parent` is inert while it runs, so the keyboard stays with the
@@ -478,8 +475,6 @@ function start(
   let wasFull = false;
   /** Until when leaving full screen is the presentation's own doing. */
   let leaving = -Infinity;
-  /** When the browser last left full screen by itself. */
-  let lost = -Infinity;
   const enterFullscreen = (): void => {
     try {
       void root.requestFullscreen?.()?.catch(() => {});
@@ -501,10 +496,13 @@ function start(
     const left = wasFull && !full;
     wasFull = full;
     if (left && win.performance.now() > leaving) {
-      lost = win.performance.now();
       fullBack.hidden = false;
     }
-    if (left && win.performance.now() <= leaving) fullBack.hidden = true;
+    if (left && win.performance.now() <= leaving) {
+      // The leaving that was expected; a later one is not.
+      leaving = -Infinity;
+      fullBack.hidden = true;
+    }
     update();
     kick();
   };
@@ -681,14 +679,13 @@ function start(
       }
       case "exit":
         // Escape in full screen leaves full screen (the browser does that
-        // whatever the page does); only in a window does it end. An Escape
-        // that arrives just after the browser left full screen by itself was
-        // the key that made it leave.
+        // whatever the page does); only in a window does it end. (Chromium
+        // tells the page about that Escape while still in full screen;
+        // Firefox and WebKitGTK do not tell it at all.)
         if (doc.fullscreenElement === root) {
           void doc.exitFullscreen?.().catch(() => {});
           return;
         }
-        if (win.performance.now() - lost < ESCAPE_ECHO_MS) return;
         exit();
         return;
     }

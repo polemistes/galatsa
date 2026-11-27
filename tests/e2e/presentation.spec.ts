@@ -9,14 +9,19 @@
 // obeyed without a jump; the mouse, the wheel and touch move the camera
 // freely, which pauses the route, Backspace returns to the stop and "next"
 // goes on; reduced motion cross-fades; the laser pointer follows the mouse;
-// the presenter's notes open in a window of their own; Escape ends the
-// presentation and gives the keys back to the editor. Runs in the "chromium"
-// and "editor-firefox" projects.
+// the presenter's notes open in a window of their own; Escape in full screen
+// leaves full screen, and Escape in a window ends the presentation and gives
+// the keys back to the editor; the editor under the player is inert, Tab stays
+// in the player, the clicker's keys always drive it, and keys that reload the
+// page do nothing. Runs in the "chromium" and "editor-firefox" projects.
 
 import { expect, test, type Page } from "@playwright/test";
 import { WEB_PORT } from "./playwright.config.ts";
 
 const URL = `http://localhost:${WEB_PORT}/?scene=empty&lang=en`;
+
+// Long tests, on machines that may be busy.
+test.describe.configure({ timeout: 120_000 });
 
 function frame(
   name: string,
@@ -84,12 +89,12 @@ interface DevPlayer {
       position: number;
       phase: string;
       reducedMotion: boolean;
-      steps: { stop: string; name: string }[];
+      steps: { stop: string; name: string; entry: string }[];
     };
     picture(): Picture;
     moving: boolean;
   };
-  stage: { screen: { width: number; height: number } };
+  stage: { screen: { width: number; height: number }; draw(picture: Picture): void };
 }
 
 interface DevEditor {
@@ -301,6 +306,23 @@ async function present(page: Page): Promise<void> {
   await atStop(page, 0);
 }
 
+async function fullscreen(page: Page): Promise<boolean> {
+  return page.evaluate(
+    () => document.fullscreenElement?.classList.contains("galatsa-player") ?? false,
+  );
+}
+
+/** Ends the presentation with Escape: in full screen the first one only leaves full screen. */
+async function end(page: Page): Promise<void> {
+  if (await fullscreen(page)) {
+    await page.keyboard.press("Escape");
+    await expect.poll(() => fullscreen(page)).toBe(false);
+    await expect(player(page)).toBeVisible();
+  }
+  await page.keyboard.press("Escape");
+  await expect(player(page)).toHaveCount(0);
+}
+
 test("F5 presents the open document; keys, clickers, jumps and routes; Escape ends it", async ({
   page,
 }) => {
@@ -366,9 +388,15 @@ test("F5 presents the open document; keys, clickers, jumps and routes; Escape en
     "4. Blue",
   ]);
   await expect(list.getByRole("button", { name: "4. Blue" })).toBeFocused();
-  await page.keyboard.press("ArrowUp");
-  await page.keyboard.press("ArrowUp");
+  // Tab moves in the list; the clicker's keys drive the presentation, also here.
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
   await expect(list.getByRole("button", { name: "2. Green" })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await atStop(page, 2);
+  await expect(list.getByRole("button", { name: "2. Green" })).toBeFocused();
+  await page.keyboard.press("PageDown");
+  await atStop(page, 3);
   await page.keyboard.press("Enter");
   await expect(list).toBeHidden();
   await atStop(page, 1);
@@ -376,12 +404,26 @@ test("F5 presents the open document; keys, clickers, jumps and routes; Escape en
 
   // Another route that visits the stop shown: it goes on from there.
   await page.keyboard.press("g");
-  await list.getByRole("combobox", { name: "Route" }).selectOption({ label: "Short" });
+  const routes = list.getByRole("combobox", { name: "Route" });
+  await routes.selectOption({ label: "Short" });
   await expect(player(page)).toHaveAttribute("data-route", made.side);
   await atStop(page, 0);
   await expect(list.getByRole("button")).toHaveText(["1. Green", "2. Red"]);
   // In the short route nothing brings the yellow frame in, so it is there from the start.
   expect(await middle(page)).toBe("#ffff00");
+  // The route chosen has the keyboard: the clicker's keys still drive the
+  // presentation, and never change the route.
+  await routes.focus();
+  await page.keyboard.press("PageDown");
+  await atStop(page, 1);
+  await page.keyboard.press("ArrowUp");
+  await atStop(page, 0);
+  await page.keyboard.press("ArrowDown");
+  await atStop(page, 1);
+  await page.keyboard.press("PageUp");
+  await atStop(page, 0);
+  await expect(player(page)).toHaveAttribute("data-route", made.side);
+  await expect(routes).toHaveValue(made.side);
   // G closes the list again; the keys are the presentation's.
   await page.keyboard.press("g");
   await expect(list).toBeHidden();
@@ -389,7 +431,18 @@ test("F5 presents the open document; keys, clickers, jumps and routes; Escape en
   await atStop(page, 1);
   expect(await camera(page)).toEqual(await fitted(page, RED));
 
-  // Escape ends it: the editor is back, with the keys, and nothing was changed.
+  // Escape in full screen leaves full screen, and the presentation goes on in
+  // the window, with a button back to full screen.
+  expect(await fullscreen(page)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect.poll(() => fullscreen(page)).toBe(false);
+  await expect(player(page)).toBeVisible();
+  const back = page.getByRole("button", { name: "Back to full screen (F)" });
+  await expect(back).toBeVisible();
+  await page.keyboard.press("ArrowLeft");
+  await atStop(page, 0);
+  // Escape in the window ends it: the editor is back, with the keys, and
+  // nothing was changed.
   await page.keyboard.press("Escape");
   await expect(player(page)).toHaveCount(0);
   await expect(page.locator(".galatsa-canvas")).toBeFocused();
@@ -449,6 +502,111 @@ async function recorded(page: Page): Promise<Recorded[]> {
     const w = window as unknown as { recorded: Recorded[]; recording: boolean };
     w.recording = false;
     return w.recorded;
+  });
+}
+
+/** A frame as the stage drew it: its views in root space, and colours read back from the canvas. */
+interface Drawn extends Recorded {
+  /** Points of the frames' plain colours, where the picture puts them, with the colour drawn there. */
+  checks: { expected: string; drawn: string }[];
+}
+
+/**
+ * Starts noting every picture the stage draws, as it draws it, and after
+ * each a few points of the canvas: the middle of the red and the blue frame
+ * and a corner of the green one, where the picture puts them (when they are
+ * well inside the stage and the frame).
+ */
+async function recordDrawn(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      galatsaDev: { editor(): DevEditor | null };
+      drawn: Drawn[];
+      drawing: boolean;
+      undraw?: () => void;
+    };
+    const editor = w.galatsaDev.editor()!;
+    const stage = editor.presenting!.stage;
+    const inRoot = (view: View): View => {
+      const o = editor.scene.offset(view.space, null);
+      return { space: null, cx: view.cx + o.x, cy: view.cy + o.y, zoom: view.zoom };
+    };
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      ".galatsa-player .gp-stage canvas",
+    )!;
+    const ctx = canvas.getContext("2d")!;
+    // Plain colours, a point and how far the frame reaches around it (world units).
+    const points = [
+      { x: 400, y: 225, reach: 225, expected: "#ff0000" },
+      { x: 400, y: 1025, reach: 225, expected: "#0000ff" },
+      { x: 1100, y: 75, reach: 75, expected: "#00ff00" },
+    ];
+    const original = stage.draw;
+    w.drawn = [];
+    w.drawing = true;
+    stage.draw = (picture: Picture) => {
+      original.call(stage, picture);
+      if (!w.drawing) return;
+      const { width, height } = stage.screen;
+      const ratio = canvas.width / width;
+      const checks: { expected: string; drawn: string }[] = [];
+      if (picture.kind === "view") {
+        const view = inRoot(picture.view);
+        for (const p of points) {
+          const sx = (p.x - view.cx) * view.zoom + width / 2;
+          const sy = (p.y - view.cy) * view.zoom + height / 2;
+          if (
+            p.reach * view.zoom < 4 ||
+            sx < 4 ||
+            sy < 4 ||
+            sx > width - 4 ||
+            sy > height - 4
+          )
+            continue;
+          const d = ctx.getImageData(
+            Math.floor(sx * ratio),
+            Math.floor(sy * ratio),
+            1,
+            1,
+          ).data;
+          const hex = (v: number): string => v.toString(16).padStart(2, "0");
+          checks.push({
+            expected: p.expected,
+            drawn: `#${hex(d[0]!)}${hex(d[1]!)}${hex(d[2]!)}`,
+          });
+        }
+      }
+      w.drawn.push({
+        t: performance.now(),
+        picture:
+          picture.kind === "view"
+            ? { kind: "view", view: inRoot(picture.view) }
+            : {
+                kind: "blend",
+                from: { view: inRoot(picture.from.view) },
+                to: { view: inRoot(picture.to.view) },
+                mix: picture.mix,
+              },
+        checks,
+      });
+    };
+    w.undraw = () => {
+      stage.draw = original;
+    };
+  });
+}
+
+/** Stops noting what is drawn, and returns it. */
+async function drawn(page: Page): Promise<Drawn[]> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      drawn: Drawn[];
+      drawing: boolean;
+      undraw?: () => void;
+    };
+    w.drawing = false;
+    w.undraw?.();
+    return w.drawn;
   });
 }
 
@@ -527,7 +685,7 @@ test("input in the middle of a transition is obeyed without a jump; roaming paus
   const { errors } = await open(page);
   await present(page);
   const screen = await withPlayer(page, (p) => p.stage.screen, null);
-  await record(page);
+  await recordDrawn(page);
 
   // Keys in the middle of transitions: each is obeyed, from what is on screen.
   await page.keyboard.press("ArrowRight");
@@ -549,14 +707,24 @@ test("input in the middle of a transition is obeyed without a jump; roaming paus
   await page.keyboard.press("PageDown");
   await atStop(page, 1);
   expect(await camera(page)).toEqual(await fitted(page, GREEN));
-  // Nothing jumped, whatever was pressed.
-  const pressed = await recorded(page);
+  // Nothing jumped in what the stage drew, whatever was pressed; and the
+  // canvas shows what the stage was given: the frames' colours are where
+  // the pictures put them.
+  const pressed = await drawn(page);
   expect(pressed.length).toBeGreaterThan(60);
-  expect(worstStep(pressed, screen.width)).toMatchObject({ worst: expect.any(Number) });
-  expect(
-    worstStep(pressed, screen.width).worst,
-    JSON.stringify(worstStep(pressed, screen.width).at),
-  ).toBeLessThan(1.5);
+  const views = new Set(
+    pressed.map((f) =>
+      JSON.stringify(f.picture.kind === "view" ? f.picture.view : f.picture.to.view),
+    ),
+  );
+  // The camera really moved: many different pictures, not a few.
+  expect(views.size).toBeGreaterThan(30);
+  const { worst, at } = worstStep(pressed, screen.width);
+  expect(worst, JSON.stringify(at)).toBeLessThan(1.5);
+  const checks = pressed.flatMap((f) => f.checks);
+  expect(checks.length).toBeGreaterThan(30);
+  const wrong = checks.filter((c) => c.drawn !== c.expected);
+  expect(wrong, JSON.stringify(wrong.slice(0, 5))).toEqual([]);
 
   // The mouse takes the camera in the middle of a flight: the route is paused
   // at the stop shown last, and the camera comes to rest.
@@ -616,14 +784,40 @@ test("input in the middle of a transition is obeyed without a jump; roaming paus
   );
   await expect(page.locator(".gp-status")).toHaveText("Reduced motion is on");
   await record(page);
+  // The still layer's opacity, in every frame while it is there.
+  const opacities = page.evaluate(
+    () =>
+      new Promise<number[]>((done) => {
+        const seen: number[] = [];
+        let started = false;
+        const frame = (): void => {
+          const layer = document.querySelector<HTMLElement>(".galatsa-player .gp-fade");
+          const showing =
+            layer !== null && !layer.hidden && layer.style.display !== "none";
+          if (showing) {
+            started = true;
+            seen.push(Number(getComputedStyle(layer).opacity));
+          } else if (started || seen.length > 600) {
+            done(seen);
+            return;
+          }
+          requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      }),
+  );
   await page.keyboard.press("Home");
   await expect(page.locator(".gp-fade")).toBeVisible();
-  const opacity = Number(
-    await page.locator(".gp-fade").evaluate((layer) => getComputedStyle(layer).opacity),
-  );
-  expect(opacity).toBeGreaterThanOrEqual(0);
-  expect(opacity).toBeLessThanOrEqual(1);
   await atStop(page, 0);
+  // The layer faded: it was seen part of the way, and its opacity only went one way.
+  const seen = await opacities;
+  expect(
+    seen.some((o) => o > 0.05 && o < 0.95),
+    JSON.stringify(seen),
+  ).toBe(true);
+  const rising = seen.every((o, i) => i === 0 || o >= seen[i - 1]! - 1e-6);
+  const falling = seen.every((o, i) => i === 0 || o <= seen[i - 1]! + 1e-6);
+  expect(rising || falling, JSON.stringify(seen)).toBe(true);
   await expect(page.locator(".gp-fade")).toBeHidden();
   expect(await middle(page)).toBe("#ff0000");
 
@@ -648,8 +842,7 @@ test("input in the middle of a transition is obeyed without a jump; roaming paus
   expect(shown.size).toBe(2);
   expect(shown.has(key(fitRed))).toBe(true);
 
-  await page.keyboard.press("Escape");
-  await expect(player(page)).toHaveCount(0);
+  await end(page);
   expect(errors).toEqual([]);
 });
 
@@ -698,8 +891,7 @@ test("the panel's button and Shift+F5, the laser pointer, touch, and the notes i
   await expect(player(page)).toBeVisible();
   await atStop(page, 1);
   expect(await camera(page)).toEqual(await fitted(page, GREEN));
-  await page.keyboard.press("Escape");
-  await expect(player(page)).toHaveCount(0);
+  await end(page);
   await expect(page.locator(".galatsa-canvas")).toBeFocused();
   // Shift+F5 does the same from the keyboard; F5 starts from the first stop.
   // (Started right after the last one ended: it stays.)
@@ -813,5 +1005,156 @@ test("the panel's button and Shift+F5, the laser pointer, touch, and the notes i
   await expect(player(page)).toHaveCount(0);
   await expect.poll(() => second.isClosed()).toBe(true);
   await expect(page.locator(".galatsa-canvas")).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test("the player keeps the keyboard out of full screen: Tab, then the clicker, Escape and Delete; no reload", async ({
+  page,
+}) => {
+  const { errors } = await open(page);
+  const undoSteps = await withEditor(page, (e) => e.undo.undoStack.length, null);
+  await present(page);
+  // Out of full screen by the player's own key: no button back.
+  await page.keyboard.press("f");
+  await expect.poll(() => fullscreen(page)).toBe(false);
+  await expect(player(page)).toBeVisible();
+  await expect(page.locator(".gp-full-back")).toBeHidden();
+
+  // The editor under the player is inert while it runs.
+  expect(
+    await page.evaluate(
+      () => document.querySelector(".galatsa-canvas")!.closest("[inert]") !== null,
+    ),
+  ).toBe(true);
+  // Tab, many times and both ways: the keyboard stays in the player.
+  const inPlayer = () =>
+    page.evaluate(() => {
+      const active = document.activeElement;
+      return (
+        active !== null && document.querySelector(".galatsa-player")!.contains(active)
+      );
+    });
+  for (let i = 0; i < 12; i++) {
+    await page.keyboard.press("Tab");
+    expect(await inPlayer()).toBe(true);
+  }
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press("Shift+Tab");
+    expect(await inPlayer()).toBe(true);
+  }
+  // Wherever Tab left the keyboard, the clicker goes on.
+  await page.keyboard.press("PageDown");
+  await atStop(page, 1);
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("PageDown");
+  await atStop(page, 2);
+  // Delete changes nothing in the document under the player.
+  await page.keyboard.press("Delete");
+  await page.keyboard.press("Backspace");
+  expect(await withEditor(page, (e) => e.undo.undoStack.length, null)).toBe(undoSteps);
+
+  // Keys that reload the page are kept from the browser.
+  await page.evaluate(() => {
+    const w = window as unknown as { reloads: boolean[] };
+    w.reloads = [];
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "F5" || e.key.toLowerCase() === "r")
+        w.reloads.push(e.defaultPrevented);
+    });
+  });
+  await page.keyboard.press("F5");
+  await page.keyboard.press("Shift+F5");
+  await page.keyboard.press("Control+r");
+  await page.keyboard.press("Control+Shift+R");
+  expect(
+    await page.evaluate(() => (window as unknown as { reloads: boolean[] }).reloads),
+  ).toEqual([true, true, true, true]);
+  await expect(player(page)).toBeVisible();
+  await atStop(page, 2);
+
+  // Escape in the window ends the presentation; the editor gets the keys back.
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Escape");
+  await expect(player(page)).toHaveCount(0);
+  await expect(page.locator(".galatsa-canvas")).toBeFocused();
+  expect(
+    await page.evaluate(() =>
+      document.querySelector(".galatsa-canvas")!.closest("[inert]"),
+    ),
+  ).toBeNull();
+  expect(await withEditor(page, (e) => e.undo.undoStack.length, null)).toBe(undoSteps);
+  expect(errors).toEqual([]);
+});
+
+test("losing full screen goes on in the window with a button back; the black screen, the list and the notes window", async ({
+  page,
+}) => {
+  const { errors } = await open(page);
+  await present(page);
+  expect(await fullscreen(page)).toBe(true);
+
+  // Full screen is lost without the player asking (a cable, another screen):
+  // the presentation goes on in the window, and a button takes it back.
+  await page.evaluate(() => void document.exitFullscreen());
+  await expect.poll(() => fullscreen(page)).toBe(false);
+  await expect(player(page)).toBeVisible();
+  const back = page.getByRole("button", { name: "Back to full screen (F)" });
+  await expect(back).toBeVisible();
+  await page.keyboard.press("PageDown");
+  await atStop(page, 1);
+  await back.click();
+  await expect.poll(() => fullscreen(page)).toBe(true);
+  await expect(back).toBeHidden();
+  await expect(player(page)).toBeFocused();
+
+  // The black screen: a click lifts it and does nothing else; a stop's number
+  // and Enter lift it and go there.
+  await page.keyboard.press("b");
+  const blank = page.locator(".gp-blank");
+  await expect(blank).toBeVisible();
+  await page.mouse.click(640, 300);
+  await expect(blank).toBeHidden();
+  await atStop(page, 1);
+  await page.keyboard.press("b");
+  await expect(blank).toBeVisible();
+  await page.keyboard.press("4");
+  await page.keyboard.press("Enter");
+  await expect(blank).toBeHidden();
+  await atStop(page, 3);
+
+  // In the list, the keyboard stays with the stop it was on when the route changes.
+  await page.keyboard.press("g");
+  const list = page.getByRole("dialog", { name: "Stops and routes" });
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expect(list.getByRole("button", { name: "2. Green" })).toBeFocused();
+  const steps = await withPlayer(page, (p) => p.presentation.state.steps, null);
+  const outcome = await withEditor(
+    page,
+    (editor, a) => editor.run("galatsa.routes/move-visit", a).ok,
+    {
+      route: await player(page).getAttribute("data-route"),
+      entry: steps[3]!.entry,
+      index: 0,
+    },
+  );
+  expect(outcome).toBe(true);
+  await expect(list.getByRole("button")).toHaveText([
+    "1. Blue",
+    "2. Red",
+    "3. Green",
+    "4. The yellow one",
+  ]);
+  await expect(list.getByRole("button", { name: "3. Green" })).toBeFocused();
+  await page.keyboard.press("g");
+  await expect(list).toBeHidden();
+
+  // The notes window goes when the page is reloaded.
+  const opening = page.waitForEvent("popup");
+  await page.keyboard.press("s");
+  const notes = await opening;
+  await expect(notes).toHaveTitle("Presenter notes");
+  await page.reload();
+  await expect.poll(() => notes.isClosed()).toBe(true);
   expect(errors).toEqual([]);
 });

@@ -42,6 +42,15 @@ check.PROBE = """
   const dev = window.galatsaDev;
   const editor = dev && dev.editor();
   if (!editor) return JSON.stringify(null);
+  if (!window.__galatsaKeys) {
+    // Escape as the page sees it, and full screen as it changes.
+    window.__galatsaKeys = [];
+    window.addEventListener("keydown", (e) => {
+      window.__galatsaKeys.push(e.key + " " + (document.fullscreenElement !== null) + " " + Math.round(performance.now()));
+    }, true);
+    document.addEventListener("fullscreenchange", () =>
+      window.__galatsaKeys.push("change " + (document.fullscreenElement !== null) + " " + Math.round(performance.now())));
+  }
   if (!window.__galatsaMade) {
     const frame = (x, y, fill, order) => ({
       type: "core/frame", typeVersion: 1, parent: null, order,
@@ -85,6 +94,13 @@ check.PROBE = """
     fullscreen: document.fullscreenElement !== null,
     notes: notes && !notes.hidden ? notes.textContent : null,
     focused: document.activeElement && document.activeElement.className,
+    inPlayer: root !== null && root.contains(document.activeElement),
+    editorInert: document.querySelector(".galatsa-canvas").closest("[inert]") !== null,
+    fullBack: (() => {
+      const b = document.querySelector(".gp-full-back");
+      return b !== null && !b.hidden;
+    })(),
+    keys: window.__galatsaKeys.slice(),
   });
 })()
 """
@@ -196,6 +212,34 @@ def scenario():
     yield key("Next")
     state = yield from settled(2, "next after roaming")
 
+    # Out of full screen, the editor stays inert and Tab stays in the player;
+    # the clicker goes on wherever Tab left the keyboard.
+    # (WebKitGTK leaves full screen on F itself, without telling the page about
+    # the key, so the player cannot tell it from a lost full screen and shows
+    # its button back.)
+    if state["fullscreen"]:
+        yield key("f")
+        yield ("wait", 600)
+        state = yield ("probe",)
+        assert not state["fullscreen"], ("F", state)
+        assert state["presenting"], ("F", state)
+    assert state["editorInert"], ("inert", state)
+    for _ in range(8):
+        yield key("Tab")
+        yield ("wait", 60)
+        state = yield ("probe",)
+        assert state["inPlayer"], ("Tab", state)
+    yield key("Prior")
+    state = yield from settled(1, "PageUp after Tab")
+    yield key("Next")
+    state = yield from settled(2, "PageDown after Tab")
+    # F takes it back to full screen, and the button goes.
+    if state["fullBack"]:
+        yield ("xdo", ["key", "f"])
+        yield ("wait", 600)
+        state = yield ("probe",)
+        assert state["fullscreen"] and not state["fullBack"], ("F again", state)
+
     # A click goes on (here: nothing after the last stop), reduced motion fades.
     yield key("m")
     yield ("wait", 200)
@@ -214,16 +258,29 @@ def scenario():
     assert state["notes"] is not None and "Notes for green." in state["notes"], ("notes", state)
     assert state["presenting"], ("notes", state)
 
-    # Escape ends it; the canvas has the keys again.
-    yield key("Escape")
-    yield ("wait", 800)
-    state = yield ("probe",)
-    if state["presenting"]:
-        # Escape only took the window out of full screen within a second of the notes.
+    # Opening the notes took the window out of full screen (the player's own
+    # doing, so no button); F puts it back.
+    if not state["fullscreen"]:
+        yield key("f")
+        yield ("wait", 600)
+        state = yield ("probe",)
+        assert state["fullscreen"], ("F before Escape", state)
+    # Escape in full screen only leaves full screen; in the window it ends the
+    # presentation, and the canvas has the keys again. (The notes, shown over
+    # the presentation, did not take the window out of full screen.)
+    if state["fullscreen"]:
         yield key("Escape")
         yield ("wait", 800)
         state = yield ("probe",)
+        print(f"Escape in full screen, as the page saw it: {state['keys'][-3:]}", flush=True)
+        assert state["presenting"], ("Escape in full screen", state)
+        assert not state["fullscreen"], ("Escape in full screen", state)
+        assert state["fullBack"], ("the button back to full screen", state)
+    yield key("Escape")
+    yield ("wait", 800)
+    state = yield ("probe",)
     assert not state["presenting"], ("Escape", state)
+    assert not state["editorInert"], ("inert after the end", state)
     assert state["focused"] == "galatsa-canvas", ("focus", state)
     assert not state["fullscreen"], ("full screen", state)
 
