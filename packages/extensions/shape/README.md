@@ -65,7 +65,9 @@ const TAIL_X: ShapeParam = {
 - The default is what data without the key means, forever. Choose it so that the kind looks right without the key.
 - Number ranges are finite (within `MAX_LENGTH`); choice values have the form of a kind name (lowercase letters, digits, hyphens), so that a later version's new options can be kept (below).
 - The framework reads and checks the value, offers it as a field in advanced mode (`quick: true` for quick mode too) for the kinds that list it, and writes it with the common change command. When the kind of a shape changes, the new kind's parameters are written with their defaults and the old kind's are removed. The gallery adds a case with a value other than the default.
-- A key that the common style uses (`kind`, `fill`, `stroke`, `strokeWidth`, `cornerRadius`, `opacity`) cannot be a parameter, and one key cannot mean two parameters.
+- Data keys share one namespace, forever: the common keys (`kind`, `fill`, `stroke`, `strokeWidth`, `cornerRadius`, `opacity`) and every parameter of every kind, now and later. A parameter must never reuse a common key, nor a key another parameter had with another meaning, also one that was removed. Keys are plain identifiers starting with a lowercase letter (`tailX`).
+- When a shape's kind changes, a parameter both kinds list keeps its value; the old kind's other parameters are removed, and the new kind's are written with their defaults.
+- A toggle can never grow: a third state would be a value of the wrong form for older versions. If more states are likely, use a choice from the start.
 
 ### Growing the format
 
@@ -73,7 +75,7 @@ Shapes made by a later version must stay editable in this one. So the reader kee
 
 - **Adding an option** to a choice, or **widening a number's range**, needs no new layout version and breaks nothing in older versions.
 - **Changing what a key means** (a different unit, a different default) is not growth: it needs a new key, or a new layout version with an upgrade (docs/adr/0005, section 3.8).
-- **New kinds of paint**, such as gradients or patterns, go in **new keys**. `fill` and `stroke` stay solid colours (`"#rrggbb"`, `"#rrggbbaa"` or `null`), and remain the fallback an older version draws.
+- **New kinds of paint**, such as gradients or patterns, go in **new keys**. `fill` and `stroke` stay solid colours (`"#rrggbb"`, `"#rrggbbaa"` or `null`), and remain the fallback an older version draws. The new key must record the `fill` it was written with, and is drawn only while `fill` still has that value, so that an older version's change of the fill wins and `null` always means no fill.
 
 ### Notes for the planned kinds
 
