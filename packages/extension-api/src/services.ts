@@ -114,6 +114,15 @@ export interface PreviewService {
   clear(): void;
 }
 
+/** The overlays of extensions (docs/adr/0013). */
+export interface OverlayService {
+  /**
+   * Something an overlay shows changed outside the document: draw again
+   * before the next repaint. Changes to the document redraw by themselves.
+   */
+  invalidate(): void;
+}
+
 /**
  * The editor's services. An open interface: the editor may add more by
  * declaration merging,
@@ -132,4 +141,5 @@ export interface EditorServices {
   readonly scene: SceneQuery;
   readonly text: TextEditingService;
   readonly preview: PreviewService;
+  readonly overlays: OverlayService;
 }

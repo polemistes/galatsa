@@ -12,6 +12,7 @@ import type {
   ExtensionDependency,
   ViewExtension,
 } from "./extension.ts";
+import type { OverlayDefinition } from "./overlay.ts";
 import type { PanelDefinition } from "./panel.ts";
 import type { ToolDefinition } from "./tool.ts";
 import type { ExporterDefinition, ImporterDefinition } from "./transfer.ts";
@@ -26,6 +27,8 @@ export interface EditContributions {
   readonly importers?: readonly ImporterDefinition[];
   readonly exporters?: readonly ExporterDefinition[];
   readonly panels?: readonly PanelDefinition[];
+  /** Drawn over the canvas outside any tool (docs/adr/0013). */
+  readonly overlays?: readonly OverlayDefinition[];
 }
 
 export interface EditExtension {

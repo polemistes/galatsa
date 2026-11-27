@@ -253,6 +253,11 @@ export class Editor {
         this.invalidate();
       }),
     );
+    // Overlays show what the live resolver does not report (stops, routes):
+    // any change to the document draws them again (docs/adr/0013).
+    const documentChanged = (): void => this.#overlaysChanged();
+    doc.on("update", documentChanged);
+    this.#cleanup.push(() => doc.off("update", documentChanged));
     this.services = createServices(
       {
         live: this.live,
@@ -268,6 +273,8 @@ export class Editor {
             if (current !== null && !this.tools.available().some((t) => t.id === current))
               this.tools.selectDefault();
           }
+          // An overlay may be shown only while a panel is open, or per mode.
+          if (what === "mode" || what === "panels") this.#overlaysChanged();
           this.#emit(what);
         },
         placeCamera: (view) => this.#view.place(view),
@@ -443,12 +450,31 @@ export class Editor {
     this.renderer.render();
   }
 
+  /** Draws again if any extension draws an overlay. */
+  #overlaysChanged(): void {
+    if (this.host.overlays(this.#state.mode).length > 0) this.invalidate();
+  }
+
   /**
-   * The overlay, in screen space (CSS pixels): the selection outline from the
-   * renderer's screen rectangles, then the tool's preview, which the tool
-   * draws in root space through a projection.
+   * The overlay, in screen space (CSS pixels): the extensions' overlays, which
+   * draw in root space through a projection (docs/adr/0013), the selection
+   * outline from the renderer's screen rectangles, then the tool's preview,
+   * also in root space.
    */
   #drawOverlay(ctx: DrawContext): void {
+    const overlays = this.host.overlays(this.#state.mode);
+    if (overlays.length > 0) {
+      const context = this.host.commands.context(this.environment());
+      const projected = projectedContext(ctx, this.projection(null));
+      for (const overlay of overlays) {
+        try {
+          if (overlay.definition.visible?.(context) === false) continue;
+          overlay.definition.draw(projected, context);
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    }
     const px = 1 / ctx.scale;
     for (const id of this.#state.selection) {
       const rect = this.renderer.screenBounds(id);

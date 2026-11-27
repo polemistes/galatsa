@@ -216,5 +216,8 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
       show: (changes) => setPreview(changes),
       clear: () => setPreview(null),
     },
+    overlays: {
+      invalidate: () => host.invalidate(),
+    },
   };
 }

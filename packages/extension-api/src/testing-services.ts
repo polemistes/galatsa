@@ -21,6 +21,8 @@ export interface TestServices extends EditorServices {
     preview: PreviewChanges | null;
     /** How many times a preview was shown. */
     previews: number;
+    /** How many times overlays asked to be drawn again. */
+    overlayRequests: number;
   };
 }
 
@@ -56,6 +58,7 @@ export function createTestServices(
     text: null,
     preview: null,
     previews: 0,
+    overlayRequests: 0,
   };
   const resolver = (): Resolver => new Resolver(yLookup(doc));
   const selectable = (r: Resolver): ElementId[] =>
@@ -157,6 +160,11 @@ export function createTestServices(
       },
       clear: () => {
         state.preview = null;
+      },
+    },
+    overlays: {
+      invalidate: () => {
+        state.overlayRequests += 1;
       },
     },
   };

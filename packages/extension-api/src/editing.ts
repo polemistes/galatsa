@@ -15,6 +15,7 @@ export * from "./command.ts";
 export * from "./tool.ts";
 export * from "./transfer.ts";
 export * from "./panel.ts";
+export * from "./overlay.ts";
 export * from "./edit-extension.ts";
 export * from "./editor-host.ts";
 export * from "./element-ops.ts";
