@@ -11,6 +11,12 @@
 
 import type { ElementId } from "@galatsa/core";
 import { setLocked } from "@galatsa/core/ydoc";
+import { EXTENSION_API_VERSION } from "@galatsa/extension-api";
+import {
+  defineEditExtension,
+  defineViewExtension,
+  type ToolSession,
+} from "@galatsa/extension-api/editing";
 import { BASICS } from "@galatsa/extension-basics";
 import { INSERT_MISSING, visibleState } from "@galatsa/extension-basics/testing";
 import { ROTATE_LIFT } from "@galatsa/extension-select";
@@ -549,5 +555,42 @@ describe("the keys, the clipboard and the context menu", () => {
       [BASICS.ungroup, false],
       [BASICS.selectAll, true],
     ]);
+  });
+});
+
+describe("the tool session", () => {
+  it("gives tools the extension lookup only, not the host and its registry", () => {
+    const editor = make();
+    let seen: ToolSession | null = null;
+    const problems = editor.host.load([
+      defineEditExtension({
+        view: defineViewExtension({
+          id: "test.peek",
+          version: "0.0.0",
+          api: EXTENSION_API_VERSION,
+        }),
+        contributes: {
+          tools: [
+            {
+              name: "peek",
+              quick: true,
+              label: "common:action.ok",
+              start(session) {
+                seen = session;
+                return {};
+              },
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(problems).toEqual([]);
+    expect(editor.tools.select("test.peek/peek")).toBe(true);
+    const session = seen as ToolSession | null;
+    const extensions = session!.extensions as unknown as Record<string, unknown>;
+    expect(extensions).not.toBe(editor.host);
+    expect(extensions["commands"]).toBeUndefined();
+    expect(Object.keys(extensions).sort()).toEqual(["capabilities", "elementType"]);
+    expect(session!.extensions.elementType("examples.shape/shape")).toBeDefined();
   });
 });

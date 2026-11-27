@@ -14,6 +14,8 @@ import type {
   Cursor,
   DrawContext,
   EditorHost,
+  ElementFacts,
+  ExtensionLookup,
   Gesture,
   ToolDefinition,
   ToolHandler,
@@ -52,6 +54,7 @@ interface Active {
 
 export class ToolController {
   readonly #editor: ToolHost;
+  readonly #extensions: ExtensionLookup;
   #defaultTool: ContributionId | null;
   #active: Active | null = null;
   /** True while a pointer is down on the canvas and given to the tool. */
@@ -59,6 +62,11 @@ export class ToolController {
 
   constructor(editor: ToolHost, defaultTool: ContributionId | null) {
     this.#editor = editor;
+    const host = editor.host;
+    this.#extensions = Object.freeze({
+      elementType: (type: string) => host.elementType(type),
+      capabilities: (element: ElementFacts) => host.capabilities(element),
+    });
     this.#defaultTool = defaultTool;
   }
 
@@ -144,7 +152,9 @@ export class ToolController {
       run: <R>(command: ContributionId, args?: unknown): CommandOutcome<R> =>
         live() ? editor.run<R>(command, args) : { ok: false, reason: "disabled" },
       isEnabled: (command, args) => live() && editor.isEnabled(command, args),
-      extensions: editor.host,
+      // Only what the interface offers: not the host, whose registry a cast
+      // would otherwise reach.
+      extensions: this.#extensions,
       gesture: (): Gesture => editor.host.commands.beginGesture(editor.environment()),
       scale: () => editor.scale(),
       requestOverlay: () => {
