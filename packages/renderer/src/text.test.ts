@@ -4,6 +4,7 @@
 // their size on screen, and few distinct fonts while the camera zooms (the slow
 // drawing path in WebKitGTK).
 
+import type { ElementId } from "@galatsa/core";
 import { describe, expect, it } from "vitest";
 import { CanvasRenderer } from "./renderer.ts";
 import { sceneFromSnapshot } from "./scene.ts";
@@ -13,6 +14,7 @@ import {
   estimateMeasurer,
   FONT_STEPS,
   ladderSize,
+  LayoutCache,
   layoutText,
 } from "./text.ts";
 
@@ -137,5 +139,56 @@ describe("drawing text", () => {
     expect(fonts.size).toBeLessThanOrEqual(5 * FONT_STEPS);
     // The font is assigned only when it changes, not once per line.
     expect(ctx.named("set font").length).toBeLessThan(ctx.named("fillText").length / 4);
+  });
+});
+
+describe("the layout cache", () => {
+  it("does not lay out every text again on every frame when there are many", () => {
+    let measured = 0;
+    const { host } = testHost();
+    const list: Array<[ElementId, ReturnType<typeof box>]> = [];
+    for (let i = 0; i < 4100; i++)
+      list.push([
+        `t${i}`,
+        box(TEXT, (i % 64) * 12, Math.floor(i / 64) * 12, 10, 10, {
+          data: { text: `w${i}`, size: 5 },
+        }),
+      ]);
+    const renderer = new CanvasRenderer({
+      host,
+      measurer: { width: (_f, t) => (measured++, t.length * 55) },
+    });
+    renderer.attach(new RecordingContext(), {
+      width: 800,
+      height: 600,
+      devicePixelRatio: 1,
+    });
+    renderer.setScene(sceneFromSnapshot({ elements: record(list) }));
+    renderer.setCamera({ space: null, cx: 384, cy: 384, zoom: 0.7 });
+    renderer.render();
+    expect(measured).toBeGreaterThan(4000);
+    const first = measured;
+    renderer.render();
+    expect(measured - first).toBe(0);
+  });
+
+  it("drops the layouts used longest ago when full", () => {
+    const cache = new LayoutCache(8);
+    let made = 0;
+    const get = (text: string) =>
+      cache.get(text, STYLE, 100, () => {
+        made++;
+        return layoutText(estimateMeasurer, DEFAULT_FAMILIES, text, STYLE, 100);
+      });
+    for (let i = 0; i < 8; i++) get(`t${i}`);
+    get("t0"); // used again, so it stays
+    get("new");
+    expect(cache.size).toBeLessThanOrEqual(8);
+    made = 0;
+    get("t0");
+    get("t7");
+    expect(made).toBe(0);
+    get("t1");
+    expect(made).toBe(1);
   });
 });

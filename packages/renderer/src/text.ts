@@ -226,12 +226,25 @@ export function ladderSize(px: number): number {
 
 /** A cache of layouts by content, style and width, bounded in size. */
 export class LayoutCache {
-  readonly #entries = new Map<TextContent, Map<string, SimpleTextLayout>>();
+  readonly #entries = new Map<
+    TextContent,
+    { readonly layouts: Map<string, SimpleTextLayout>; used: number }
+  >();
   #size = 0;
+  #clock = 0;
   readonly #limit: number;
 
-  constructor(limit = 4000) {
-    this.#limit = limit;
+  /**
+   * Keeps at most `limit` layouts. When it is full, the quarter of the contents
+   * used longest ago are dropped, so a document with more text boxes than the
+   * limit still keeps what the current frames draw.
+   */
+  constructor(limit = 20000) {
+    this.#limit = Math.max(1, limit);
+  }
+
+  get size(): number {
+    return this.#size;
   }
 
   get(
@@ -241,19 +254,33 @@ export class LayoutCache {
     make: () => SimpleTextLayout,
   ): SimpleTextLayout {
     const key = `${style.fontFamily}|${style.fontSize}|${style.lineHeight ?? ""}|${style.bold ? 1 : 0}${style.italic ? 1 : 0}|${style.align}|${style.color}|${width}`;
-    let byStyle = this.#entries.get(content);
-    let layout = byStyle?.get(key);
-    if (layout) return layout;
+    let entry = this.#entries.get(content);
+    const hit = entry?.layouts.get(key);
+    if (entry) entry.used = ++this.#clock;
+    if (hit) return hit;
     if (this.#size >= this.#limit) {
-      this.#entries.clear();
-      this.#size = 0;
-      byStyle = undefined;
+      this.#evict();
+      entry = this.#entries.get(content);
     }
-    if (!byStyle) this.#entries.set(content, (byStyle = new Map()));
-    layout = make();
-    byStyle.set(key, layout);
+    if (!entry) {
+      entry = { layouts: new Map(), used: ++this.#clock };
+      this.#entries.set(content, entry);
+    }
+    const layout = make();
+    entry.layouts.set(key, layout);
     this.#size++;
     return layout;
+  }
+
+  /** Drops the quarter of the contents used longest ago. */
+  #evict(): void {
+    const byAge = [...this.#entries].sort((a, b) => a[1].used - b[1].used);
+    const target = Math.floor((this.#limit * 3) / 4);
+    for (const [content, entry] of byAge) {
+      if (this.#size <= target) break;
+      this.#entries.delete(content);
+      this.#size -= entry.layouts.size;
+    }
   }
 
   clear(): void {

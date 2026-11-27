@@ -179,10 +179,17 @@ export class CanvasDrawContext implements DrawContext {
     if (!env.images || !(dest.w > 0) || !(dest.h > 0)) return "missing";
     const natural = env.imageSize(asset);
     const crop = options?.crop;
-    // Width of the whole image on screen, which decides the version.
+    // Width the whole image would have on screen at the larger of the two
+    // scales (a squeezed image needs the version its taller side asks for).
     const naturalW = natural?.w ?? 0;
+    const naturalH = natural?.h ?? 0;
     const shownW = dest.w * this.#scale;
-    const pixels = crop && naturalW > 0 ? (shownW * naturalW) / crop.w : shownW;
+    const shownH = dest.h * this.#scale;
+    const pixels =
+      naturalW > 0 && naturalH > 0
+        ? Math.max(shownW / (crop?.w ?? naturalW), shownH / (crop?.h ?? naturalH)) *
+          naturalW
+        : shownW;
     const picked = env.images.pick(asset, pixels);
     this.counters.images++;
     if (picked.state !== "drawn") {

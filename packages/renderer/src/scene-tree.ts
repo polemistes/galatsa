@@ -191,33 +191,57 @@ export class SceneTree {
     container.index = index;
   }
 
-  /** Removes a node and everything below it that still counts it as parent. */
-  #remove(id: ElementId): void {
+  /**
+   * Removes a node and everything below it that still counts it as parent and
+   * has no record any more. Returns the children that still have a record: they
+   * now resolve elsewhere and must be read again.
+   */
+  #remove(id: ElementId, survivors: ElementId[] = []): ElementId[] {
     const node = this.nodes.get(id);
-    if (!node) return;
+    if (!node) return survivors;
     this.nodes.delete(id);
     if (node.container) {
       for (const child of node.container.ids) {
-        if (this.nodes.get(child)?.parent === id) this.#remove(child);
+        if (this.nodes.get(child)?.parent !== id) continue;
+        if (this.source.element(child)) survivors.push(child);
+        else this.#remove(child, survivors);
       }
     }
+    return survivors;
   }
 
   /**
    * Reads the given elements again from `source` (the same source, or a new one
    * for the new state) and updates nodes, children lists, bounds and indexes.
+   *
+   * `ids` must be every element whose resolution changed: added, changed or
+   * removed records, and every element whose effective parent, position, order
+   * or gone state changed because of them (descendants included), as a live
+   * resolver reports them. Ids of the transaction alone are not enough in
+   * general (a delete can hide a whole subtree). A caller without such a
+   * resolver passes every id. The one case handled beyond that: the surviving
+   * children of a removed container are read again.
    */
   apply(ids: Iterable<ElementId>, source: SceneSource = this.source): void {
     this.source = source;
     const dirty = new Set<ElementId | null>();
     const touched = new Set<ElementId>();
-    for (const id of ids) {
+    const queue = [...ids];
+    const queued = new Set(queue);
+    for (let i = 0; i < queue.length; i++) {
+      const id = queue[i]!;
       const old = this.nodes.get(id);
       const record = source.element(id);
       if (!record) {
         if (old) {
           dirty.add(old.parent);
-          this.#remove(id);
+          // Children of a removed container that are still there: read them too,
+          // even if the caller did not list them.
+          for (const survivor of this.#remove(id)) {
+            if (queued.has(survivor)) continue;
+            queued.add(survivor);
+            queue.push(survivor);
+          }
         }
         continue;
       }

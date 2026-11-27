@@ -115,50 +115,136 @@ self.onmessage = async (event) => {
 };
 `;
 
+/** A worker that has not answered at all after this long is taken as broken. */
+export const WORKER_START_TIMEOUT_MS = 5000;
+/** One decode in a working worker may take this long before it is redone elsewhere. */
+export const WORKER_DECODE_TIMEOUT_MS = 60000;
+
+/** The parts of the Worker API the decoder uses (tests pass a stand-in). */
+export interface WorkerLike {
+  onmessage: ((event: MessageEvent) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  postMessage(message: unknown): void;
+  terminate(): void;
+}
+
+export interface WorkerDecoderOptions {
+  /** Makes the worker; by default a dedicated worker from a string. */
+  readonly create?: () => WorkerLike;
+  /** Where decodes go when the worker cannot be used. Default the main thread. */
+  readonly fallback?: DecodeFn;
+  readonly startTimeoutMs?: number;
+  readonly decodeTimeoutMs?: number;
+}
+
 /**
  * A decoder that runs createImageBitmap in a dedicated worker. The worker is
- * made from a string, so it needs no separate file in any build.
+ * made from a string, so it needs no separate file in any build. If the worker
+ * cannot be made, reports an error, or does not answer at all within
+ * startTimeoutMs (a content security policy that forbids blob: workers, for
+ * example), every waiting and later decode goes to the fallback instead; a
+ * single decode that takes longer than decodeTimeoutMs is redone there too.
  */
-export function workerDecoder(): { decode: DecodeFn; dispose(): void } {
-  let worker: Worker | null = null;
+export function workerDecoder(options: WorkerDecoderOptions = {}): {
+  decode: DecodeFn;
+  dispose(): void;
+  readonly broken: boolean;
+} {
+  const fallback: DecodeFn = options.fallback ?? ((blob) => decodeOnMainThread(blob));
+  const startTimeout = options.startTimeoutMs ?? WORKER_START_TIMEOUT_MS;
+  const decodeTimeout = options.decodeTimeoutMs ?? WORKER_DECODE_TIMEOUT_MS;
+  let worker: WorkerLike | null = null;
   let url = "";
   let next = 0;
-  const waiting = new Map<
-    number,
-    { resolve: (d: Decoded) => void; reject: (e: Error) => void }
-  >();
-  const start = (): Worker => {
-    if (worker) return worker;
-    url = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: "text/javascript" }));
-    worker = new Worker(url);
-    worker.onmessage = (
-      event: MessageEvent<{ id: number; bitmap?: ImageBitmap; error?: string }>,
-    ) => {
-      const { id, bitmap, error } = event.data;
+  let broken = false;
+  let answered = false;
+  interface Waiting {
+    readonly blob: Blob;
+    readonly width: number;
+    readonly height: number;
+    readonly resolve: (d: Decoded) => void;
+    readonly reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout> | undefined;
+  }
+  const waiting = new Map<number, Waiting>();
+  const elsewhere = (entry: Waiting): void => {
+    clearTimeout(entry.timer);
+    fallback(entry.blob, entry.width, entry.height).then(entry.resolve, entry.reject);
+  };
+  const giveUp = (): void => {
+    broken = true;
+    worker?.terminate();
+    worker = null;
+    const list = [...waiting.values()];
+    waiting.clear();
+    for (const entry of list) elsewhere(entry);
+  };
+  const start = (): WorkerLike | null => {
+    if (worker || broken) return worker;
+    try {
+      if (options.create) worker = options.create();
+      else {
+        url = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: "text/javascript" }));
+        worker = new Worker(url) as unknown as WorkerLike;
+      }
+    } catch {
+      giveUp();
+      return null;
+    }
+    worker.onerror = () => giveUp();
+    worker.onmessage = (event: MessageEvent) => {
+      answered = true;
+      const { id, bitmap, error } = event.data as {
+        id: number;
+        bitmap?: ImageBitmap;
+        error?: string;
+      };
       const entry = waiting.get(id);
       waiting.delete(id);
       if (!entry) {
         bitmap?.close();
         return;
       }
+      clearTimeout(entry.timer);
       if (bitmap) entry.resolve(fromBitmap(bitmap));
       else entry.reject(new Error(error ?? "decode failed"));
     };
     return worker;
   };
   return {
-    decode(blob) {
+    get broken() {
+      return broken;
+    },
+    decode(blob, width, height) {
+      if (broken) return fallback(blob, width, height);
       const id = next++;
       return new Promise<Decoded>((resolve, reject) => {
-        waiting.set(id, { resolve, reject });
-        start().postMessage({ id, blob });
+        const entry: Waiting = { blob, width, height, resolve, reject, timer: undefined };
+        waiting.set(id, entry);
+        const w = start();
+        if (!w) return; // giveUp() has sent it elsewhere
+        entry.timer = setTimeout(
+          () => {
+            if (!waiting.has(id)) return;
+            if (!answered) giveUp();
+            else {
+              waiting.delete(id);
+              elsewhere(entry);
+            }
+          },
+          answered ? decodeTimeout : startTimeout,
+        );
+        w.postMessage({ id, blob });
       });
     },
     dispose() {
       worker?.terminate();
       worker = null;
       if (url) URL.revokeObjectURL(url);
-      for (const entry of waiting.values()) entry.reject(new Error("disposed"));
+      for (const entry of waiting.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error("disposed"));
+      }
       waiting.clear();
     },
   };
@@ -217,10 +303,25 @@ export function pickVersion(versions: readonly Version[], pixels: number): numbe
 interface Slot {
   decoded: Decoded | null;
   pending: boolean;
+  /** The last decode failed; tried again from retryAt on. */
   failed: boolean;
+  retryAt: number;
+  retryDelay: number;
   lastUsed: number;
   bytes: number;
 }
+
+/** An asset the source did not have; asked again from retryAt on. */
+interface Missing {
+  readonly missing: true;
+  readonly retryAt: number;
+  readonly retryDelay: number;
+}
+
+/** First wait before asking again for a missing image or a failed decode. */
+export const RETRY_FIRST_MS = 1000;
+/** Longest wait between tries; the wait doubles up to this. */
+export const RETRY_MAX_MS = 60000;
 
 interface Entry {
   readonly asset: string;
@@ -245,6 +346,8 @@ export interface ImageCacheOptions {
   readonly maxInFlight?: number;
   /** Called when a decode finished, so the host can draw again. */
   readonly onChange?: () => void;
+  /** Clock for the retry waits, in milliseconds (tests). Default performance.now. */
+  readonly now?: () => number;
 }
 
 export interface ImageCacheStats {
@@ -265,7 +368,8 @@ export class ImageCache {
   readonly #maxInFlight: number;
   readonly #onChange: (() => void) | undefined;
   readonly #dispose: (() => void) | undefined;
-  readonly #entries = new Map<string, Entry | null>();
+  readonly #entries = new Map<string, Entry | Missing>();
+  readonly #now: () => number;
   readonly #wants = new Map<
     Slot,
     { entry: Entry; index: number; frame: number; pixels: number }
@@ -289,6 +393,7 @@ export class ImageCache {
     this.#budget = options.budgetBytes ?? 384 * 2 ** 20;
     this.#maxInFlight = options.maxInFlight ?? 3;
     this.#onChange = options.onChange;
+    this.#now = options.now ?? (() => performance.now());
     if (options.decode) {
       this.#decode = options.decode;
       this.#reduced = options.reducedDecode ?? false;
@@ -315,26 +420,43 @@ export class ImageCache {
   }
 
   #entry(asset: string): Entry | null {
-    let entry = this.#entries.get(asset);
-    if (entry !== undefined) return entry;
+    const known = this.#entries.get(asset);
+    if (known && !("missing" in known)) return known;
+    const now = this.#now();
+    if (known && now < known.retryAt) return null;
     const levels = this.#source.levels(asset);
-    if (!levels || levels.length === 0) entry = null;
-    else {
-      const versions = versionsOf(levels, this.#reduced);
-      entry = {
-        asset,
-        versions,
-        slots: versions.map(() => ({
-          decoded: null,
-          pending: false,
-          failed: false,
-          lastUsed: -1,
-          bytes: 0,
-        })),
-      };
+    if (!levels || levels.length === 0) {
+      // Not there (yet): ask again later, waiting longer each time. forget()
+      // asks again at once.
+      const delay = known ? Math.min(known.retryDelay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
+      this.#entries.set(asset, {
+        missing: true,
+        retryAt: now + delay,
+        retryDelay: delay,
+      });
+      return null;
     }
+    const versions = versionsOf(levels, this.#reduced);
+    const entry: Entry = {
+      asset,
+      versions,
+      slots: versions.map(() => ({
+        decoded: null,
+        pending: false,
+        failed: false,
+        retryAt: 0,
+        retryDelay: 0,
+        lastUsed: -1,
+        bytes: 0,
+      })),
+    };
     this.#entries.set(asset, entry);
     return entry;
+  }
+
+  /** True if the slot may be decoded now (never failed, or its wait is over). */
+  #mayTry(slot: Slot): boolean {
+    return !slot.failed || this.#now() >= slot.retryAt;
   }
 
   /** Call at the start of each frame. */
@@ -356,7 +478,7 @@ export class ImageCache {
       slot.lastUsed = this.#frame;
       return { state: "drawn", decoded: slot.decoded, exact: true };
     }
-    if (!slot.failed) this.#want(entry, wanted, pixels);
+    if (this.#mayTry(slot)) this.#want(entry, wanted, pixels);
     // Nearest decoded version, preferring larger ones.
     for (let d = 1; d < entry.slots.length; d++) {
       for (const i of [wanted + d, wanted - d]) {
@@ -367,7 +489,7 @@ export class ImageCache {
         }
       }
     }
-    if (entry.slots.every((s) => s.failed)) return { state: "missing" };
+    if (entry.slots.every((s) => s.failed && !s.pending)) return { state: "missing" };
     return { state: "loading" };
   }
 
@@ -434,17 +556,22 @@ export class ImageCache {
 
   async #load(entry: Entry, index: number): Promise<void> {
     const slot = entry.slots[index]!;
-    if (slot.decoded || slot.pending || slot.failed) return;
+    if (slot.decoded || slot.pending || !this.#mayTry(slot)) return;
     const version = entry.versions[index]!;
     slot.pending = true;
     this.#inFlight++;
+    // forget() may drop the entry while this runs; then the result is not kept.
+    const current = (): boolean =>
+      !this.#disposed && this.#entries.get(entry.asset) === entry;
     try {
       const blob = await this.#source.blob(entry.asset, version.level);
+      if (!current()) return;
       const decoded = await this.#decode(blob, version.width, version.height);
-      if (this.#disposed) {
+      if (!current()) {
         decoded.close();
         return;
       }
+      slot.failed = false;
       if (index === entry.versions.length - 1) this.stats.originalDecodes++;
       slot.decoded = decoded;
       slot.lastUsed = this.#frame;
@@ -459,6 +586,12 @@ export class ImageCache {
       this.#evict();
       this.#onChange?.();
     } catch {
+      if (!current()) return;
+      // Try again later, waiting longer each time.
+      slot.retryDelay = slot.failed
+        ? Math.min(slot.retryDelay * 2, RETRY_MAX_MS)
+        : RETRY_FIRST_MS;
+      slot.retryAt = this.#now() + slot.retryDelay;
       slot.failed = true;
       this.stats.failures++;
       this.#onChange?.();
@@ -472,7 +605,7 @@ export class ImageCache {
     while (this.#bytes > this.#budget) {
       let victim: Slot | null = null;
       for (const entry of this.#entries.values()) {
-        if (!entry) continue;
+        if ("missing" in entry) continue;
         for (let i = 1; i < entry.slots.length; i++) {
           const slot = entry.slots[i]!;
           if (!slot.decoded || slot.lastUsed >= this.#frame) continue;
@@ -488,10 +621,16 @@ export class ImageCache {
     }
   }
 
-  /** Forgets an asset (its bytes changed or it was removed). */
+  /**
+   * Forgets everything about an asset: its decoded versions are closed, a
+   * decode still running for it is dropped when it ends, and a record that it
+   * was missing or failed is cleared, so the next frame asks the source again.
+   * Call it when an asset's bytes arrive, change or go away (the renderer's
+   * imagesChanged() does).
+   */
   forget(asset: string): void {
     const entry = this.#entries.get(asset);
-    if (entry) {
+    if (entry && !("missing" in entry)) {
       for (let i = 0; i < entry.slots.length; i++) {
         const slot = entry.slots[i]!;
         if (slot.decoded) {
@@ -508,7 +647,8 @@ export class ImageCache {
   dispose(): void {
     this.#disposed = true;
     for (const entry of this.#entries.values()) {
-      for (const slot of entry?.slots ?? []) slot.decoded?.close();
+      if ("missing" in entry) continue;
+      for (const slot of entry.slots) slot.decoded?.close();
     }
     this.#entries.clear();
     this.#wants.clear();

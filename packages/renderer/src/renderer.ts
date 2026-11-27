@@ -246,9 +246,14 @@ export class CanvasRenderer {
   }
 
   /**
-   * Reads the given elements again: ids that one transaction added, changed or
-   * removed. Pass the source when the document state is a new object (a new
-   * Resolver); a live source can be left out.
+   * Reads the given elements again. `ids` are the elements whose resolution
+   * changed in one transaction: added, changed and removed ones, and every
+   * element whose effective parent, position, order or gone state changed
+   * because of them, descendants included (what a live resolver reports as the
+   * union of added, changed and removed). The ids the transaction wrote are not
+   * enough in general. Without a live resolver, pass a new source from a
+   * snapshot and every element id. Pass the source when the document state is a
+   * new object (a new Resolver); a live source can be left out.
    */
   applyChanges(ids: Iterable<ElementId>, source?: SceneSource): void {
     if (!this.#tree) {
@@ -256,6 +261,20 @@ export class CanvasRenderer {
       return;
     }
     this.#tree.apply(ids, source);
+  }
+
+  /**
+   * Says that image assets have changed: their bytes arrived (an image that was
+   * missing, or whose decode failed), changed, or went away. What was decoded or
+   * remembered about them is dropped, the next frame asks the image source
+   * again, and onInvalidate is called. Without this call a missing image is
+   * asked for again after a growing wait (1 s, doubling up to a minute).
+   */
+  imagesChanged(assets: Iterable<string>): void {
+    const images = this.#images;
+    if (!images) return;
+    for (const asset of assets) images.forget(asset);
+    this.#options.onInvalidate?.();
   }
 
   /** Sets the camera for the next frame. */
@@ -268,7 +287,7 @@ export class CanvasRenderer {
     const state = this.#state;
     if (!state) return;
     const start = performance.now();
-    this.#draw({ state, viewport: this.#viewport, camera: this.#camera });
+    this.#draw({ state, viewport: this.#viewport, camera: this.#camera }, this.stats);
     this.stats.frames++;
     this.stats.lastFrameMs = performance.now() - start;
   }
@@ -296,7 +315,7 @@ export class CanvasRenderer {
     }
   }
 
-  #draw(target: Target): void {
+  #draw(target: Target, stats: RenderStats): void {
     const { state, viewport, camera } = target;
     const tree = this.#tree;
     const widthPx = Math.max(1, Math.round(viewport.width * viewport.devicePixelRatio));
@@ -310,8 +329,8 @@ export class CanvasRenderer {
       state.fill(background);
       ctx.fillRect(0, 0, widthPx, heightPx);
     }
-    this.stats.elementsDrawn = 0;
-    this.stats.containersVisited = 0;
+    stats.elementsDrawn = 0;
+    stats.containersVisited = 0;
     if (!tree) return;
     const counters: FrameCounters = {
       fillText: 0,
@@ -346,7 +365,7 @@ export class CanvasRenderer {
     };
     const host = this.#host;
     const visit = (container: Container, map: SpaceMap, clip?: Rect): void => {
-      this.stats.containersVisited++;
+      stats.containersVisited++;
       const s = map.scale;
       const view = grow(visibleRect(map, widthPx, heightPx, CULL_MARGIN));
       const rect = clip ? intersection(view, clip) : view;
@@ -356,7 +375,7 @@ export class CanvasRenderer {
           const m = elementMatrix(map, node.x, node.y, node.w, node.h, node.rot);
           dc.begin(m, s, detailFor(Math.max(node.w, node.h) * s));
           host.drawElement(dc, node.record, node.id as ElementId);
-          this.stats.elementsDrawn++;
+          stats.elementsDrawn++;
           continue;
         }
         const inner = mapFor(node.id);
@@ -388,10 +407,10 @@ export class CanvasRenderer {
     visit(tree.root, mapFor(null));
     images?.endFrame();
     state.identity();
-    this.stats.fillText = counters.fillText;
-    this.stats.textBars = counters.textBars;
-    this.stats.images = counters.images;
-    this.stats.imagesIncomplete = counters.imagesIncomplete;
+    stats.fillText = counters.fillText;
+    stats.textBars = counters.textBars;
+    stats.images = counters.images;
+    stats.imagesIncomplete = counters.imagesIncomplete;
   }
 
   /** The natural size of an image from its stored versions (the last is the original). */
@@ -434,7 +453,8 @@ export class CanvasRenderer {
       const ly = (py - map.oy) / s;
       const tol = tolPx / s;
       const near = { x: lx - tol, y: ly - tol, w: 2 * tol, h: 2 * tol };
-      const candidates = tree.visibleChildren(container, grow(near), 0);
+      // Elements under half a device pixel are not drawn, so they are not hit.
+      const candidates = tree.visibleChildren(container, grow(near), 0.5 / s);
       for (let i = candidates.length - 1; i >= 0; i--) {
         const node = candidates[i]!;
         if (node.kind === "element") {
@@ -524,37 +544,49 @@ export class CanvasRenderer {
   /**
    * Elements whose screen bounds meet (or, with `inside`, lie within) a
    * rectangle in CSS pixels, at the top level of `space` (the root by default),
-   * in drawing order. For rubber-band selection.
+   * in drawing order. For rubber-band selection. Gone elements are never
+   * returned; the members of a gone container (a dissolved group, say) are, in
+   * its place, as the user sees them.
    */
   elementsInRect(
     rect: Rect,
     options: { space?: ElementId | null; inside?: boolean } = {},
   ): ElementId[] {
     const tree = this.#tree;
-    const space = options.space ?? null;
-    const container = tree?.container(space);
-    const map = this.#map(space);
-    if (!tree || !container || !map) return [];
+    if (!tree) return [];
     const dpr = this.#viewport.devicePixelRatio;
-    const local = {
-      x: (rect.x * dpr - map.ox) / map.scale,
-      y: (rect.y * dpr - map.oy) / map.scale,
-      w: (rect.w * dpr) / map.scale,
-      h: (rect.h * dpr) / map.scale,
-    };
-    return tree
-      .visibleChildren(container, local, 0)
-      .filter((node) => {
-        if (!options.inside) return true;
+    const out: ElementId[] = [];
+    const collect = (space: ElementId | null): void => {
+      const container = tree.container(space);
+      const map = this.#map(space);
+      if (!container || !map) return;
+      const local = {
+        x: (rect.x * dpr - map.ox) / map.scale,
+        y: (rect.y * dpr - map.oy) / map.scale,
+        w: (rect.w * dpr) / map.scale,
+        h: (rect.h * dpr) / map.scale,
+      };
+      for (const node of tree.visibleChildren(container, local, 0)) {
+        if (node.gone) {
+          if (node.container) collect(node.id);
+          continue;
+        }
         const b = node.bounds!;
-        return (
-          b.x >= local.x &&
-          b.y >= local.y &&
-          b.x + b.w <= local.x + local.w &&
-          b.y + b.h <= local.y + local.h
-        );
-      })
-      .map((node) => node.id);
+        if (
+          options.inside &&
+          !(
+            b.x >= local.x &&
+            b.y >= local.y &&
+            b.x + b.w <= local.x + local.w &&
+            b.y + b.h <= local.y + local.h
+          )
+        )
+          continue;
+        out.push(node.id);
+      }
+    };
+    collect(options.space ?? null);
+    return out;
   }
 
   /** In-place text editing; not built yet (the interface keeps its place). */
@@ -572,6 +604,18 @@ export class CanvasRenderer {
    * image and centred. Shape of RegionRenderer in docs/adr/0005.
    */
   async renderRegion(region: Region, image: RegionImage): Promise<Uint8Array> {
+    const { rect } = region;
+    const sizes = [image.width, image.height, rect.w, rect.h];
+    if (
+      !sizes.every((v) => Number.isFinite(v) && v > 0) ||
+      !Number.isFinite(rect.x) ||
+      !Number.isFinite(rect.y) ||
+      !Number.isInteger(image.width) ||
+      !Number.isInteger(image.height)
+    )
+      throw new RangeError(
+        "renderRegion needs a region and an image of positive, finite size",
+      );
     const { canvas, ctx } = makeCanvas(image.width, image.height);
     const state = new CanvasState(ctx);
     const zoom = Math.min(image.width / region.rect.w, image.height / region.rect.h);
@@ -586,13 +630,13 @@ export class CanvasRenderer {
       viewport: { width: image.width, height: image.height, devicePixelRatio: 1 },
       camera,
     };
-    const saved = { ...this.stats };
+    // Counters of its own, so the frames on screen keep theirs.
+    const stats: RenderStats = { ...this.stats };
     for (let round = 0; round < 20; round++) {
-      this.#draw(target);
-      if (!this.stats.imagesIncomplete || !this.#images?.busy) break;
+      this.#draw(target, stats);
+      if (!stats.imagesIncomplete || !this.#images?.busy) break;
       await this.#images.settle();
     }
-    Object.assign(this.stats, saved);
     const blob = await encode(canvas, image.mediaType);
     return new Uint8Array(await blob.arrayBuffer());
   }
