@@ -18,6 +18,11 @@
 //   scaled, and groups and frames are not rotated.
 // - Arrow keys nudge the selection by one screen pixel (Shift: ten); Escape
 //   with nothing to cancel clears the selection.
+// - Frames (docs/adr/0014-stacking-and-frames.md): a frame's name above it
+//   takes the frame; a click on its background selects it and a drag moves
+//   it, as any element; with Shift, a drag on its background draws a band
+//   among what is in it. A drag of the selection let go over a frame moves
+//   it into the frame, and let go outside its frame moves it out.
 
 import { Resolver, type ElementId, type Point, type Rect } from "@galatsa/core";
 import { yLookup } from "@galatsa/core/ydoc";
@@ -129,8 +134,9 @@ type Drag =
       current: Point;
       readonly add: boolean;
       /**
-       * A band drawn from a frame's background selects among what is in the
-       * frame; a click there (no drag) selects the frame.
+       * A band drawn with Shift from a frame's background selects among what
+       * is in the frame, adding to the selection; a Shift-click there (no
+       * drag) adds or removes the frame.
        */
       readonly within?: ElementId;
     }
@@ -630,7 +636,21 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       // else is behind it (an element on top of the name wins).
       const name = nameUnder(event.world, found);
       const hit = name ?? found;
+      /** The press is on a frame's background (not its name, nor an element in it). */
+      const background = hit !== null && name === null && isFrame(resolver(), hit);
       if (event.modifiers.shift) {
+        // On a frame's background, a drag draws a band among what is in the
+        // frame, adding to the selection; a click adds or removes the frame.
+        if (background) {
+          drag = {
+            kind: "band",
+            start: event,
+            current: event.world,
+            add: true,
+            within: hit,
+          };
+          return;
+        }
         if (hit !== null) {
           s.selection.set(
             selection.includes(hit)
@@ -643,21 +663,16 @@ export function startSelectTool(session: ToolSession): ToolHandler {
         return;
       }
       const already = hit !== null && selection.includes(hit);
-      // The background of a frame that is not selected: a drag draws a band
-      // among what is in the frame, a click selects the frame. Between the
-      // elements of a selection, the selection is moved, as on the canvas.
-      if (hit !== null && name === null && !already && isFrame(resolver(), hit)) {
-        if (f !== null && f.move && insideBox(f.box, event.world)) {
-          startMove(event, f.ids, null);
-          return;
-        }
-        drag = {
-          kind: "band",
-          start: event,
-          current: event.world,
-          add: false,
-          within: hit,
-        };
+      // Between the elements of a selection, on the background of a frame
+      // they are in, the selection is moved, as on the canvas.
+      if (
+        background &&
+        !already &&
+        f !== null &&
+        f.move &&
+        insideBox(f.box, event.world)
+      ) {
+        startMove(event, f.ids, null);
         return;
       }
       if (hit !== null) {
@@ -703,11 +718,17 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       switch (d.kind) {
         case "band": {
           const s = services();
-          // A click on a frame's background selects the frame. A click on
-          // empty canvas is not a band: it would select what only the
-          // bounding box of a turned or round element covers.
+          // A Shift-click on a frame's background adds or removes the frame.
+          // A click on empty canvas is not a band: it would select what only
+          // the bounding box of a turned or round element covers.
           if (still) {
-            if (d.within !== undefined) s.selection.set([d.within]);
+            const id = d.within;
+            if (id !== undefined) {
+              const now = s.selection.get();
+              s.selection.set(
+                now.includes(id) ? now.filter((other) => other !== id) : [...now, id],
+              );
+            }
             return;
           }
           const r = resolver();

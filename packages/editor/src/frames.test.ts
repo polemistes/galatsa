@@ -157,7 +157,7 @@ describe("taking frames", () => {
     expect(at(editor, a)).toEqual({ x: 310, y: 160, parent: f });
   });
 
-  it("selects a frame with a click on its background, and draws a band among its contents with a drag", () => {
+  it("selects a frame with a click on its background and moves it with a drag; with Shift a drag draws a band among its contents", () => {
     const editor = make();
     const f = frame(editor, 100, 100, 400, 300);
     const a = rect(editor, 20, 20, 40, 40, f);
@@ -166,14 +166,26 @@ describe("taking frames", () => {
     editor.services.selection.set([]);
     click(editor, 300, 150);
     expect(editor.selection).toEqual([f]);
+    // With Shift, a band among what is in the frame, added to the selection.
     editor.services.selection.set([]);
     const before = visibleState(editor.doc);
-    drag(editor, { x: 105, y: 105 }, { x: 250, y: 150 });
+    drag(editor, { x: 105, y: 105 }, { x: 250, y: 150 }, { shiftKey: true });
     expect(editor.selection).toEqual([a, b]);
     expect(visibleState(editor.doc)).toEqual(before);
-    // Once the frame is selected, a drag on its background moves it.
-    editor.services.selection.set([f]);
-    drag(editor, { x: 400, y: 380 }, { x: 410, y: 390 });
+    // A Shift-click on the background adds the frame, and takes it out again.
+    editor.pointerDown(pointer(300, 150, { shiftKey: true }));
+    editor.pointerUp(pointer(300, 150, { shiftKey: true }));
+    expect(editor.selection).toEqual([a, b, f]);
+    editor.pointerDown(pointer(300, 150, { shiftKey: true }));
+    editor.pointerUp(pointer(300, 150, { shiftKey: true }));
+    expect(editor.selection).toEqual([a, b]);
+    // Between the selected elements, a drag moves them, not the frame.
+    drag(editor, { x: 200, y: 140 }, { x: 210, y: 150 });
+    expect(at(editor, a)).toEqual({ x: 130, y: 130, parent: f });
+    expect(at(editor, f)).toEqual({ x: 100, y: 100, parent: null });
+    // A drag on the background of a frame that is not selected moves it.
+    editor.services.selection.set([]);
+    oneStep(editor, () => drag(editor, { x: 400, y: 380 }, { x: 410, y: 390 }));
     expect(at(editor, f)).toEqual({ x: 110, y: 110, parent: null });
   });
 
