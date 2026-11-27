@@ -6,13 +6,16 @@
 // core takes.
 //
 // - The primary button of the first pointer that goes down is the tool's until
-//   it goes up; other pointers (a second finger) and other buttons are ignored
-//   for now, and a pointer whose pointerup never came is dropped (pointers.ts).
-// - The middle button drags the canvas; the wheel scrolls it, and with Ctrl or
-//   Cmd (which is also what a trackpad pinch sends) zooms about the pointer.
-//   The real camera controls come later; this is enough to reach an element.
+//   it goes up; other buttons are ignored, and a pointer whose pointerup never
+//   came is dropped (pointers.ts).
+// - The camera (docs/adr/0009): the middle button drags the canvas, and so
+//   does the primary button while Space is held (the editor's hand). Two fingers pan
+//   and pinch. The wheel and two fingers on a trackpad scroll the canvas
+//   (Shift turns a mouse wheel sideways); with Ctrl or Cmd, which is also what
+//   browsers send for a pinch on a trackpad, they zoom about the pointer.
+//   Safari sends its own gesture events for a trackpad pinch; they zoom too.
 // - Keys go to the editor while the canvas has focus. It takes focus when it
-//   is clicked.
+//   is clicked, and lets go of held keys (Space) when it loses it.
 // - Copy, cut and paste carry the system clipboard; a right click opens the
 //   context menu (context-menu.ts).
 
@@ -25,8 +28,43 @@ import { PointerTracker, type PointerAction, type PointerFacts } from "./pointer
 
 /** One wheel "line" in pixels, for wheels that report lines. */
 const LINE = 16;
-/** Zoom per pixel of wheel movement with Ctrl or Cmd. */
-const ZOOM_PER_PIXEL = 0.002;
+/** Zoom per pixel of wheel movement with Ctrl or Cmd (e^0.01 per pixel). */
+const ZOOM_PER_PIXEL = 0.01;
+/**
+ * The most wheel movement one event zooms by, in pixels. A mouse wheel's
+ * notch is 100 pixels in Chromium and 3 lines (48 pixels) in Firefox; capped,
+ * a notch zooms by e^0.25 (about 1.28) in both, while the small steps of a
+ * trackpad pinch (a few pixels each) pass unchanged.
+ */
+const MAX_ZOOM_PIXELS = 25;
+
+/** The zoom factor for a wheel event with Ctrl or Cmd, `dy` in pixels. */
+export function wheelZoomFactor(dy: number): number {
+  const capped = Math.max(-MAX_ZOOM_PIXELS, Math.min(MAX_ZOOM_PIXELS, dy));
+  return Math.exp(-capped * ZOOM_PER_PIXEL);
+}
+
+/**
+ * A wheel event's movement in pixels. Wheels may report lines (16 pixels
+ * each) or pages: a page is the width of the canvas across and its height
+ * down.
+ */
+export function wheelPixels(
+  e: { readonly deltaX: number; readonly deltaY: number; readonly deltaMode: number },
+  width: number,
+  height: number,
+): { dx: number; dy: number } {
+  if (e.deltaMode === 2) return { dx: e.deltaX * width, dy: e.deltaY * height };
+  const line = e.deltaMode === 1 ? LINE : 1;
+  return { dx: e.deltaX * line, dy: e.deltaY * line };
+}
+
+/** Safari's gesture events (a pinch on a trackpad): not in the DOM's types. */
+interface GestureEvent extends UIEvent {
+  readonly scale: number;
+  readonly clientX: number;
+  readonly clientY: number;
+}
 
 function pointerType(type: string): PointerInput["pointerType"] {
   return type === "pen" || type === "touch" ? type : "mouse";
@@ -125,9 +163,21 @@ export function mountEditor(
         case "tool-cancel":
           editor.pointerCancel();
           break;
+        case "tool-withdraw":
+          editor.pointerWithdraw();
+          break;
         case "pan":
           editor.pan(action.dx, action.dy);
           break;
+        case "pinch": {
+          const rect = surface.getBoundingClientRect();
+          editor.pinch(
+            { x: action.from.x - rect.left, y: action.from.y - rect.top },
+            { x: action.to.x - rect.left, y: action.to.y - rect.top },
+            action.factor,
+          );
+          break;
+        }
       }
     }
   };
@@ -147,20 +197,50 @@ export function mountEditor(
     "wheel",
     (e) => {
       e.preventDefault();
-      const scale =
-        e.deltaMode === 1 ? LINE : e.deltaMode === 2 ? surface.clientHeight : 1;
-      const dx = e.deltaX * scale;
-      const dy = e.deltaY * scale;
+      let { dx, dy } = wheelPixels(e, surface.clientWidth, surface.clientHeight);
       if (e.ctrlKey || e.metaKey) {
         const rect = surface.getBoundingClientRect();
         editor.zoomAt(
           { x: e.clientX - rect.left, y: e.clientY - rect.top },
-          Math.exp(-dy * ZOOM_PER_PIXEL),
+          wheelZoomFactor(dy),
         );
-      } else editor.pan(-dx, -dy);
+        return;
+      }
+      // Shift and a mouse wheel scroll sideways; most browsers already turn
+      // the movement, some do not.
+      if (e.shiftKey && dx === 0) [dx, dy] = [dy, 0];
+      editor.pan(-dx, -dy);
     },
     { passive: false },
   );
+  // Safari: a pinch on a trackpad comes as gesture events, with the scale
+  // since the gesture began. On iOS a pinch also comes as two touch pointers,
+  // which already zoom; the gesture events are then ignored.
+  let gestureScale = 1;
+  const gesture = (type: string, handle: (e: GestureEvent) => void): void => {
+    const listener = (event: Event): void => {
+      event.preventDefault();
+      handle(event as GestureEvent);
+    };
+    surface.addEventListener(type, listener, { passive: false });
+    offList.push(() => surface.removeEventListener(type, listener));
+  };
+  gesture("gesturestart", (e) => {
+    gestureScale = e.scale > 0 ? e.scale : 1;
+  });
+  gesture("gesturechange", (e) => {
+    if (!(e.scale > 0) || pointers.pinching) return;
+    const rect = surface.getBoundingClientRect();
+    editor.zoomAt(
+      { x: e.clientX - rect.left, y: e.clientY - rect.top },
+      e.scale / gestureScale,
+    );
+    gestureScale = e.scale;
+  });
+  gesture("gestureend", () => {
+    gestureScale = 1;
+  });
+  on("blur", () => editor.focusLost());
   on("keydown", (e) => {
     if (e.isComposing) return;
     const result = editor.keyDown({ ...keyInput(e), repeat: e.repeat });

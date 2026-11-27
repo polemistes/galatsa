@@ -34,6 +34,7 @@ import type {
   EditorServices,
   Modifiers,
   ToolKeyEvent,
+  SpacePoint,
   ToolPointerEvent,
 } from "@galatsa/extension-api/editing";
 import { BASICS, readFragment } from "@galatsa/extension-basics";
@@ -57,7 +58,8 @@ import {
   type ClipboardTarget,
 } from "./clipboard.ts";
 import { ContextMenu } from "./context-menu.ts";
-import { fitCamera, panBy, screenToWorld, zoomAbout, type ScreenSize } from "./camera.ts";
+import { CameraControl } from "./camera-control.ts";
+import { screenToWorld, type ScreenSize } from "./camera.ts";
 import { documentAssets } from "./images.ts";
 import {
   detectPlatform,
@@ -131,6 +133,8 @@ export type KeyResult =
   | null
   /** The current tool used it. */
   | { readonly kind: "tool-key" }
+  /** Space: the hand is out (a drag moves the canvas). */
+  | { readonly kind: "hand" }
   | ShortcutResult;
 
 /** What a shortcut ran. */
@@ -188,6 +192,18 @@ export class Editor {
   #disposed = false;
   #version = 0;
   #inputEnabled = true;
+  /** The camera controls (anchoring, zoom, pan, the hand). */
+  readonly #view: CameraControl;
+  /** A pointer is down and belongs to the tool. */
+  #toolPointer = false;
+  /** What the tool's press may take back (`pointerWithdraw`): the state before it. */
+  #press: {
+    readonly selection: readonly ElementId[];
+    readonly tool: ContributionId | null;
+    /** The undo steps before the press, and the last of them. */
+    readonly steps: number;
+    readonly top: unknown;
+  } | null = null;
 
   constructor(options: EditorOptions) {
     const doc = options.doc;
@@ -203,6 +219,14 @@ export class Editor {
     this.undo = createUndoManager(doc);
     this.live = liveResolver(doc);
     this.scene = new EditorScene(doc, this.live);
+    this.#view = new CameraControl({
+      live: this.live,
+      scene: this.scene,
+      screen: () => this.screen,
+      camera: () => this.#state.camera,
+      setCamera: (view) => this.services.camera.set(view),
+      cursorChanged: () => this.#emit("cursor"),
+    });
     this.#state = {
       selection: [],
       camera: { space: null, cx: 0, cy: 0, zoom: 1 },
@@ -225,6 +249,7 @@ export class Editor {
         const ids = [...changes.added, ...changes.changed, ...changes.removed];
         this.renderer.applyChanges(ids);
         this.#pruneSelection();
+        this.#view.documentChanged();
         this.invalidate();
       }),
     );
@@ -245,6 +270,9 @@ export class Editor {
           }
           this.#emit(what);
         },
+        placeCamera: (view) => this.#view.place(view),
+        previewChanged: () => this.#view.follow(),
+        toScreen: (point) => this.#view.toScreen(point),
       },
       this.#state,
     );
@@ -291,7 +319,7 @@ export class Editor {
   }
 
   get cursor(): Cursor {
-    return this.#cursor;
+    return this.#view.handCursor ?? this.#cursor;
   }
 
   /**
@@ -451,7 +479,7 @@ export class Editor {
   }
 
   // -------------------------------------------------------------------------
-  // The camera (the real controls come later; these are enough to reach things)
+  // The camera (camera-control.ts, docs/adr/0009)
   // -------------------------------------------------------------------------
 
   screenToWorld(point: Point): Point {
@@ -465,7 +493,7 @@ export class Editor {
 
   /** Shows `rect` (root space by default) filling the view. */
   fit(rect: Rect, space: ElementId | null = null): void {
-    this.services.camera.set(fitCamera(rect, space, this.screen));
+    this.services.camera.fit(rect, space);
   }
 
   /** Shows everything the document has at the top level. */
@@ -489,16 +517,30 @@ export class Editor {
     if (all !== null && this.screen.width > 0 && this.screen.height > 0) this.fit(all);
   }
 
-  /** Zooms by `factor` about a point on screen. */
+  /** Zooms by `factor` about a point on screen, which stays where it is. */
   zoomAt(point: Point, factor: number): void {
     if (!this.#inputEnabled) return;
-    this.services.camera.set(zoomAbout(this.#state.camera, this.screen, point, factor));
+    this.#view.zoomAt(point, factor);
   }
 
   /** Moves the canvas by a distance in screen pixels. */
   pan(dx: number, dy: number): void {
     if (!this.#inputEnabled) return;
-    this.services.camera.set(panBy(this.#state.camera, dx, dy));
+    this.#view.pan(dx, dy);
+  }
+
+  /**
+   * Two fingers moved (or a pinch on a trackpad): the point that was between
+   * them at `from` (on screen) is now at `to`, and the view is scaled by `factor`.
+   */
+  pinch(from: Point, to: Point, factor: number): void {
+    if (!this.#inputEnabled) return;
+    this.#view.pinch(from, to, factor);
+  }
+
+  /** A point on screen in the camera's own space, exact at any zoom. */
+  pointerAt(screen: Point): SpacePoint {
+    return this.#view.pointAt(screen);
   }
 
   // -------------------------------------------------------------------------
@@ -520,11 +562,14 @@ export class Editor {
     };
   }
 
-  #toolPointer(e: PointerInput): ToolPointerEvent {
+  #toolEvent(e: PointerInput): ToolPointerEvent {
     const screen = { x: e.x, y: e.y };
+    const world = this.screenToWorld(screen);
+    this.#view.notePointer(screen, world);
     return {
       screen,
-      world: this.screenToWorld(screen),
+      world,
+      local: this.#view.pointAt(screen),
       pointerType: e.pointerType,
       button: e.button,
       pressure: e.pressure,
@@ -540,7 +585,12 @@ export class Editor {
   setInputEnabled(enabled: boolean): void {
     if (enabled === this.#inputEnabled) return;
     this.#inputEnabled = enabled;
-    if (!enabled) this.tools.pointerCancel();
+    if (!enabled) {
+      this.#toolPointer = false;
+      this.tools.pointerCancel();
+      this.#view.handUp(null);
+      this.#view.releaseHand();
+    }
   }
 
   get inputEnabled(): boolean {
@@ -549,21 +599,72 @@ export class Editor {
 
   pointerDown(e: PointerInput): void {
     if (!this.#inputEnabled) return;
-    this.tools.pointerDown(this.#toolPointer(e));
+    if (this.#view.handDown({ x: e.x, y: e.y })) return;
+    this.#toolPointer = true;
+    const stack = this.undo.undoStack;
+    this.#press = {
+      selection: this.#state.selection,
+      tool: this.tools.current,
+      steps: stack.length,
+      top: stack[stack.length - 1],
+    };
+    this.tools.pointerDown(this.#toolEvent(e));
   }
 
   pointerMove(e: PointerInput): void {
     if (!this.#inputEnabled) return;
-    this.tools.pointerMove(this.#toolPointer(e));
+    if (this.#view.handMove({ x: e.x, y: e.y })) return;
+    this.tools.pointerMove(this.#toolEvent(e));
   }
 
   pointerUp(e: PointerInput): void {
     if (!this.#inputEnabled) return;
-    this.tools.pointerUp(this.#toolPointer(e));
+    if (this.#view.handUp({ x: e.x, y: e.y })) return;
+    this.#toolPointer = false;
+    this.tools.pointerUp(this.#toolEvent(e));
   }
 
   pointerCancel(): void {
+    if (this.#view.handUp(null)) return;
+    this.#toolPointer = false;
     this.tools.pointerCancel();
+  }
+
+  /**
+   * The press turned out to be the first finger of a pinch: everything it did
+   * is taken back. The hand lets go of it, or the tool's drag is cancelled,
+   * then every undo step made since the press is undone and dropped from the
+   * redo stack (a tool may run a command as soon as the finger goes down, as
+   * the text sketch does), and the selection and the tool are put back as
+   * they were before the press. Steps are only taken back while the stack
+   * still holds the step that was last before the press, so nothing older is
+   * ever undone.
+   */
+  pointerWithdraw(): void {
+    if (this.#view.handUp(null)) return;
+    const press = this.#press;
+    if (!this.#toolPointer || press === null) return;
+    this.pointerCancel();
+    this.#press = null;
+    const undo = this.undo;
+    if (undo.undoStack[press.steps - 1] === press.top) {
+      let taken = 0;
+      while (undo.undoStack.length > press.steps) {
+        const length = undo.undoStack.length;
+        undo.undo();
+        if (undo.undoStack.length >= length) break;
+        taken++;
+      }
+      undo.redoStack.splice(Math.max(0, undo.redoStack.length - taken), taken);
+    }
+    if (press.tool !== null && this.tools.current !== press.tool)
+      this.tools.select(press.tool);
+    this.services.selection.set(press.selection);
+  }
+
+  /** The canvas lost focus: keys held down (Space) are let go. */
+  focusLost(): void {
+    this.#view.releaseHand();
   }
 
   /**
@@ -586,6 +687,8 @@ export class Editor {
     };
     if (!this.#inputEnabled) return null;
     if (this.tools.keyDown(toolEvent)) return { kind: "tool-key" };
+    if (isHandKey(input) && this.#view.holdHand(this.#toolPointer))
+      return { kind: "hand" };
     if (isClipboardKey(input, this.platform)) return null;
     const match = matchShortcut(input, this.platform, this.#keymapFor().map);
     if (match === undefined) return null;
@@ -603,6 +706,8 @@ export class Editor {
 
   keyUp(input: KeyInput): boolean {
     if (!this.#inputEnabled) return false;
+    // Space let go with a modifier held still puts the hand away.
+    if (input.key === " " && this.#view.releaseHand()) return true;
     return this.tools.keyUp({
       key: input.key,
       modifiers: this.#modifiers(input),
@@ -810,6 +915,17 @@ export class Editor {
     detachLiveResolver(this.doc);
     this.#listeners.clear();
   }
+}
+
+/** Space alone (no modifiers): the hand. */
+function isHandKey(input: KeyInput): boolean {
+  return (
+    input.key === " " &&
+    !input.ctrlKey &&
+    !input.altKey &&
+    !input.metaKey &&
+    !input.shiftKey
+  );
 }
 
 export type ShortcutTarget =

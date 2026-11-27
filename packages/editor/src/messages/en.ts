@@ -38,4 +38,13 @@ export default {
   "paste.damaged":
     "What is on the clipboard could not be pasted: it is damaged or incomplete.",
   "panels.label": "Panels",
+  "nav.zoomIn": "Zoom in",
+  "nav.zoomOut": "Zoom out",
+  "nav.actualSize": "Actual size",
+  "nav.viewAll": "Show everything",
+  "nav.viewSelection": "Show the selection",
+  "nav.panLeft": "Move the view left",
+  "nav.panRight": "Move the view right",
+  "nav.panUp": "Move the view up",
+  "nav.panDown": "Move the view down",
 };

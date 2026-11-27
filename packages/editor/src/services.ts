@@ -26,7 +26,7 @@ import type {
   PreviewChanges,
 } from "@galatsa/extension-api/editing";
 import type { CanvasRenderer } from "@galatsa/renderer";
-import { fitCamera, visibleWorld, worldToScreen, type ScreenSize } from "./camera.ts";
+import { fitCamera, visibleWorld, type ScreenSize } from "./camera.ts";
 import type { EditorScene } from "./scene-source.ts";
 
 /** What the services need from the editor. */
@@ -39,6 +39,12 @@ export interface ServiceHost {
   invalidate(): void;
   /** The editor's state changed (selection, camera, mode, panels): tell listeners. */
   changed(what: StateChange): void;
+  /** The camera as it is set: anchored and within the zoom limits (docs/adr/0009). */
+  placeCamera(view: CameraView): CameraView;
+  /** The preview of a gesture changed (the camera follows its anchor). */
+  previewChanged(): void;
+  /** A point of root space on screen (exact for the pointer's own position). */
+  toScreen(point: Point): Point;
 }
 
 export type StateChange = "selection" | "camera" | "mode" | "panels";
@@ -99,6 +105,7 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
     const ids = scene.setPreview(changes);
     if (ids.size === 0) return;
     renderer.applyChanges(ids);
+    host.previewChanged();
     host.invalidate();
   };
   return {
@@ -127,13 +134,18 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
           !Number.isFinite(view.zoom)
         )
           return;
-        state.camera = { space: view.space, cx: view.cx, cy: view.cy, zoom: view.zoom };
+        state.camera = host.placeCamera({
+          space: view.space,
+          cx: view.cx,
+          cy: view.cy,
+          zoom: view.zoom,
+        });
         renderer.setCamera(state.camera);
         host.changed("camera");
         host.invalidate();
       },
       fit(rect, space) {
-        this.set(fitCamera(rect, space, host.screen()));
+        this.set(fitCamera(rect, space, host.screen(), undefined, state.camera.zoom));
       },
     },
     mode: {
@@ -157,7 +169,7 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
     },
     scene: {
       elementAt(point, tolerance) {
-        const screen = worldToScreen(state.camera, host.screen(), offsets, point);
+        const screen = host.toScreen(point);
         const hit = renderer.hitTest(screen.x, screen.y, {
           tolerance: tolerance * state.camera.zoom,
           accept: (id) => !live.isLocked(id),
@@ -173,6 +185,7 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
         });
       },
       bounds: (id) => (live.get(id) === undefined ? null : live.bounds(id)),
+      offset: (from, to) => scene.offset(from, to),
       placement(id): ElementPlacement | null {
         const e = live.get(id);
         if (!e || live.isGone(id)) return null;

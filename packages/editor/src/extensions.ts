@@ -3,9 +3,12 @@
 // The editor's extension host: the built-in basics extension first (the
 // commands every element has, docs/adr/0005, section 12.1), then the built-in
 // selection tool (docs/adr/0008; its tool is the first, so the default when the
-// program names none), then the program's other extensions. The basics come first so that they keep their shortcuts
-// when another extension claims the same one ("select all" in the selection
-// sketch, say): the first registered keeps a shortcut.
+// program names none), then the editor's navigation commands (navigation.ts),
+// then the program's other extensions. The basics come first so that they keep
+// their shortcuts when another extension claims the same one ("select all" in
+// the selection sketch, say): the first registered keeps a shortcut. The
+// selection tool gets keys before the navigation's shortcuts (the arrow keys
+// nudge a selection; with nothing selected they move the view).
 
 import type { Mode } from "@galatsa/extension-api";
 import {
@@ -20,6 +23,7 @@ import { selectExtension } from "@galatsa/extension-select";
 import type { I18n } from "@galatsa/i18n";
 import { storageMessages } from "@galatsa/storage";
 import { editorMessages } from "./messages/index.ts";
+import { navigationExtension } from "./navigation.ts";
 
 export interface LoadedExtensions {
   readonly host: EditorHost;
@@ -42,7 +46,12 @@ export function loadExtensions(
 ): LoadedExtensions {
   registerEditorMessages(i18n);
   const host = new EditorHost({ i18n });
-  const problems = host.load([basicsExtension, selectExtension, ...extensions]);
+  const problems = host.load([
+    basicsExtension,
+    selectExtension,
+    navigationExtension,
+    ...extensions,
+  ]);
   return {
     host,
     problems,

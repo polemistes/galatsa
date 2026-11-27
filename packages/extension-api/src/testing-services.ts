@@ -118,6 +118,7 @@ export function createTestServices(
         });
       },
       bounds: (id) => resolver().bounds(id),
+      offset: (from, to) => resolver().offset(from, to),
       placement(id) {
         const r = resolver();
         const e = r.get(id);
