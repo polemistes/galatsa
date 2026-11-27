@@ -30,14 +30,13 @@
     "@galatsa/i18n": "workspace:*",
     "@galatsa/renderer": "workspace:*",
     "@galatsa/storage": "workspace:*",
-    "react": "19.3.1",
-    "react-dom": "19.3.1",
+    "svelte": "5.57.3",
     "yjs": "13.6.33"
   },
   "devDependencies": {
     "@galatsa/extension-examples": "workspace:*",
-    "@types/react": "19.3.0",
-    "@types/react-dom": "19.3.0",
+    "svelte-check": "4.7.8",
+    "typescript": "6.0.3",
     "vitest": "catalog:"
   }
 }

@@ -36,7 +36,7 @@
 //   - Backslashes, file: URLs and Vite's /@fs/ paths are rejected in specifiers.
 // - The targets in package.json "exports" and "imports" follow the same rules.
 // - Packages run by Node from source (NODE_RUN_PATHS) must not depend, directly or
-//   through other workspace packages, on a package with .tsx or .jsx files: Node's
+//   through other workspace packages, on a package with .tsx, .jsx or .svelte files: Node's
 //   type stripping cannot load them. Test files do not count, Node never loads them
 //   from another package.
 
@@ -81,6 +81,12 @@ export const STYLE_EXTENSIONS: readonly string[] = [
 
 /** HTML files, whose script, link and media elements are checked. */
 export const HTML_EXTENSIONS: readonly string[] = [".html", ".htm"];
+
+/**
+ * Svelte components: their <script> and <style> blocks, and the src and href of
+ * elements written as text, are checked like HTML.
+ */
+export const SVELTE_EXTENSIONS: readonly string[] = [".svelte"];
 
 /**
  * Root files that a config file at the top of another package (for example
@@ -890,6 +896,10 @@ export function referencesOf(file: string, text: string): Reference[] {
   if (SOURCE_EXTENSIONS.includes(extension)) return scriptReferences(file, text);
   if (STYLE_EXTENSIONS.includes(extension)) return styleReferences(text);
   if (HTML_EXTENSIONS.includes(extension)) return htmlReferences(text);
+  if (SVELTE_EXTENSIONS.includes(extension)) {
+    // src={...} is an expression, which the component's script supplies.
+    return htmlReferences(text).filter((r) => !r.specifier.startsWith("{"));
+  }
   if (TSCONFIG_FILE.test(file)) return tsconfigReferences(text);
   return [];
 }
@@ -1190,7 +1200,7 @@ export function checkNodeRunnable(packages: readonly WorkspacePackage[]): string
     byPath.set(pkg.path, pkg);
   }
   const hasJsx = (pkg: WorkspacePackage): boolean =>
-    pkg.files.some((file) => /\.(tsx|jsx)$/i.test(file) && !TEST_FILE.test(file));
+    pkg.files.some((file) => /\.(tsx|jsx|svelte)$/i.test(file) && !TEST_FILE.test(file));
 
   const problems: string[] = [];
   for (const start of packages.filter((pkg) => NODE_RUN_PATHS.includes(pkg.path))) {
@@ -1201,7 +1211,7 @@ export function checkNodeRunnable(packages: readonly WorkspacePackage[]): string
       seen.add(pkg);
       if (hasJsx(pkg)) {
         problems.push(
-          `${label(start)} is run by Node from source, but ${label(pkg)} has .tsx or .jsx files, which Node cannot load.`,
+          `${label(start)} is run by Node from source, but ${label(pkg)} has .tsx, .jsx or .svelte files, which Node cannot load.`,
         );
       }
       for (const field of DEPENDENCY_FIELDS) {

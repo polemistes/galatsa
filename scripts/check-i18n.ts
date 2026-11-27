@@ -2,8 +2,8 @@
 
 // Translation check, run by `pnpm check`:
 //
-//   1. No hard-coded user-visible text in user interface code, scripts and HTML
-//      pages (rules in scripts/lib/i18n-hardcoded.ts, which files count as user
+//   1. No hard-coded user-visible text in user interface code, scripts, HTML
+//      pages and Svelte components (rules in scripts/lib/i18n-hardcoded.ts, which files count as user
 //      interface code in scripts/lib/i18n-config.ts).
 //   2. The message files of every package (<messages>/<language>.ts for each
 //      language in LOCALES) agree: the same keys, the same values with the same
@@ -24,6 +24,7 @@ import { checkCatalogs, LOCALES } from "@galatsa/i18n";
 import {
   isHtmlFile,
   isSourceFile,
+  isSvelteFile,
   isTestFile,
   isUiFile,
   messageFiles,
@@ -98,7 +99,11 @@ async function main(): Promise<void> {
       problems.push(`${dir}/package.json: ${problem}`);
 
     for (const file of packageFiles) {
-      if (!(isSourceFile(file) || isHtmlFile(file)) || isTestFile(file)) continue;
+      if (
+        !(isSourceFile(file) || isHtmlFile(file) || isSvelteFile(file)) ||
+        isTestFile(file)
+      )
+        continue;
       const path = `${dir}/${file}`;
       const source = read(path);
       if (source === undefined) continue;

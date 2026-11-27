@@ -50,6 +50,7 @@ export interface I18nConfig {
 export const DEFAULT_UI_FILES: readonly string[] = [
   "**/*.tsx",
   "**/*.jsx",
+  "**/*.svelte",
   "**/*.html",
   "**/*.htm",
 ];
@@ -78,6 +79,7 @@ const SOURCE_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 const HTML_FILE = /\.html?$/i;
 const TEST_FILE = /\.(?:test|spec)\.(?:[cm]?[jt]s|[jt]sx)$/;
 const JSX_FILE = /\.[jt]sx$/;
+const SVELTE_FILE = /\.svelte$/;
 
 export function isSourceFile(path: string): boolean {
   return SOURCE_FILE.test(path) && !/\.d\.[cm]?ts$/.test(path);
@@ -87,12 +89,22 @@ export function isHtmlFile(path: string): boolean {
   return HTML_FILE.test(path);
 }
 
+/** A Svelte component: markup and scripts, checked by findHardcodedSvelteText. */
+export function isSvelteFile(path: string): boolean {
+  return SVELTE_FILE.test(path);
+}
+
 /**
- * True if a package shows text: it has a .tsx or .jsx file (other than tests), or
+ * True if a package shows text: it has a .tsx, .jsx or .svelte file (other than tests), or
  * it declares @galatsa/i18n as a dependency. `files` are relative to the package.
  */
 export function isUiPackage(manifest: unknown, files: readonly string[]): boolean {
-  if (files.some((file) => JSX_FILE.test(file) && !isTestFile(file))) return true;
+  if (
+    files.some(
+      (file) => (JSX_FILE.test(file) || SVELTE_FILE.test(file)) && !isTestFile(file),
+    )
+  )
+    return true;
   const record = (manifest ?? {}) as Record<string, unknown>;
   if (record["name"] === I18N_PACKAGE) return false;
   return DEPENDENCY_FIELDS.some((field) => {
@@ -175,7 +187,8 @@ export function readI18nConfig(
 
 /** True if a file (relative to its package) is user interface code. */
 export function isUiFile(path: string, config: I18nConfig): boolean {
-  if (!(isSourceFile(path) || isHtmlFile(path)) || isTestFile(path)) return false;
+  if (!(isSourceFile(path) || isHtmlFile(path) || isSvelteFile(path)) || isTestFile(path))
+    return false;
   if (path.startsWith(`${config.messages}/`)) return false;
   const include = config.uiFiles.filter((pattern) => !pattern.startsWith("!"));
   const exclude = config.uiFiles

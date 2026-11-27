@@ -58,7 +58,14 @@
 //
 // The check sees text where it is written, not where it ends up: a string passed
 // through a parameter, an import or a variable that is reassigned is not followed.
+//
+// Svelte components (findHardcodedSvelteText) are parsed with svelte/compiler: text
+// in the markup, expressions in the markup and text attributes are text places as
+// in JSX, and the <script> blocks and every expression of the markup are checked
+// as one TypeScript script with the rules above. Runes that stand for their first
+// argument ($state, $derived) are followed like the value itself.
 
+import { parse as parseSvelte } from "svelte/compiler";
 import ts from "typescript";
 
 export interface Finding {
@@ -216,6 +223,9 @@ const TEXT_OPTIONS: ReadonlyMap<string, readonly [number, readonly string[]]> = 
   ["showNotification", [1, ["body"]]],
 ]);
 
+/** Svelte runes whose value is their first argument: $state("Save") is "Save". */
+const SVELTE_VALUE_RUNES: readonly string[] = ["$state", "$derived"];
+
 /** String methods whose result contains the text of the string they are called on. */
 const STRING_METHODS: readonly string[] = [
   "concat",
@@ -363,37 +373,87 @@ function commentsOf(file: ts.SourceFile): ts.CommentRange[] {
   return [...found.values()];
 }
 
-/** Finds hard-coded user-visible text in one user interface file (script or HTML). */
+/** Finds hard-coded user-visible text in one user interface file (script, HTML or Svelte). */
 export function findHardcodedText(
   fileName: string,
   source: string,
   options: ScanOptions = {},
 ): Finding[] {
   if (/\.html?$/i.test(fileName)) return findHardcodedHtmlText(source, options);
+  if (/\.svelte$/i.test(fileName)) return findHardcodedSvelteText(source, options);
+  const scan = scanScript(fileName, source, scriptKind(fileName), options);
+  return scan === null ? [] : sorted(scan.ignores.findings);
+}
 
+/** 0-based line and column of each position in a text. */
+function lineIndex(source: string): (position: number) => [number, number] {
+  const lineStarts = [0];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === "\n") lineStarts.push(i + 1);
+  }
+  return (position) => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if ((lineStarts[middle] ?? 0) <= position) low = middle;
+      else high = middle - 1;
+    }
+    return [low, position - (lineStarts[low] ?? 0)];
+  };
+}
+
+/** A script scanned with the rules above. */
+interface ScriptScan {
+  readonly file: ts.SourceFile;
+  readonly ignores: Ignores;
+  /** Reports the text an expression of `file` ends up as (see checkValue). */
+  readonly checkValue: (
+    expression: ts.Expression,
+    reason: string,
+    lenient?: boolean,
+  ) => void;
+}
+
+/**
+ * Where the parsed text comes from, when it is not the file itself: the
+ * position in the original file of each position in the parsed text, and the
+ * original file's text (for lines and columns).
+ */
+interface SourceMapping {
+  readonly original: string;
+  readonly position: (parsed: number) => number;
+}
+
+/**
+ * Scans a script with every rule above, and returns how to check further
+ * expressions of it (for Svelte markup), or null if the file opts out with
+ * i18n-ignore-file.
+ */
+function scanScript(
+  fileName: string,
+  source: string,
+  kind: ts.ScriptKind,
+  options: ScanOptions,
+  mapping?: SourceMapping,
+): ScriptScan | null {
   const attributes = new Set([...TEXT_ATTRIBUTES, ...(options.textAttributes ?? [])]);
   const calls = new Map(TEXT_CALLS);
   for (const name of options.textCalls ?? []) calls.set(name, [0]);
 
-  const file = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKind(fileName),
-  );
-  const lines = source.split(/\r?\n/);
-  const ignores = new Ignores((position) => {
-    const { line, character } = file.getLineAndCharacterOfPosition(position);
-    return [line, character];
-  });
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, kind);
+  const original = mapping?.original ?? source;
+  const toOriginal = mapping?.position ?? ((position: number) => position);
+  const lineOf = lineIndex(original);
+  const lines = original.split(/\r?\n/);
+  const ignores = new Ignores((position) => lineOf(toOriginal(position)));
   for (const range of commentsOf(file)) {
     const text = source.slice(range.pos, range.end);
-    if (IGNORE_FILE.test(text)) return [];
-    const first = file.getLineAndCharacterOfPosition(range.pos);
-    const last = file.getLineAndCharacterOfPosition(range.end);
-    const before = (lines[first.line] ?? "").slice(0, first.character);
-    ignores.addComment(first.line, last.line, /^\s*\{?\s*$/.test(before), text);
+    if (IGNORE_FILE.test(text)) return null;
+    const [firstLine, firstColumn] = lineOf(toOriginal(range.pos));
+    const [lastLine] = lineOf(toOriginal(range.end));
+    const before = (lines[firstLine] ?? "").slice(0, firstColumn);
+    ignores.addComment(firstLine, lastLine, /^\s*\{?\s*$/.test(before), text);
   }
   const report = ignores.report.bind(ignores);
 
@@ -459,7 +519,10 @@ export function findHardcodedText(
           if (callee.name.text === "concat") expression.arguments.forEach(again);
         }
       } else if (ts.isIdentifier(callee)) {
-        if (callee.text === "String" && expression.arguments[0] !== undefined) {
+        if (
+          (callee.text === "String" || SVELTE_VALUE_RUNES.includes(callee.text)) &&
+          expression.arguments[0] !== undefined
+        ) {
           again(expression.arguments[0]);
         }
         const declaration = resolve(callee);
@@ -649,7 +712,12 @@ export function findHardcodedText(
   };
 
   visit(file);
-  return sorted(ignores.findings);
+  return {
+    file,
+    ignores,
+    checkValue: (expression, reason, lenient = false) =>
+      checkValue(expression, reason, lenient),
+  };
 }
 
 function sorted(findings: readonly Finding[]): Finding[] {
@@ -906,20 +974,7 @@ export function findHardcodedHtmlText(
   options: ScanOptions = {},
 ): Finding[] {
   const attributes = new Set([...TEXT_ATTRIBUTES, ...(options.textAttributes ?? [])]);
-  const lineStarts = [0];
-  for (let i = 0; i < source.length; i += 1) {
-    if (source[i] === "\n") lineStarts.push(i + 1);
-  }
-  const lineOf = (position: number): [number, number] => {
-    let low = 0;
-    let high = lineStarts.length - 1;
-    while (low < high) {
-      const middle = Math.ceil((low + high) / 2);
-      if ((lineStarts[middle] ?? 0) <= position) low = middle;
-      else high = middle - 1;
-    }
-    return [low, position - (lineStarts[low] ?? 0)];
-  };
+  const lineOf = lineIndex(source);
   const ignores = new Ignores(lineOf);
 
   for (const match of source.matchAll(/<!--([\s\S]*?)-->/g)) {
@@ -1003,6 +1058,307 @@ export function findHardcodedHtmlText(
       }),
     );
   }
+}
+
+// Svelte components ---------------------------------------------------------------
+
+/** A node of Svelte's template syntax tree, as svelte/compiler's parse gives it. */
+interface SvelteNode {
+  readonly type: string;
+  /** Where it is in the source; fragments have no position. */
+  readonly start: number;
+  readonly end: number;
+  readonly [key: string]: unknown;
+}
+
+function isSvelteNode(value: unknown): value is SvelteNode {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as { type?: unknown }).type === "string"
+  );
+}
+
+/** Elements whose children in Svelte markup are CSS or code, not text. */
+const SVELTE_RAW_ELEMENTS: readonly string[] = ["script", "style"];
+
+/** An expression of the markup, as it will be found in the scanned script. */
+interface MarkupExpression {
+  /** Where it is in the component's source. */
+  readonly start: number;
+  readonly end: number;
+  /**
+   * The source copied into the script: the expression, or the inside of its
+   * braces, so that comments next to it count.
+   */
+  readonly from: number;
+  readonly to: number;
+  /** For text places: the reason and whether the place is text only by a name's convention. */
+  readonly text?: { readonly reason: string; readonly lenient: boolean };
+}
+
+/**
+ * Finds hard-coded text in a Svelte component. The markup is read with
+ * svelte/compiler's parser:
+ *
+ *   - text in the markup:                      <button>Save</button>
+ *   - expressions in the markup and {@html}:   <p>{busy ? "Saving" : "Saved"}</p>
+ *   - text attributes and props, as in JSX (TEXT_ATTRIBUTES, names that hold
+ *     text by convention, value on button-like inputs), whether written as
+ *     text, as an expression or as both:       <img alt="Logo" title={"Hi " + name} />
+ *
+ * The <script> blocks are checked with the TypeScript rules above, and so is
+ * every expression of the markup (event handlers, block conditions, {@const}),
+ * as part of one script, so that the markup's expressions follow the script's
+ * constants and functions, as in a .tsx file. A comment
+ * <!-- i18n-ignore: <reason> --> in the markup works as in HTML, and comments
+ * in the scripts and inside expressions as in TypeScript.
+ */
+export function findHardcodedSvelteText(
+  source: string,
+  options: ScanOptions = {},
+): Finding[] {
+  let root: SvelteNode;
+  try {
+    root = parseSvelte(source, { modern: true }) as unknown as SvelteNode;
+  } catch (error) {
+    const at = (error as { start?: { line?: number; column?: number } }).start;
+    return [
+      {
+        line: at?.line ?? 1,
+        column: (at?.column ?? 0) + 1,
+        text: shorten(String((error as { message?: unknown }).message ?? error)),
+        reason: "the component cannot be parsed",
+      },
+    ];
+  }
+  const attributes = new Set([...TEXT_ATTRIBUTES, ...(options.textAttributes ?? [])]);
+
+  // The script: the <script> blocks where they are, everything else blanked
+  // (line breaks kept), then each markup expression as a statement of its own.
+  const scripts: Array<[number, number]> = [];
+  for (const key of ["instance", "module"]) {
+    const block = root[key];
+    if (isSvelteNode(block) && isSvelteNode(block["content"])) {
+      scripts.push([block["content"].start, block["content"].end]);
+    }
+  }
+  const inScript = (position: number): boolean =>
+    scripts.some(([from, to]) => position >= from && position < to);
+  let script = "";
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i]!;
+    script += inScript(i) || char === "\n" || char === "\r" ? char : " ";
+  }
+
+  const comments: SvelteNode[] = [];
+  const texts: Array<{ node: SvelteNode; reason: string; lenient: boolean }> = [];
+  const expressions: MarkupExpression[] = [];
+  const declarations: Array<[number, number]> = [];
+
+  const addExpression = (
+    value: unknown,
+    text?: { readonly reason: string; readonly lenient: boolean },
+    braces?: SvelteNode,
+  ): void => {
+    if (!isSvelteNode(value) || typeof value.start !== "number") return;
+    const inside =
+      braces !== undefined &&
+      source[braces.start] === "{" &&
+      source[braces.end - 1] === "}" &&
+      braces.start < value.start &&
+      value.end < braces.end;
+    const from = inside ? braces.start + 1 : value.start;
+    const to = inside ? braces.end - 1 : value.end;
+    expressions.push({
+      start: value.start,
+      end: value.end,
+      from,
+      to,
+      ...(text ? { text } : {}),
+    });
+  };
+
+  const attribute = (node: SvelteNode, element: SvelteNode): void => {
+    if (node.type === "UseDirective") {
+      // An action named like text (use:tooltip={...}) shows what it is given.
+      const name = String(node["name"]);
+      const kind = textNameKind(name) ?? (attributes.has(name) ? "fixed" : undefined);
+      addExpression(
+        node["expression"],
+        kind === undefined
+          ? undefined
+          : {
+              reason: `text given to the "${name}" action`,
+              lenient: kind === "convention",
+            },
+      );
+      return;
+    }
+    if (node.type !== "Attribute") {
+      // Other directives (bind:, on:, class:, style:, ...) and spreads: code, not a
+      // place for text; their expressions are checked as code.
+      addExpression(node["expression"]);
+      return;
+    }
+    const name = String(node["name"]);
+    const fixed =
+      attributes.has(name) ||
+      textNameKind(name) === "fixed" ||
+      (name === "value" && isButtonElement(element));
+    const shown = fixed || textNameKind(name) === "convention";
+    const reason = `text in the "${name}" attribute`;
+    const parts = Array.isArray(node["value"])
+      ? (node["value"] as unknown[])
+      : [node["value"]];
+    for (const part of parts) {
+      if (!isSvelteNode(part)) continue;
+      if (part.type === "Text") {
+        if (shown) texts.push({ node: part, reason, lenient: !fixed });
+      } else if (part.type === "ExpressionTag") {
+        addExpression(
+          part["expression"],
+          shown ? { reason, lenient: !fixed } : undefined,
+          part,
+        );
+      }
+    }
+  };
+
+  const visit = (node: unknown, raw: boolean): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, raw);
+      return;
+    }
+    if (!isSvelteNode(node)) return;
+    switch (node.type) {
+      case "Fragment":
+        visit(node["nodes"], raw);
+        return;
+      case "Text":
+        if (!raw) texts.push({ node, reason: "text in markup", lenient: false });
+        return;
+      case "Comment":
+        comments.push(node);
+        return;
+      case "ExpressionTag":
+      case "HtmlTag":
+        addExpression(
+          node["expression"],
+          raw ? undefined : { reason: "text in markup", lenient: false },
+          node.type === "ExpressionTag" ? node : undefined,
+        );
+        return;
+      case "ConstTag": {
+        const declaration = node["declaration"];
+        if (isSvelteNode(declaration))
+          declarations.push([declaration.start, declaration.end]);
+        return;
+      }
+      default:
+        break;
+    }
+    if (Array.isArray(node["attributes"])) {
+      for (const item of node["attributes"] as unknown[]) {
+        if (isSvelteNode(item)) attribute(item, node);
+      }
+      const name = typeof node["name"] === "string" ? node["name"].toLowerCase() : "";
+      visit(node["fragment"], raw || SVELTE_RAW_ELEMENTS.includes(name));
+      // <svelte:element this={...}> and <svelte:component this={...}>.
+      addExpression(node["tag"]);
+      addExpression(node["expression"]);
+      return;
+    }
+    // Blocks: their expressions are code; their fragments hold markup.
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "type" || key === "start" || key === "end") continue;
+      if (isSvelteNode(value) && value.type === "Fragment") visit(value, raw);
+      else if (
+        isSvelteNode(value) &&
+        ["expression", "test", "key", "argument"].includes(key)
+      ) {
+        addExpression(value);
+      }
+    }
+  };
+  visit(root["fragment"], false);
+
+  // Append the markup's expressions and {@const} declarations to the script.
+  const segments: Array<{ at: number; from: number; length: number }> = [];
+  const append = (from: number, to: number, before: string, after: string): number => {
+    script += before;
+    const at = script.length;
+    script += source.slice(from, to) + after;
+    segments.push({ at, from, length: to - from });
+    return at;
+  };
+  for (const [from, to] of declarations) append(from, to, "\n", ";");
+  const placed = expressions.map((e) => ({
+    ...e,
+    at: append(e.from, e.to, "\n;(", "\n);") + (e.start - e.from),
+  }));
+  const position = (parsed: number): number => {
+    if (parsed < source.length) return parsed;
+    const segment = segments.find((s) => parsed >= s.at && parsed <= s.at + s.length);
+    return segment === undefined ? source.length : segment.from + (parsed - segment.at);
+  };
+
+  const scan = scanScript("component.svelte.ts", script, ts.ScriptKind.TS, options, {
+    original: source,
+    position,
+  });
+  if (scan === null) return [];
+  const lineOf = lineIndex(source);
+  const lines = source.split(/\r?\n/);
+  for (const comment of comments) {
+    const text = String(comment["data"] ?? "");
+    if (IGNORE_FILE.test(text)) return [];
+    const [first, column] = lineOf(comment.start);
+    const [last] = lineOf(comment.end);
+    const before = (lines[first] ?? "").slice(0, column);
+    scan.ignores.addComment(first, last, /^\s*$/.test(before), text);
+  }
+
+  for (const { node, reason, lenient } of texts) {
+    const data = String(node["data"] ?? "");
+    if (isUserText(data) && !(lenient && looksLikeCode(data))) {
+      scan.ignores.report(node.start + Math.max(data.search(/\S/), 0), data, reason);
+    }
+  }
+  // Find each appended expression in the parsed script by where it starts.
+  const byStart = new Map<number, ts.Expression>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isParenthesizedExpression(node) && ts.isExpressionStatement(node.parent)) {
+      byStart.set(node.expression.getStart(scan.file), node.expression);
+    }
+    ts.forEachChild(node, collect);
+  };
+  collect(scan.file);
+  for (const expression of placed) {
+    if (expression.text === undefined) continue;
+    const found = byStart.get(expression.at);
+    if (found !== undefined) {
+      scan.checkValue(found, expression.text.reason, expression.text.lenient);
+    }
+  }
+  return sorted(scan.ignores.findings);
+}
+
+/** <input type="submit|button|reset">, whose value is its visible label. */
+function isButtonElement(element: SvelteNode): boolean {
+  if (element["name"] !== "input" || !Array.isArray(element["attributes"])) return false;
+  return (element["attributes"] as unknown[]).some((item) => {
+    if (!isSvelteNode(item) || item.type !== "Attribute" || item["name"] !== "type")
+      return false;
+    const value = item["value"];
+    const parts = Array.isArray(value) ? value : [];
+    return (
+      parts.length === 1 &&
+      isSvelteNode(parts[0]) &&
+      parts[0].type === "Text" &&
+      BUTTON_INPUT_TYPES.includes(String(parts[0]["data"]).toLowerCase())
+    );
+  });
 }
 
 // Message bundles ----------------------------------------------------------------
