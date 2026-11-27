@@ -216,13 +216,14 @@ test("a picture at the back of a frame with text on top, and the frame moved wit
   await undo();
   await expect.poll(() => where(page, picture)).toMatchObject(before.picture);
 
-  // The text dragged out of the frame onto the canvas, and back in.
-  await page.mouse.click(at(260, 175).x, at(260, 175).y);
+  // The text dragged out of the frame onto the canvas, and back in. (No
+  // click first: a second press there soon after would edit the text.)
   await dragFrom([260, 175], [760, 575]);
   await expect.poll(() => where(page, text)).toMatchObject({ parent: null });
   await undo();
   await expect.poll(() => where(page, text)).toMatchObject({ parent: frame });
-  await page.mouse.click(at(260, 175).x, at(260, 175).y);
+  // Not a double click on the text (that would edit it).
+  await page.waitForTimeout(600);
   await dragFrom([260, 175], [760, 575]);
   await expect.poll(() => where(page, text)).toMatchObject({ parent: null });
   await dragFrom([760, 575], [300, 200]);
@@ -230,8 +231,10 @@ test("a picture at the back of a frame with text on top, and the frame moved wit
   // Back in, it went in front.
   expect(await children(page, frame!)).toEqual([picture, text]);
 
-  // Ctrl+[ one step back (the browser does not go back in its history), and
-  // Ctrl+] one step forward.
+  // Ctrl+[ one step back and Ctrl+] one step forward. The address is checked
+  // too, but that shows little: Playwright's key presses reach the page and
+  // not the browser's own shortcuts, so this cannot show that a real Ctrl+[
+  // does not make the browser go back in its history.
   const url = page.url();
   await page.keyboard.press("ControlOrMeta+BracketLeft");
   await expect.poll(() => children(page, frame!)).toEqual([text, picture]);
