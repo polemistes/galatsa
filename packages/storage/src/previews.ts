@@ -41,15 +41,21 @@ export async function storedPreviewFacts(
   return facts;
 }
 
-/** Stores previews (a size already stored keeps its bytes). Throws if the store fails. */
+/**
+ * Stores previews. A size already stored keeps its bytes, unless `replace`
+ * (versions that would not decode, made again). Throws if the store fails.
+ */
 export async function storePreviews(
   backend: StorageBackend,
   slot: string,
   id: AssetId,
   previews: readonly AssetPreview[],
+  replace = false,
 ): Promise<void> {
   for (const preview of normalizePreviews(previews)) {
-    await backend.create(previewKey(slot, id, preview), preview.bytes);
+    const key = previewKey(slot, id, preview);
+    if (replace) await backend.write(key, preview.bytes);
+    else await backend.create(key, preview.bytes);
   }
 }
 

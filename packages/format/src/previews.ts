@@ -38,8 +38,12 @@ export type PreviewsKept = "all" | "smallest" | "none";
 export const PREVIEWS_PREFIX = "previews/";
 /** The most previews kept per asset; the smallest are kept. */
 export const MAX_PREVIEWS_PER_ASSET = 8;
-/** The longest side a preview may have, in pixels. */
-export const MAX_PREVIEW_SIDE = 16384;
+/**
+ * The longest side a preview may have, in pixels: the largest version the
+ * program makes. A larger one would cost a reader up to 64 MB of pixels per
+ * image for what a version is meant to save.
+ */
+export const MAX_PREVIEW_SIDE = 4096;
 
 const EXTENSION: { readonly [type in PreviewMediaType]: string } = {
   "image/webp": "webp",
@@ -104,20 +108,50 @@ export function isValidPreview(preview: AssetPreview): boolean {
   );
 }
 
+/** An image's natural pixel size (its asset description's width and height). */
+export interface NaturalSize {
+  readonly width?: number | undefined;
+  readonly height?: number | undefined;
+}
+
+/**
+ * True if a version fits the image it stands for: its long side shorter than
+ * the original's, and its proportions the original's (to the pixel that
+ * rounding may cost). A version that does not fit is not one the program made,
+ * and is left out: a crafted file could otherwise name a few bytes as a
+ * 4096-pixel version of every image, and so make a reader hold gigabytes.
+ */
+export function fitsOriginal(
+  preview: PreviewFacts,
+  natural: NaturalSize | undefined,
+): boolean {
+  const W = natural?.width;
+  const H = natural?.height;
+  if (typeof W !== "number" || typeof H !== "number" || !(W > 0) || !(H > 0))
+    return false;
+  const { width: w, height: h } = preview;
+  if (Math.max(w, h) >= Math.max(W, H)) return false;
+  // h * W equals w * H up to a pixel of rounding on either side.
+  return Math.abs(h * W - w * H) <= Math.max(W, H);
+}
+
 /**
  * An asset's previews as a file holds them: valid ones only, one per pixel
  * size (the first given wins), smallest first (by width, then height), at most
- * MAX_PREVIEWS_PER_ASSET, and only the first if `kept` is "smallest".
+ * MAX_PREVIEWS_PER_ASSET, and only the first if `kept` is "smallest". With the
+ * image's natural size, only versions that fit it (`fitsOriginal`).
  */
 export function normalizePreviews(
   previews: readonly AssetPreview[] | undefined,
   kept: PreviewsKept = "all",
+  natural?: NaturalSize,
 ): AssetPreview[] {
   if (previews === undefined || kept === "none") return [];
   const seen = new Set<string>();
   const out: AssetPreview[] = [];
   for (const preview of previews) {
     if (!isValidPreview(preview)) continue;
+    if (natural !== undefined && !fitsOriginal(preview, natural)) continue;
     const size = `${preview.width}x${preview.height}`;
     if (seen.has(size)) continue;
     seen.add(size);
@@ -128,12 +162,14 @@ export function normalizePreviews(
 }
 
 /**
- * The previews among a file's entries, by asset, smallest first. Previews are
- * not checked against their asset: they are a cache, and a damaged one is left
- * out by the archive's checksum.
+ * The previews among a file's entries, by asset, smallest first: only those
+ * of an asset the document describes with a pixel size, and that fit it
+ * (`fitsOriginal`). Their bytes are not checked against the asset: they are a
+ * cache, and a damaged one is left out by the archive's checksum.
  */
 export function previewsFromEntries(
   entries: ReadonlyMap<string, Uint8Array>,
+  described: { readonly [id: AssetId]: NaturalSize | undefined },
 ): Map<AssetId, AssetPreview[]> {
   const found = new Map<AssetId, AssetPreview[]>();
   for (const [name, bytes] of entries) {
@@ -146,7 +182,9 @@ export function previewsFromEntries(
   }
   const out = new Map<AssetId, AssetPreview[]>();
   for (const [asset, list] of found) {
-    const previews = normalizePreviews(list);
+    const natural = Object.hasOwn(described, asset) ? described[asset] : undefined;
+    if (natural === undefined) continue;
+    const previews = normalizePreviews(list, "all", natural);
     if (previews.length > 0) out.set(asset, previews);
   }
   return out;

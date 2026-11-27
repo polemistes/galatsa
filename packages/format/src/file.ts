@@ -185,7 +185,10 @@ export function writeGalatsaFile(
       } catch {
         given = undefined;
       }
-      for (const preview of normalizePreviews(given, kept)) {
+      const natural = Object.hasOwn(snapshot.assets, id)
+        ? snapshot.assets[id]
+        : undefined;
+      for (const preview of normalizePreviews(given, kept, natural ?? {})) {
         previews.push({
           name: previewEntryName(id, preview),
           data: preview.bytes,
@@ -329,7 +332,7 @@ export async function readGalatsaFile(
     doc,
     snapshot: result,
     assets: await readAssets(parts, result, warnings),
-    previews: previewsFromEntries(parts.entries),
+    previews: previewsFromEntries(parts.entries, result.assets),
     thumbnail: parts.thumbnail,
     formatVersion: parts.formatVersion,
     mergeIdentityKept,

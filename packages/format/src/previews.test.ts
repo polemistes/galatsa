@@ -22,7 +22,7 @@ import {
   type AssetPreview,
 } from "./previews.ts";
 import { readGalatsaSnapshot } from "./read.ts";
-import { openZip, readZip, writeZip } from "./zip.ts";
+import { DEFAULT_ZIP_LIMITS, openZip, readZip, writeZip } from "./zip.ts";
 
 const ORIGINAL = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9, 9, 9]);
 const UNUSED = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]);
@@ -238,6 +238,68 @@ describe("older and odd files", () => {
   });
 });
 
+describe("versions that do not fit their image", () => {
+  /** The sample's file with extra entries added. */
+  async function withEntries(
+    s: Awaited<ReturnType<typeof sample>>,
+    extra: { name: string; data: Uint8Array; compress: boolean }[],
+  ): Promise<Uint8Array> {
+    const entries = readZip(write(s).bytes);
+    const parts = [...entries].map(([name, data]) => ({
+      name,
+      data,
+      compress: name === "document.json" || name === "ydoc.bin",
+    }));
+    return writeZip([...parts, ...extra]);
+  }
+
+  it("leaves out versions as large as the image or larger, of other proportions, or of undescribed assets", async () => {
+    const s = await sample();
+    const other = await assetIdOf(new Uint8Array([4, 5, 6]));
+    const odd = (name: string) => ({ name, data: new Uint8Array(64), compress: false });
+    const bytes = await withEntries(s, [
+      // The sample's image is 4000 by 3000.
+      odd(`previews/${s.image}/4096x3072.webp`),
+      odd(`previews/${s.image}/3999x10.webp`),
+      odd(`previews/${s.image}/400x400.webp`),
+      odd(`previews/${s.image}/513x385.webp`),
+      odd(`previews/${other}/256x256.png`),
+    ]);
+    const read = await readGalatsaFile(bytes);
+    // 513 by 385 is within a pixel of 4:3 and stays; the others go.
+    expect(read.previews.get(s.image)!.map((p) => `${p.width}x${p.height}`)).toEqual([
+      "256x192",
+      "513x385",
+      "1024x768",
+      "2048x1536",
+    ]);
+    expect(read.previews.has(other)).toBe(false);
+    expect((await readGalatsaSnapshot(bytes)).previews.get(s.image)!.length).toBe(4);
+  });
+
+  it("leaves out compressed versions without inflating them", async () => {
+    const s = await sample();
+    const name = `previews/${s.image}/512x384.webp`;
+    const bytes = await withEntries(s, [
+      { name, data: new Uint8Array(1 << 20), compress: true },
+    ]);
+    // A limit on inflating that the compressed version alone would pass.
+    const read = await readGalatsaFile(bytes, {
+      limits: { ...DEFAULT_ZIP_LIMITS, maxInflatedSize: 512 * 1024 },
+    });
+    expect(read.previews.get(s.image)!.map((p) => p.width)).toEqual([256, 1024, 2048]);
+    expect(isKnownEntry(name, 8)).toBe(false);
+    expect(isKnownEntry(name, 0)).toBe(true);
+  });
+
+  it("does not write versions that do not fit their image", async () => {
+    const s = await sample();
+    s.previews.set(s.image, [preview(256, 192), preview(4096, 3072), preview(300, 300)]);
+    const read = await readGalatsaFile(write(s).bytes);
+    expect(read.previews.get(s.image)!.map((p) => p.width)).toEqual([256]);
+  });
+});
+
 describe("preview names and lists", () => {
   it("parses only well-formed names", async () => {
     const id = await assetIdOf(ORIGINAL);
@@ -252,8 +314,8 @@ describe("preview names and lists", () => {
       facts: { width: 512, height: 384, mediaType: "image/jpeg" },
     });
     expect(parsePreviewEntry(`previews/${id}/0512x384.jpg`)).toBeNull();
-    expect(parsePreviewEntry(`previews/${id}/16385x2.png`)).toBeNull();
-    expect(parsePreviewEntry(`previews/${id}/16384x2.png`)).not.toBeNull();
+    expect(parsePreviewEntry(`previews/${id}/4097x2.png`)).toBeNull();
+    expect(parsePreviewEntry(`previews/${id}/4096x2.png`)).not.toBeNull();
   });
 
   it("keeps valid previews, one per size, smallest first, at most eight", () => {

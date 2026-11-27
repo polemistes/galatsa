@@ -9,6 +9,7 @@
 import type { AssetId, ExtensionElement } from "@galatsa/core";
 import { toSnapshot } from "@galatsa/core/ydoc";
 import type { AssetPreview, PreviewFacts } from "@galatsa/format";
+import { previewSizes } from "@galatsa/renderer";
 import { describe, expect, it } from "vitest";
 import { ensurePreviews, sessionAssetStore, type AssetAccess } from "./assets.ts";
 import { readClipboard } from "./clipboard.ts";
@@ -70,17 +71,16 @@ function memoryAccess(): AssetAccess & {
   };
 }
 
+/** The whole set of versions an image of that size gets. */
 const fakePreviews = async (
   _blob: Blob,
   natural: { width: number; height: number },
-): Promise<AssetPreview[]> => [
-  {
-    width: 256,
-    height: Math.round((256 * natural.height) / natural.width),
-    mediaType: "image/webp",
+): Promise<AssetPreview[]> =>
+  previewSizes(natural.width, natural.height).map((size) => ({
+    ...size,
+    mediaType: "image/webp" as const,
     bytes: new Uint8Array([1, 2, 3]),
-  },
-];
+  }));
 
 function editorWithStore() {
   const access = memoryAccess();
@@ -150,7 +150,7 @@ describe("importing files", () => {
     expect(Object.keys(snapshot.assets).length).toBe(1);
     expect(access.assets.size).toBe(1);
     expect(made()).toBe(1);
-    expect(access.previews.get(elements[0]!.data.asset as AssetId)!.length).toBe(1);
+    expect(access.previews.get(elements[0]!.data.asset as AssetId)!.length).toBe(3);
   });
 
   it("says which files no importer takes", async () => {

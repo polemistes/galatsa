@@ -472,12 +472,20 @@ export class StorageSession {
    * store cannot take them now, they are written later. Never fails: they are
    * a cache.
    */
-  async putPreviews(id: AssetId, previews: readonly AssetPreview[]): Promise<void> {
+  async putPreviews(
+    id: AssetId,
+    previews: readonly AssetPreview[],
+    options: { readonly replace?: boolean } = {},
+  ): Promise<void> {
     const list = normalizePreviews(previews);
     if (list.length === 0) return;
-    this.#previews.set(id, list);
+    // Kept with what was there before: the new ones first, so they win.
+    this.#previews.set(
+      id,
+      normalizePreviews([...list, ...(this.#previews.get(id) ?? [])]),
+    );
     try {
-      await storePreviews(this.#ctx.backend, this.slot, id, list);
+      await storePreviews(this.#ctx.backend, this.slot, id, list, options.replace);
     } catch {
       this.#unstoredPreviews.add(id);
     }

@@ -73,3 +73,61 @@ describe("reduced versions", () => {
     cache.dispose();
   });
 });
+
+describe("versions that fail, and the budget", () => {
+  it("draws another version while a stored one does not decode, and tells the source", async () => {
+    let now = 0;
+    const failed: string[] = [];
+    const source: ImageSource = {
+      levels: () => [
+        { width: 256, height: 192 },
+        { width: 4000, height: 3000 },
+      ],
+      blob: (_asset, level) => new Blob([String(level)], { type: "image/webp" }),
+      failed: (asset, level) => failed.push(`${asset}:${level}`),
+    };
+    const cache = new ImageCache(source, {
+      now: () => now,
+      decode: async (blob, width, height): Promise<Decoded> => {
+        if ((await blob.text()) === "0") throw new Error("does not decode");
+        return { image: {} as CanvasImageSource, width, height, close: () => {} };
+      },
+    });
+    const states: string[] = [];
+    for (let frame = 0; frame < 6; frame++) {
+      cache.beginFrame();
+      states.push(cache.pick("a", 100).state);
+      cache.endFrame();
+      await cache.settle();
+      now += 10;
+    }
+    expect(failed).toEqual(["a:0"]);
+    // The original stands in for the version that does not decode.
+    expect(states.at(-1)).toBe("drawn");
+    cache.dispose();
+  });
+
+  it("counts a large smallest version in the byte budget, so it can be closed", async () => {
+    const source: ImageSource = {
+      levels: (asset) => [{ width: asset === "big" ? 2000 : 256, height: 1000 }],
+      blob: () => new Blob(["x"]),
+    };
+    let closed = 0;
+    const cache = new ImageCache(source, {
+      budgetBytes: 1,
+      decode: async (_blob, width, height): Promise<Decoded> => ({
+        image: {} as CanvasImageSource,
+        width,
+        height,
+        close: () => closed++,
+      }),
+    });
+    await cache.preload(["big", "small"], 1);
+    cache.beginFrame();
+    cache.endFrame();
+    // 2000 by 1000 is over KEPT_PIXELS: closed to keep the budget; 256 by 1000 is kept.
+    expect(closed).toBe(1);
+    expect(cache.stats.decodedBytes).toBe(256 * 1000 * 4);
+    cache.dispose();
+  });
+});

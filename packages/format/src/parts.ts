@@ -331,7 +331,7 @@ export async function readGalatsaSnapshot(
   return {
     snapshot: parts.snapshot,
     assets,
-    previews: previewsFromEntries(parts.entries),
+    previews: previewsFromEntries(parts.entries, parts.snapshot.assets),
     thumbnail: parts.thumbnail,
     formatVersion: parts.formatVersion,
     ydoc: parts.ydoc,

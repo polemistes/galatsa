@@ -15,7 +15,12 @@ import { makeImagePreviews, measureImage, previewSizes } from "@galatsa/renderer
 export interface AssetAccess {
   putAsset(bytes: Uint8Array): Promise<AssetId>;
   getAsset(id: AssetId): Promise<Uint8Array | undefined>;
-  putPreviews(id: AssetId, previews: readonly AssetPreview[]): Promise<void>;
+  /** With `replace`, versions of the same size already stored are overwritten. */
+  putPreviews(
+    id: AssetId,
+    previews: readonly AssetPreview[],
+    options?: { readonly replace?: boolean },
+  ): Promise<void>;
   previewFacts(id: AssetId): Promise<PreviewFacts[]>;
   getPreview(id: AssetId, facts: PreviewFacts): Promise<Uint8Array | undefined>;
 }
@@ -39,9 +44,26 @@ export function isImageType(mediaType: string): boolean {
 }
 
 /**
- * Makes and stores an image's reduced versions unless the store has them.
- * Never throws: an image whose versions cannot be made is drawn from its
- * original. Returns whether versions were stored.
+ * The sizes of an image's reduced versions that the store does not have:
+ * those `previewSizes` gives for its natural size, less the stored ones.
+ */
+export function missingPreviews(
+  natural: { readonly width: number; readonly height: number },
+  stored: readonly PreviewFacts[],
+): { width: number; height: number }[] {
+  return previewSizes(natural.width, natural.height).filter(
+    (want) => !stored.some((s) => s.width === want.width && s.height === want.height),
+  );
+}
+
+/**
+ * Makes and stores an image's reduced versions unless the store has every
+ * one of them: one that is missing (a file shared with the smallest only, a
+ * store that failed half way) has the whole set made again, and the store
+ * keeps what it had. With `replace`, the set is made and stored over what is
+ * there (versions that would not decode). Never throws: an image whose
+ * versions cannot be made is drawn from its original. Returns whether
+ * versions were stored.
  */
 export async function ensurePreviews(
   access: AssetAccess,
@@ -53,19 +75,24 @@ export async function ensurePreviews(
     readonly height?: number;
   },
   make: PreviewMaker = makeImagePreviews,
+  options: { readonly replace?: boolean } = {},
 ): Promise<boolean> {
   const { width, height, mediaType } = facts;
   if (!isImageType(mediaType) || width === undefined || height === undefined)
     return false;
   if (previewSizes(width, height).length === 0) return false;
   try {
-    if ((await access.previewFacts(id)).length > 0) return false;
+    const replace = options.replace === true;
+    if (!replace) {
+      const stored = await access.previewFacts(id);
+      if (missingPreviews({ width, height }, stored).length === 0) return false;
+    }
     const previews = await make(
       new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mediaType }),
       { width, height },
     );
     if (previews.length === 0) return false;
-    await access.putPreviews(id, previews);
+    await access.putPreviews(id, previews, { replace });
     return true;
   } catch {
     return false;

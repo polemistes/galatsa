@@ -14,7 +14,7 @@
 
 import type { AssetId, Size } from "@galatsa/core";
 import { roots } from "@galatsa/core/ydoc";
-import type { PreviewFacts } from "@galatsa/format";
+import { fitsOriginal, type PreviewFacts } from "@galatsa/format";
 import {
   SVG_TYPE,
   type ImageLevel,
@@ -22,7 +22,12 @@ import {
   type SceneAssets,
 } from "@galatsa/renderer";
 import type * as Y from "yjs";
-import { ensurePreviews, type AssetAccess, type PreviewMaker } from "./assets.ts";
+import {
+  ensurePreviews,
+  missingPreviews,
+  type AssetAccess,
+  type PreviewMaker,
+} from "./assets.ts";
 
 interface Description {
   readonly width?: unknown;
@@ -93,7 +98,23 @@ export function assetImages(
   const known = new Map<string, Known>();
   const asking = new Set<string>();
   const making = new Set<string>();
+  /** Images whose versions are made again over what is stored (some would not decode). */
+  const remake = new Set<string>();
   const queue: string[] = [];
+  /**
+   * Images whose versions were made (or asked to be made again) in this
+   * session: each at most once of each kind, so a maker that gives other
+   * sizes than asked for, or versions that do not decode either, cannot keep
+   * the background busy for ever.
+   */
+  const tried = new Set<string>();
+  const remade = new Set<string>();
+  const enqueue = (asset: string): void => {
+    if (making.has(asset)) return;
+    making.add(asset);
+    queue.push(asset);
+    pump();
+  };
   let busy = false;
   const typeOf = (asset: string): string => {
     const type = describe(doc, asset)?.mediaType;
@@ -120,20 +141,23 @@ export function assetImages(
         const size = sizeOf(describe(doc, asset));
         if (blob === undefined || size === undefined) return;
         const bytes = new Uint8Array(await blob.arrayBuffer());
+        const replace = remake.delete(asset);
         const made = await ensurePreviews(
           full as AssetAccess,
           asset as AssetId,
           bytes,
           { mediaType: blob.type, width: size.w, height: size.h },
-          ...(make ? [make] : []),
+          make ?? undefined,
+          { replace },
         );
         if (made) {
           known.delete(asset);
           onArrived([asset]);
         }
       } catch {
-        // Drawn from the original, as before.
+        // Drawn from the original and the versions there are, as before.
       } finally {
+        making.delete(asset);
         busy = false;
         pump();
       }
@@ -144,18 +168,25 @@ export function assetImages(
     asking.add(asset);
     void (async () => {
       try {
-        const previews = full.previewFacts
-          ? await full.previewFacts(asset as AssetId).catch(() => [])
-          : [];
+        const size = sizeOf(describe(doc, asset));
+        if (size === undefined) return;
+        const natural = { width: size.w, height: size.h };
+        // Only versions that fit the image: smaller than it, of its proportions.
+        const previews = (
+          full.previewFacts
+            ? await full.previewFacts(asset as AssetId).catch(() => [])
+            : []
+        ).filter((p) => fitsOriginal(p, natural));
         // Without reduced versions, the original must be there to draw at all.
         const original = previews.length === 0 ? await readOriginal(asset) : null;
         if (previews.length === 0 && original === undefined) return;
         known.set(asset, { previews, original: original ?? null });
         onArrived([asset]);
-        if (previews.length === 0 && !making.has(asset)) {
-          making.add(asset);
-          queue.push(asset);
-          pump();
+        // Versions that are missing (all of them, or the larger ones of a
+        // file shared with the smallest only) are made in the background.
+        if (missingPreviews(natural, previews).length > 0 && !tried.has(asset)) {
+          tried.add(asset);
+          enqueue(asset);
         }
       } catch {
         // Asked again when the renderer retries.
@@ -181,6 +212,16 @@ export function assetImages(
         ...entry.previews.map((p) => ({ width: p.width, height: p.height })),
         original,
       ];
+    },
+    failed(asset, level) {
+      // A stored version that does not decode: the set is made again over it,
+      // once. The renderer draws another version meanwhile.
+      const entry = known.get(asset);
+      if (entry === undefined || level >= entry.previews.length || remade.has(asset))
+        return;
+      remade.add(asset);
+      remake.add(asset);
+      enqueue(asset);
     },
     async blob(asset, level) {
       const entry = known.get(asset);

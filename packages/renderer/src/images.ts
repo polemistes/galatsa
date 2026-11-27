@@ -45,6 +45,12 @@ export interface ImageSource {
   levels(asset: string): readonly ImageLevel[] | undefined;
   /** The encoded file of one stored version (an index into levels()). */
   blob(asset: string, level: number): Blob | Promise<Blob>;
+  /**
+   * A stored version could not be read or decoded. The renderer draws other
+   * versions meanwhile; the source may make it again and then call
+   * `imagesChanged`.
+   */
+  failed?(asset: string, level: number): void;
 }
 
 /** A decoded image the canvas can draw. */
@@ -394,7 +400,17 @@ interface Slot {
   retryDelay: number;
   lastUsed: number;
   bytes: number;
+  /** Kept outside the byte budget: the smallest version, if it is small. */
+  kept: boolean;
 }
+
+/**
+ * The smallest version of an image is kept outside the byte budget only up to
+ * this many pixels (512 by 512, 1 MB decoded): a larger smallest version (an
+ * image without reduced versions, decoded whole where the decoder cannot
+ * reduce) counts like any other and may be closed.
+ */
+export const KEPT_PIXELS = 512 * 512;
 
 /** An asset the source did not have; asked again from retryAt on. */
 interface Missing {
@@ -546,6 +562,7 @@ export class ImageCache {
         retryDelay: 0,
         lastUsed: -1,
         bytes: 0,
+        kept: false,
       })),
     };
     this.#entries.set(asset, entry);
@@ -570,7 +587,24 @@ export class ImageCache {
   pick(asset: string, pixels: number): Pick {
     const entry = this.#entry(asset);
     if (!entry) return { state: "missing" };
-    const wanted = pickVersion(entry.versions, pixels);
+    let wanted = pickVersion(entry.versions, pixels);
+    // A version that failed gives way to the nearest one that has not, larger
+    // ones first, so a stored version that does not decode never leaves the
+    // image loading (it is tried again only when all have failed).
+    if (entry.slots[wanted]!.failed) {
+      for (let d = 1; d < entry.slots.length; d++) {
+        const larger = entry.slots[wanted + d];
+        const smaller = entry.slots[wanted - d];
+        if (larger !== undefined && !larger.failed) {
+          wanted += d;
+          break;
+        }
+        if (smaller !== undefined && !smaller.failed) {
+          wanted -= d;
+          break;
+        }
+      }
+    }
     const slot = entry.slots[wanted]!;
     if (slot.decoded) {
       slot.lastUsed = this.#frame;
@@ -682,7 +716,8 @@ export class ImageCache {
       slot.decoded = decoded;
       slot.lastUsed = this.#frame;
       slot.bytes = decoded.width * decoded.height * 4;
-      if (index !== 0) this.#bytes += slot.bytes;
+      slot.kept = index === 0 && decoded.width * decoded.height <= KEPT_PIXELS;
+      if (!slot.kept) this.#bytes += slot.bytes;
       this.stats.decodes++;
       this.stats.decodedBytes += slot.bytes;
       this.stats.peakDecodedBytes = Math.max(
@@ -700,6 +735,11 @@ export class ImageCache {
       slot.retryAt = this.#now() + slot.retryDelay;
       slot.failed = true;
       this.stats.failures++;
+      try {
+        this.#source.failed?.(entry.asset, version.level);
+      } catch {
+        // A source that throws here changes nothing for drawing.
+      }
       this.#onChange?.();
     } finally {
       slot.pending = false;
@@ -712,9 +752,9 @@ export class ImageCache {
       let victim: Slot | null = null;
       for (const entry of this.#entries.values()) {
         if ("missing" in entry) continue;
-        for (let i = 1; i < entry.slots.length; i++) {
+        for (let i = 0; i < entry.slots.length; i++) {
           const slot = entry.slots[i]!;
-          if (!slot.decoded || slot.lastUsed >= this.#frame) continue;
+          if (slot.kept || !slot.decoded || slot.lastUsed >= this.#frame) continue;
           if (!victim || slot.lastUsed < victim.lastUsed) victim = slot;
         }
       }
@@ -741,7 +781,7 @@ export class ImageCache {
         const slot = entry.slots[i]!;
         if (slot.decoded) {
           slot.decoded.close();
-          if (i !== 0) this.#bytes -= slot.bytes;
+          if (!slot.kept) this.#bytes -= slot.bytes;
           this.stats.decodedBytes -= slot.bytes;
         }
         this.#wants.delete(slot);
