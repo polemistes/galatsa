@@ -587,6 +587,39 @@ describe("changing the kind", () => {
   });
 });
 
+describe("changes that change nothing", () => {
+  it("are not offered and make no undo step: the same value, or the same kind", () => {
+    const t = setup();
+    const a = t.must<ElementId>(SHAPE_INSERT, { kind: "rect", x: 0, y: 0, w: 10, h: 10 });
+    const b = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "rect",
+      x: 20,
+      y: 0,
+      w: 10,
+      h: 10,
+    });
+    t.must(SHAPE_SET, { ids: [a], key: "fill", value: "#ff0000" });
+    const steps = t.undo.undoStack.length;
+    const before = t.updates.length;
+    for (const args of [
+      { ids: [a], key: "fill", value: "#ff0000" },
+      { ids: [a], key: "fill", value: "#FF0000" },
+      { ids: [a, b], key: "kind", value: "rect" },
+      { ids: [b], key: "opacity", value: 1 },
+    ])
+      expect(t.run(SHAPE_SET, args), JSON.stringify(args)).toMatchObject({
+        ok: false,
+        reason: "disabled",
+      });
+    expect(t.undo.undoStack.length).toBe(steps);
+    expect(t.updates.length).toBe(before);
+    // With one shape that changes, only that one is written, as one step.
+    t.must(SHAPE_SET, { ids: [a, b], key: "fill", value: "#ff0000" });
+    expect(t.undo.undoStack.length).toBe(steps + 1);
+    expect(t.element(b).data["fill"]).toBe("#ff0000");
+  });
+});
+
 describe("fields", () => {
   it("read the model, and apply only where they mean something", () => {
     const t = setup();
@@ -602,6 +635,10 @@ describe("fields", () => {
     expect(applies("cornerRadius", "ellipse")).toBe(false);
     expect(applies("stroke", "line")).toBe(true);
     expect(applies("kind", "star")).toBe(false);
+    // The style of a kind from a newer version can be changed, fill and corners too.
+    expect(applies("fill", "star")).toBe(true);
+    expect(applies("cornerRadius", "star")).toBe(true);
+    expect(applies("opacity", "star")).toBe(true);
     expect(fields.get("strokeWidth")!.get(read({ strokeWidth: 7 }).model)).toBe(7);
     for (const field of fields.values()) expect(field.command).toBe(SHAPE_SET);
   });

@@ -156,10 +156,14 @@ function writesFor(
   change: FieldChange,
 ): { writes: ElementData; removed: string[] } | undefined {
   const value = normalizeValue(change.value);
-  if (change.key !== "kind") return { writes: { [change.key]: value }, removed: [] };
   const from = table.kinds.get(readShape(table, data, () => {}).kind);
+  const param = table.params.get(change.key);
+  // A parameter only for a shape whose own kind lists it; none for an unknown kind.
+  if (param !== undefined && !(from?.params ?? []).includes(param)) return undefined;
+  if (change.key !== "kind") return { writes: { [change.key]: value }, removed: [] };
   const to = table.kinds.get(value as string);
   if (from === undefined || to === undefined) return undefined;
+  if (from === to) return { writes: {}, removed: [] };
   const writes: Record<string, Json> = { kind: to.kind };
   for (const param of to.params ?? [])
     writes[param.key] =
@@ -170,6 +174,20 @@ function writesFor(
     .map((p) => p.key)
     .filter((key) => !Object.hasOwn(writes, key) && Object.hasOwn(data, key));
   return { writes: writes as ElementData, removed };
+}
+
+/** True if a change would leave the data as it is. */
+function changesNothing(
+  data: ElementData,
+  writes: ElementData,
+  removed: readonly string[],
+) {
+  return (
+    removed.length === 0 &&
+    Object.entries(writes).every(
+      ([key, value]) => Object.hasOwn(data, key) && data[key] === value,
+    )
+  );
 }
 
 /** True if the data with `writes` reads without a report: what `updateElementData` checks. */
@@ -247,7 +265,11 @@ function shapeFields(table: KindTable): FieldDefinition<ShapeModel>[] {
       quick: true,
       control: { kind: "color", allowNone: true },
       get: (m) => m.fill,
-      applies: (m) => kindOf(m)?.closed === true,
+      // Also for a kind from a newer version, whose style can be changed.
+      applies: (m) => {
+        const kind = kindOf(m);
+        return kind === undefined || kind.closed;
+      },
       command: SHAPE_SET,
     },
     {
@@ -271,7 +293,11 @@ function shapeFields(table: KindTable): FieldDefinition<ShapeModel>[] {
       label: shapeLabel("corner-radius"),
       control: { kind: "number", min: 0, max: 1000, step: 1 },
       get: (m) => m.cornerRadius,
-      applies: (m) => kindOf(m)?.corners === true,
+      applies: (m) => {
+        // Also for a kind from a newer version, which may have corners.
+        const kind = kindOf(m);
+        return kind === undefined || kind.corners === true;
+      },
       command: SHAPE_SET,
     },
     {
@@ -364,13 +390,16 @@ export function createShapeExtension(
       const planned = writesFor(table, data, change);
       if (planned === undefined || !readsCleanly(table, data, planned.writes))
         return undefined;
+      // A shape that already has the value is left alone.
+      if (changesNothing(data, planned.writes, planned.removed)) continue;
       const box =
         change.key === "kind"
           ? boxFor(r, id, table.kinds.get(change.value as string)!)
           : undefined;
       steps.push({ id, ...planned, box });
     }
-    return steps;
+    // A change that changes nothing is not offered, and makes no undo step.
+    return steps.length > 0 ? steps : undefined;
   };
 
   const set = defineCommand<unknown, void>({

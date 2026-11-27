@@ -39,6 +39,18 @@ export function isShapeColor(value: unknown): value is ShapeColor {
  */
 export const MAX_LENGTH = PRECISION_BUDGET;
 
+/**
+ * The form of a parameter's data key: a plain identifier (as "tailX"), so that
+ * it can never be "__proto__" or another key with a meaning in JavaScript
+ * objects beyond its own.
+ */
+export const PARAM_KEY_PATTERN = /^[a-z][a-zA-Z0-9]{0,31}$/;
+
+/** Names every JavaScript object has; never parameter keys. */
+const OBJECT_KEYS: ReadonlySet<string> = new Set(
+  Object.getOwnPropertyNames(Object.prototype),
+);
+
 /** The form of a choice value, as of a kind name: so that unknown ones can be kept. */
 export const CHOICE_PATTERN = KIND_PATTERN;
 
@@ -181,6 +193,8 @@ function checkParam(kind: ShapeKind, param: ShapeParam): void {
   const fail = (why: string): never => {
     throw new Error(`Shape kind "${kind.kind}": parameter "${param.key}" ${why}`);
   };
+  if (!PARAM_KEY_PATTERN.test(param.key) || OBJECT_KEYS.has(param.key))
+    fail("needs a key of letters and digits, starting with a lowercase letter");
   if (param.type === "number") {
     if (!finite(param.min) || !finite(param.max) || !(param.min < param.max))
       fail("needs a finite range");

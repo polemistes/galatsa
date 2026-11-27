@@ -413,6 +413,36 @@ describe("a new kind in a file of its own", () => {
     expect(wrong).toEqual(["dot"]);
   });
 
+  it("refuses a parameter that the shape's own kind does not list, and any for an unknown kind", () => {
+    const t = setup(ALL);
+    const run = (id: string, args: unknown) =>
+      t.host.commands.execute<ElementId>(id, t.env(), args);
+    const rect = (
+      run(SHAPE_INSERT, { kind: "rect", x: 0, y: 0, w: 40, h: 40 }) as {
+        value: ElementId;
+      }
+    ).value;
+    const unknown = addElement(t.doc, {
+      type: SHAPE_TYPE,
+      typeVersion: 1,
+      x: 0,
+      y: 0,
+      size: { w: 10, h: 10 },
+      data: { kind: "star" },
+    });
+    const steps = t.undo.undoStack.length;
+    for (const id of [rect, unknown])
+      expect(run(SHAPE_SET, { ids: [id], key: "inset", value: 0.25 })).toMatchObject({
+        ok: false,
+        reason: "disabled",
+      });
+    expect(t.undo.undoStack.length).toBe(steps);
+    const data = (id: ElementId) =>
+      (toSnapshot(t.doc).elements[id] as ExtensionElement).data;
+    expect(Object.hasOwn(data(rect), "inset")).toBe(false);
+    expect(data(unknown)).toEqual({ kind: "star" });
+  });
+
   it("writes the new kind's parameters and drops the old kind's when the kind changes", () => {
     const t = setup(ALL);
     const run = (id: string, args: unknown) =>
@@ -533,5 +563,9 @@ describe("the table of kinds", () => {
       default: "Big Head",
     };
     expect(() => kindTable([kind("a", [choice])])).toThrow(/form of a kind name/);
+    for (const key of ["__proto__", "constructor", "Tail", "tail-x", "1st", ""])
+      expect(() => kindTable([kind("a", [{ ...number(0, 1), key }])]), key).toThrow(
+        /needs a key/,
+      );
   });
 });
