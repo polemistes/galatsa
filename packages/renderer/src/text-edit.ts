@@ -273,6 +273,9 @@ export class DomTextEditSession implements TextEditSession {
       transform,
       minHeight: `${(this.#style.lineHeight ?? 1.2) * REFERENCE_SIZE}px`,
     });
+    // `all: initial` also resets WebKit's user-modify, which is what makes a
+    // contenteditable element editable (and focusable) there.
+    el.style.setProperty("-webkit-user-modify", "read-write");
   }
 
   /** The largest caret index: the content's length, less a final "\n". */
