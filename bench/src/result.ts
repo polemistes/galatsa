@@ -110,7 +110,12 @@ export interface BenchResult {
     readonly hiddenDuringRun: boolean;
     readonly resizedDuringRun: boolean;
   };
-  readonly scene: SceneSummary & { readonly encodedImageBytes: number };
+  readonly scene: SceneSummary & {
+    /** The original image files. */
+    readonly encodedImageBytes: number;
+    /** Their reduced-size versions (ImageSource.getReduced), 0 if none were made. */
+    readonly encodedReducedImageBytes: number;
+  };
   readonly cameraRun: { readonly frames: number; readonly segments: readonly Segment[] };
   readonly timings: {
     /** Time to generate and encode the images (once per page, before any run). */

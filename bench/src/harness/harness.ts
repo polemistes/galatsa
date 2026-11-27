@@ -133,6 +133,8 @@ export function startHarness(options: HarnessOptions): HarnessApi {
     height: positiveInt(params.get("height"), REFERENCE_VIEWPORT.height),
   };
   const measureMemory = params.get("memory") !== "0";
+  // reduced=0 generates only the originals, as the first versions of the bench did.
+  const generateReduced = params.get("reduced") !== "0";
 
   document.title = STRINGS.pageTitle;
 
@@ -253,9 +255,13 @@ export function startHarness(options: HarnessOptions): HarnessApi {
     setBusy(true);
     output.textContent = runOptions.capture === true ? STRINGS.capturesNote : "";
     try {
-      images ??= prepareImages(scene, (done, total) => {
-        status.textContent = STRINGS.statusGenerating(done, total);
-      }).catch((error: unknown) => {
+      images ??= prepareImages(
+        scene,
+        (done, total) => {
+          status.textContent = STRINGS.statusGenerating(done, total);
+        },
+        { reduced: generateReduced },
+      ).catch((error: unknown) => {
         images = undefined; // try again on the next run
         throw error;
       });

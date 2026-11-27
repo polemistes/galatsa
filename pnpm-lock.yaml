@@ -232,6 +232,12 @@ importers:
       '@galatsa/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../packages/extension-api
+      '@galatsa/renderer':
+        specifier: workspace:*
+        version: link:../packages/renderer
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
