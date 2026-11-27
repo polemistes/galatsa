@@ -296,6 +296,8 @@ function planPaste(ctx: CommandContext, args: unknown): PastePlan | undefined {
 /**
  * Pastes a fragment with new ids, in front of what is in the target container,
  * and selects what was pasted. Refused if the fragment does not read cleanly.
+ * The pasted copies are not locked, so they can be clicked (decided by the
+ * users); what is locked inside a pasted frame or group stays locked.
  */
 export const paste = defineCommand<PasteArgs, PasteOutcome>({
   name: "paste",
@@ -306,6 +308,8 @@ export const paste = defineCommand<PasteArgs, PasteOutcome>({
   enabled: (ctx, args) => planPaste(ctx, args) !== undefined,
   execute(ctx, args) {
     const plan = planPaste(ctx, args) ?? refuse("paste");
+    // readFragment made a copy of its own, so this changes nothing of the caller's.
+    for (const root of plan.fragment.roots) plan.fragment.elements[root]!.locked = false;
     return pasteInto(ctx, plan.fragment, plan);
   },
 });

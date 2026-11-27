@@ -594,6 +594,26 @@ describe("copy and paste", () => {
     t.must(BASICS.paste, { fragment });
   });
 
+  it("pastes a copied locked element unlocked, keeping locks inside a pasted frame (decided by the users)", () => {
+    const t = setupBasics();
+    const a = t.shape(0, 0);
+    const f = t.frame(100, 0);
+    const inner = t.shape(10, 10, 10, 10, f);
+    t.must(BASICS.lock, { ids: [inner] });
+    t.must(BASICS.lock, { ids: [a, f] });
+    const fragment = t.must<Fragment>(BASICS.copy, { ids: [a, f] });
+    const text = JSON.parse(JSON.stringify(fragment)) as unknown;
+    const { ids } = t.must<PasteOutcome>(BASICS.paste, { fragment: text });
+    expect(ids.map((id) => t.element(id).locked)).toEqual([false, false]);
+    const [innerCopy] = order(t, ids[1]!);
+    expect(t.element(innerCopy!).locked).toBe(true);
+    // The originals, and the fragment the caller holds, keep their locks.
+    expect([t.element(a).locked, t.element(f).locked]).toEqual([true, true]);
+    expect(
+      (text as Fragment).roots.map((id) => (text as Fragment).elements[id]!.locked),
+    ).toEqual([true, true]);
+  });
+
   it("refuses elements whose parent in the fragment is not a frame or group, so a paste can always be undone", () => {
     const t = setupBasics();
     const s = t.shape(0, 0);
