@@ -51,6 +51,7 @@ function makeHost(docs: TestDoc[]) {
           defineCommand<string, void>({
             name: "title",
             label: "common:a",
+            undoLabel: "common:title-step",
             shortcuts: ["Mod+T"],
             execute: (ctx, title) => setTitle(ctx.doc, title),
           }),
@@ -97,6 +98,12 @@ function makeHost(docs: TestDoc[]) {
             label: "common:a",
             quick: true,
             enabled: () => false,
+            execute: () => {},
+          }),
+          defineCommand<undefined, void>({
+            name: "nothing",
+            label: "common:a",
+            quick: true,
             execute: () => {},
           }),
           defineCommand<undefined, void>({
@@ -213,6 +220,58 @@ describe("command registry", () => {
     expect(t.undo.undoStack.length).toBe(1);
     t.undo.undo();
     expect(t.title()).toBe("");
+  });
+
+  it("names each step after its command, and keeps the name through undo and redo", () => {
+    const t = setup();
+    const history = t.host.commands.history(t.env());
+    expect(history.undoStep()).toBeNull();
+    expect(history.redoStep()).toBeNull();
+    t.host.commands.execute("t/title", t.env(), "One");
+    expect(history.undoStep()).toEqual({
+      command: "t/title",
+      label: "common:title-step",
+    });
+    // A command run by another is part of the outer step, which has its name.
+    t.host.commands.execute("t/both", t.env());
+    expect(history.undoStep()).toEqual({ command: "t/both", label: "common:a" });
+    // A command that changes nothing makes no step and renames none.
+    t.host.commands.execute("t/nothing", t.env());
+    expect(t.undo.undoStack.length).toBe(2);
+    expect(history.undoStep()).toEqual({ command: "t/both", label: "common:a" });
+
+    expect(history.undo()).toBe(true);
+    expect(history.redoStep()).toEqual({ command: "t/both", label: "common:a" });
+    expect(history.undoStep()).toEqual({
+      command: "t/title",
+      label: "common:title-step",
+    });
+    expect(history.undo()).toBe(true);
+    expect(history.redo()).toBe(true);
+    expect(history.undoStep()).toEqual({
+      command: "t/title",
+      label: "common:title-step",
+    });
+    expect(history.redoStep()).toEqual({ command: "t/both", label: "common:a" });
+    expect(history.redo()).toBe(true);
+    expect(history.undoStep()).toEqual({ command: "t/both", label: "common:a" });
+    // And again after a second round.
+    expect(history.undo()).toBe(true);
+    expect(history.redoStep()).toEqual({ command: "t/both", label: "common:a" });
+  });
+
+  it("gives steps that no command made no name", () => {
+    const t = setup();
+    // Changes of the local user outside commands (as an editor binding makes them).
+    setTitle(t.doc, "typed");
+    const history = t.host.commands.history(t.env());
+    expect(history.undoStep()).toEqual({});
+    // A step made by a command run by a non-undoable one has that command's name.
+    t.host.commands.execute("t/outer-view", t.env());
+    expect(history.undoStep()).toEqual({
+      command: "t/title",
+      label: "common:title-step",
+    });
   });
 
   it("builds the keyboard map per mode and reports conflicts", () => {

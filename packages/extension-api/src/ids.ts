@@ -106,7 +106,7 @@ export interface ApiVersion {
 }
 
 /** The version of the interface this package implements. */
-export const EXTENSION_API_VERSION: ApiVersion = { major: 1, minor: 0 };
+export const EXTENSION_API_VERSION: ApiVersion = { major: 1, minor: 1 };
 
 /**
  * True if an extension written against `wanted` runs on a host that implements

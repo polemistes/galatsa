@@ -39,6 +39,17 @@ export interface ExtensionLookup {
   capabilities(element: ElementFacts): ElementCapabilities;
 }
 
+/**
+ * What an undo step is, as the editor names it ("Undo move"). Steps made by a
+ * command carry the command's id and step label; other steps (typing through
+ * an editor binding) carry neither.
+ */
+export interface HistoryStep {
+  readonly command?: ContributionId;
+  /** The command's `undoLabel`, or its `label` when it has none. */
+  readonly label?: Label;
+}
+
 /** Undo and redo, as commands may use them. */
 export interface History {
   /** False while a gesture or a command step is open on this document. */
@@ -47,6 +58,14 @@ export interface History {
   /** Undoes the last step; false if it cannot now. */
   undo(): boolean;
   redo(): boolean;
+  /**
+   * The step the next undo takes back, or null if there is none. Yjs skips a
+   * step that would change nothing (everything it did was overwritten by
+   * others), so the step undone may then be an earlier one.
+   */
+  undoStep(): HistoryStep | null;
+  /** The step the next redo makes again, or null if there is none. */
+  redoStep(): HistoryStep | null;
 }
 
 export interface CommandContext extends CommandEnvironment {
@@ -76,6 +95,13 @@ export interface CommandDefinition<A = unknown, R = unknown> {
   /** Command name; the command id is "<extension id>/<name>". */
   readonly name: string;
   readonly label: Label;
+  /**
+   * The name of the undo step the command makes, for "Undo ..." and "Redo
+   * ..." in menus: a noun phrase ("move" rather than "Move"), because
+   * languages such as Norwegian word the two differently ("Flytt", "Angre
+   * flytting"). Default: `label`.
+   */
+  readonly undoLabel?: Label;
   /** Longer text for tooltips and the command search. */
   readonly description?: Label;
   readonly icon?: IconRef;
@@ -156,6 +182,35 @@ export interface ShortcutConflict {
   readonly shortcut: Shortcut;
   readonly kept: ContributionId;
   readonly ignored: ContributionId;
+}
+
+/** Key of a step's command and label in the meta map of a Yjs stack item. */
+const STEP_META = "galatsa:step";
+
+type StackItem = DocumentUndoManager["undoStack"][number];
+
+function stepOf(item: StackItem | undefined): HistoryStep | null {
+  if (item === undefined) return null;
+  return (item.meta.get(STEP_META) as HistoryStep | undefined) ?? {};
+}
+
+/** Undo managers whose steps keep their meta when they move between the stacks. */
+const carrying = new WeakSet<DocumentUndoManager>();
+
+/**
+ * Yjs makes a new stack item when a step is undone (on the redo stack) or
+ * redone (on the undo stack), with empty meta. This copies the meta of the step
+ * being undone or redone to the new item, so that a step keeps its name.
+ */
+function carryMeta(undo: DocumentUndoManager): void {
+  if (carrying.has(undo)) return;
+  carrying.add(undo);
+  undo.on("stack-item-added", (event: { stackItem: StackItem }) => {
+    const from = undo.currStackItem;
+    if ((!undo.undoing && !undo.redoing) || from === null || from === event.stackItem)
+      return;
+    for (const [key, value] of from.meta) event.stackItem.meta.set(key, value);
+  });
 }
 
 /** Restores the redo stack after a failed command was taken back. */
@@ -247,6 +302,8 @@ export class CommandRegistry {
       canRedo: () => this.#historyFree(undo) && undo.canRedo(),
       undo: () => this.#historyFree(undo) && undo.undo() !== null,
       redo: () => this.#historyFree(undo) && undo.redo() !== null,
+      undoStep: () => stepOf(undo.undoStack[undo.undoStack.length - 1]),
+      redoStep: () => stepOf(undo.redoStack[undo.redoStack.length - 1]),
     };
   }
 
@@ -304,11 +361,24 @@ export class CommandRegistry {
     const execute = (): R => entry.definition.execute(this.context(env), args) as R;
     const undo = env.undo;
     if (entry.definition.undoable === false || this.#open.has(undo)) return execute();
+    carryMeta(undo);
     const before = undo.undoStack.length;
+    const top = undo.undoStack[before - 1];
     const redo = undo.redoStack.slice();
     this.#open.add(undo);
     try {
-      return undo.group(execute);
+      const result = undo.group(execute);
+      // group() starts a new step, so a new top item is this command's step. A
+      // command that changed nothing tracked made none.
+      const made = undo.undoStack[undo.undoStack.length - 1];
+      if (made !== undefined && made !== top) {
+        const step: HistoryStep = {
+          command: entry.id,
+          label: entry.definition.undoLabel ?? entry.definition.label,
+        };
+        made.meta.set(STEP_META, step);
+      }
+      return result;
     } catch (error) {
       // group() closed the step; take back what the command did before it failed.
       if (undo.undoStack.length > before) takeBack(undo, redo);

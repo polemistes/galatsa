@@ -143,7 +143,10 @@ function labelsIn(value: unknown, out: string[], depth = 0): void {
   }
   for (const [key, item] of Object.entries(value)) {
     if (
-      (key === "label" || key === "description" || key === "unit") &&
+      (key === "label" ||
+        key === "undoLabel" ||
+        key === "description" ||
+        key === "unit") &&
       typeof item === "string"
     )
       out.push(item);
