@@ -30,6 +30,7 @@ import {
   renameStop,
   setStopTransition,
   setRouteEntryStop,
+  setSetting,
   setStopView,
   setVisibility,
   stopNotes,
@@ -53,7 +54,13 @@ import {
   viewOfCamera,
   type StopsAndRoutes,
 } from "./model.ts";
-import { isStopSpeed, transitionForSpeed, type StopSpeed } from "./speed.ts";
+import {
+  isStopSpeed,
+  motionGuardOn,
+  transitionForSpeed,
+  type StopSpeed,
+} from "./speed.ts";
+import { FLIGHT_LIMITS_SETTING } from "@galatsa/extension-transitions";
 import { choose, currentChoice } from "./state.ts";
 
 export { ROUTES_EXTENSION };
@@ -73,6 +80,7 @@ export const ROUTES = {
   renameStop: `${ROUTES_EXTENSION}/rename-stop`,
   setStopNotes: `${ROUTES_EXTENSION}/set-stop-notes`,
   setStopSpeed: `${ROUTES_EXTENSION}/set-stop-speed`,
+  setMotionGuard: `${ROUTES_EXTENSION}/set-motion-guard`,
   updateStopView: `${ROUTES_EXTENSION}/update-stop-view`,
   copyStopForRoute: `${ROUTES_EXTENSION}/copy-stop-for-route`,
   setVisibility: `${ROUTES_EXTENSION}/set-visibility`,
@@ -497,6 +505,28 @@ const setStopSpeed = defineCommand<SpeedArgs, void>({
   },
 });
 
+export interface MotionGuardArgs {
+  /** On: long moves fade instead of flying (the flight limits apply). */
+  readonly on: boolean;
+}
+
+/**
+ * Turns the presentation's motion sickness guard on or off: the document
+ * setting FLIGHT_LIMITS_SETTING (docs/adr/0015-presentation.md). One undo
+ * step, none when nothing changes.
+ */
+const setMotionGuard = defineCommand<MotionGuardArgs, void>({
+  name: "set-motion-guard",
+  label: label("set-motion-guard"),
+  undoLabel: label("set-motion-guard.step"),
+  quick: true,
+  enabled: (_ctx, args) => isRecord(args) && typeof args.on === "boolean",
+  execute(ctx, { on }) {
+    if (motionGuardOn(ctx.doc) === on) return;
+    edit(ctx.doc, () => setSetting(ctx.doc, FLIGHT_LIMITS_SETTING, on));
+  },
+});
+
 /** Points the stop at the rectangle the camera shows now. */
 const updateStopView = defineCommand<StopArgs, void>({
   name: "update-stop-view",
@@ -732,6 +762,7 @@ export const routesCommands = [
   renameStopCommand,
   setStopNotes,
   setStopSpeed,
+  setMotionGuard,
   updateStopView,
   copyStopForRoute,
   setVisibilityCommand,

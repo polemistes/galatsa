@@ -91,8 +91,11 @@ const LIMIT = 100_000;
  * of F1-14 (steering a transition onto a goal that moved, the keyboard, full
  * screen) took the whole player to 338 kB and its core to 162 kB; the
  * renderer's in-place editing, which came with F1-08, was taken out of it.
+ * The speed per stop (E12) and the motion sickness guard (E13) then took the
+ * core to 167 kB (the whole player 343 kB, the bundle without it 94 kB), and
+ * its ceiling was raised to 175 kB.
  */
-const PLAYER_CORE_CEILING = 165_000;
+const PLAYER_CORE_CEILING = 175_000;
 const PLAYER_CEILING = 350_000;
 
 describe("viewer bundle", () => {

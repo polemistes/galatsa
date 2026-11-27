@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The speed into a stop, as the routes panel offers it: the route's default,
+// The speed into a stop, as the routes panel offers it, and the
+// presentation's motion sickness guard: the route's default,
 // a calm, normal or fast flight, or a cross-fade. Stored in the stop's
 // `transition` (docs/adr/0001, section 6.1) as the built-in fly transition
 // with a speed, or the built-in fade; the player and the transitions play it
@@ -8,12 +9,16 @@
 
 import type { Json } from "@galatsa/core";
 import { contributionId, readTransitionValue } from "@galatsa/extension-api";
+import { roots } from "@galatsa/core/ydoc";
 import {
   DEFAULT_TRANSITION,
   fade,
+  FLIGHT_LIMITS_SETTING,
+  readFlightLimits,
   readFlightSpeed,
   TRANSITIONS_EXTENSION_ID,
 } from "@galatsa/extension-transitions";
+import type * as Y from "yjs";
 
 /** The choices, in the order the panel lists them. */
 export const STOP_SPEEDS = ["default", "calm", "normal", "fast", "fade"] as const;
@@ -51,4 +56,14 @@ export function speedOfTransition(value: Json): StopSpeed | "other" {
 /** True for a choice the panel offers. */
 export function isStopSpeed(value: unknown): value is StopSpeed {
   return (STOP_SPEEDS as readonly unknown[]).includes(value);
+}
+
+/** Whether the document's motion sickness guard is on (docs/adr/0015-presentation.md). */
+export function motionGuardOn(doc: Y.Doc): boolean {
+  const settings = roots(doc).settings;
+  return readFlightLimits(
+    settings.has(FLIGHT_LIMITS_SETTING)
+      ? (settings.get(FLIGHT_LIMITS_SETTING) as Json)
+      : undefined,
+  );
 }

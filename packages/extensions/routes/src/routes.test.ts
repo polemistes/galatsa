@@ -29,6 +29,7 @@ import {
   regionOf,
   routeShapes,
   routesExtension,
+  motionGuardOn,
   routesUsing,
   speedOfTransition,
   textChange,
@@ -38,6 +39,7 @@ import {
   type JumpEnvironment,
 } from "./index.ts";
 import { routeSteps, liveRoutes } from "./model.ts";
+import { FLIGHT_LIMITS_SETTING } from "@galatsa/extension-transitions";
 
 const INSERT_FRAME = "test.fixtures/insert-frame";
 
@@ -660,6 +662,25 @@ describe("the speed into a stop", () => {
     expect(speedOfTransition({ type: "galatsa.transitions/cut", options: null })).toBe(
       "other",
     );
+  });
+});
+
+describe("the motion sickness guard", () => {
+  it("is on by default, and turned off and on as a document setting, one undo step each", () => {
+    const t = setup();
+    const setting = () => t.doc.getMap("settings").get(FLIGHT_LIMITS_SETTING);
+    expect(motionGuardOn(t.doc)).toBe(true);
+    expect(setting()).toBeUndefined();
+    oneStep(t, ROUTES.setMotionGuard, { on: false });
+    expect(motionGuardOn(t.doc)).toBe(false);
+    expect(setting()).toBe(false);
+    oneStep(t, ROUTES.setMotionGuard, { on: true });
+    expect(motionGuardOn(t.doc)).toBe(true);
+    // The same again changes nothing and makes no undo step.
+    const depth = t.editor.undo.undoStack.length;
+    t.must(ROUTES.setMotionGuard, { on: true });
+    expect(t.editor.undo.undoStack.length).toBe(depth);
+    expect(t.editor.isEnabled(ROUTES.setMotionGuard, { on: "no" })).toBe(false);
   });
 });
 
