@@ -150,10 +150,12 @@ test("a picture at the back of a frame with text on top, and the frame moved wit
   const { text, picture } = await page.evaluate(async () => {
     const dev = window as unknown as Dev;
     const editor = dev.galatsaDev.editor()!;
-    const insert = (id: string, args: unknown) => editor.run(id, args);
-    let made = insert("galatsa.text/insert", { x: 220, y: 160, w: 200, text: "Hei" });
-    if (!made.ok)
-      made = insert("examples.text/insert", { x: 220, y: 160, w: 200, text: "Hei" });
+    const made = editor.run("galatsa.text/insert", {
+      x: 220,
+      y: 160,
+      w: 200,
+      text: "Hei",
+    });
     if (!made.ok) throw new Error("no text");
     const text = made.value as string;
     const blob = await dev.galatsaTestImage(300, 200, 3, "image/png");
