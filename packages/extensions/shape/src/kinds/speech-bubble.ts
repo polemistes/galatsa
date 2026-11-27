@@ -42,6 +42,9 @@ export const speechBubble = defineShapeKind({
   shortcut: "b",
   closed: true,
   corners: true,
+  // Rounded from the start, as speech bubbles usually are: 16 pixels on
+  // screen when drawn, whatever the zoom.
+  defaults: { cornerRadius: 16 },
   params: [TAIL_X, TAIL_Y],
   outline({ body }, { w, h, cornerRadius, params }) {
     const tx = (params["tailX"] as number) * w;

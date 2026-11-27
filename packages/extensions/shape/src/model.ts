@@ -228,6 +228,12 @@ export function kindTable(kinds: readonly ShapeKind[]): KindTable {
     if (byName.has(kind.kind))
       throw new Error(`Shape kind "${kind.kind}" is listed twice`);
     byName.set(kind.kind, kind);
+    for (const [key, value] of Object.entries(kind.defaults ?? {})) {
+      if (!(STYLE_KEYS as readonly string[]).includes(key))
+        throw new Error(`Shape kind "${kind.kind}": default "${key}" is not a style key`);
+      if (!STYLE_RULES[key as StyleKey].allows(value))
+        throw new Error(`Shape kind "${kind.kind}": default "${key}" does not fit`);
+    }
     for (const param of kind.params ?? []) {
       if (reserved.has(param.key))
         throw new Error(
@@ -311,14 +317,18 @@ export function normalizeValue<T>(value: T): T {
   return (isShapeColor(value) ? value.toLowerCase() : value) as T;
 }
 
-/** The data a new shape of `kind` is written with: every key, explicitly. */
+/**
+ * The data a new shape of `kind` is written with: every key, explicitly; the
+ * common defaults, over them the kind's own defaults, and over those `style`.
+ */
 export function newShapeData(
   table: KindTable,
   kind: string,
   style: Partial<ShapeStyle> = {},
 ): ElementData {
   const data: Record<string, DataValue> = { kind, ...DEFAULT_STYLE };
-  for (const [key, value] of Object.entries(style))
+  const kindDefaults = table.kinds.get(kind)?.defaults ?? {};
+  for (const [key, value] of [...Object.entries(kindDefaults), ...Object.entries(style)])
     if (value !== undefined) data[key] = normalizeValue(value);
   for (const param of table.kinds.get(kind)?.params ?? [])
     data[param.key] = param.default;

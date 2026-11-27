@@ -971,6 +971,43 @@ describe("the drawing tool", () => {
     }
   });
 
+  it("gives a new shape its kind's own defaults, lengths the same on screen at any zoom", () => {
+    for (const zoom of [0.01, 1, 4]) {
+      const t = setup();
+      t.services.state.camera = { space: null, cx: 0, cy: 0, zoom };
+      for (const [kind, radius] of [
+        ["speech-bubble", 16],
+        ["rect", 0],
+      ] as const) {
+        const { handler } = tool(t, kind);
+        handler.pointerDown!(pointer({ x: 0, y: 0 }));
+        handler.pointerUp!(pointer({ x: 50, y: 50 }));
+        const e = t.element(t.services.state.selection[0]!);
+        expect(e.data["cornerRadius"], kind).toBeCloseTo(radius / zoom, 12);
+        expect(e.data["strokeWidth"], kind).toBeCloseTo(2 / zoom, 12);
+      }
+    }
+    // The insert command gives them too, unless the style says otherwise;
+    // data without the key still means the common default.
+    const t = setup();
+    const insert = (style?: object) =>
+      t.element(
+        t.must<ElementId>(SHAPE_INSERT, {
+          kind: "speech-bubble",
+          x: 0,
+          y: 0,
+          w: 10,
+          h: 10,
+          ...(style !== undefined ? { style } : {}),
+        }),
+      ).data["cornerRadius"];
+    expect(insert()).toBe(16);
+    expect(insert({ cornerRadius: 3 })).toBe(3);
+    expect(shapeView.read({ kind: "speech-bubble" }, 1, () => {}).cornerRadius).toBe(
+      DEFAULT_STYLE.cornerRadius,
+    );
+  });
+
   it("makes a shape of a fixed size on screen for a click", () => {
     const t = setup();
     t.services.state.camera = { space: null, cx: 0, cy: 0, zoom: 4 };
