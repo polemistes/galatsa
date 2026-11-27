@@ -1,0 +1,11 @@
+{
+  // Browser library: DOM types for IndexedDB and the File System Access API (see
+  // tsconfig.base.json). Tests run in Node with the memory backend, so nothing here
+  // may touch the DOM when it is imported.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.mts", "src/**/*.cts"]
+}

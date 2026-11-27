@@ -1,0 +1,47 @@
+{
+  "name": "@galatsa/storage",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Galatsa storage layer: autosave, the last good copy and crash recovery, over browser storage, files on disk and memory",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@galatsa/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./checkpoint-worker": {
+      "@galatsa/source": "./src/checkpoint-worker.ts",
+      "types": "./dist/checkpoint-worker.d.ts",
+      "default": "./dist/checkpoint-worker.js"
+    },
+    "./testing": {
+      "@galatsa/source": "./src/testing.ts",
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "sideEffects": [
+    "./src/checkpoint-worker.ts",
+    "./dist/checkpoint-worker.js"
+  ],
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*",
+    "@galatsa/format": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "yjs": "13.6.33"
+  },
+  "devDependencies": {
+    "vitest": "catalog:"
+  }
+}

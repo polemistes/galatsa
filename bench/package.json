@@ -27,7 +27,10 @@
   "dependencies": {
     "@galatsa/core": "workspace:*",
     "@galatsa/extension-api": "workspace:*",
-    "@galatsa/renderer": "workspace:*"
+    "@galatsa/format": "workspace:*",
+    "@galatsa/renderer": "workspace:*",
+    "@galatsa/storage": "workspace:*",
+    "yjs": "13.6.33"
   },
   "devDependencies": {
     "@types/node": "catalog:",
