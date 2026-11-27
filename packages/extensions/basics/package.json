@@ -1,0 +1,35 @@
+{
+  "name": "@galatsa/extension-basics",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Built-in extension with the commands every element has: move, resize, rotate, reparent, z-order, group, lock, delete, duplicate, copy and paste, undo, redo and select all",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@galatsa/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@galatsa/extension-examples": "workspace:*",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*",
+    "@galatsa/extension-api": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "yjs": "13.6.33"
+  }
+}
