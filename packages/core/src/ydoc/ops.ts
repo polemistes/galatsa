@@ -276,6 +276,15 @@ export function setTitle(doc: Y.Doc, title: string, options?: OpOptions): void {
   transact(doc, options, () => roots(doc).meta.set("title", title));
 }
 
+/**
+ * A JSON value, checked with the grammar's reader. Wrapped, because `checked`
+ * takes a null result for a failed read, and null is a valid value (a setting
+ * cleared, a stop's transition back to the route's default).
+ */
+function checkedJson(what: string, value: Json, level: number): Json {
+  return checked(what, (p) => ({ value: readJson(value, p, level) })).value;
+}
+
 export function setSetting(
   doc: Y.Doc,
   key: string,
@@ -283,7 +292,7 @@ export function setSetting(
   options?: OpOptions,
 ): void {
   checkText("setting key", key);
-  const json = checked("setting", (p) => readJson(value, p, 3));
+  const json = checkedJson("setting", value, 3);
   transact(doc, options, () => roots(doc).settings.set(key, json));
 }
 
@@ -880,7 +889,7 @@ export function setStopTransition(
   transition: Json,
   options?: OpOptions,
 ): void {
-  const read = checked("transition", (p) => readJson(transition, p, 4));
+  const read = checkedJson("transition", transition, 4);
   setStopKey(doc, id, "transition", read, options);
 }
 

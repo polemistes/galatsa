@@ -8,7 +8,14 @@ import * as Y from "yjs";
 import { InvalidDocumentError, validateSnapshot } from "../model/grammar.ts";
 import type { DataValue, ElementData } from "../model/types.ts";
 import { valueFromY, valueToY } from "./encode.ts";
-import { addElement, initDocument, setData } from "./ops.ts";
+import {
+  addElement,
+  addStop,
+  initDocument,
+  setData,
+  setSetting,
+  setStopTransition,
+} from "./ops.ts";
 import { fromSnapshot, toSnapshot } from "./snapshot.ts";
 import { MergeIdentityError, forkDoc, syncDocs } from "./sync.ts";
 import { buildSampleDocument } from "./testing.ts";
@@ -106,6 +113,17 @@ describe("generic data encoding", () => {
     const data = sample.getMap<Y.Map<unknown>>("elements").get("shape")!.get("data");
     expect((data as Y.Map<unknown>).get("nothing")).toBeNull();
     expect((data as Y.Map<unknown>).has("nothing")).toBe(true);
+  });
+
+  it("writes null as a setting and as a stop's transition (the route's default)", () => {
+    const doc = buildSampleDocument();
+    setSetting(doc, "galatsa.test", { on: true });
+    setSetting(doc, "galatsa.test", null);
+    expect(toSnapshot(doc).settings["galatsa.test"]).toBeNull();
+    const stop = addStop(doc, { view: { kind: "frame", frame: "frame", padding: 0 } });
+    setStopTransition(doc, stop, { type: "galatsa.transitions/fade", options: null });
+    setStopTransition(doc, stop, null);
+    expect(toSnapshot(doc).stops[stop]!.transition).toBeNull();
   });
 
   it("encodes values JSON cannot express losslessly, and rejects them as plain JSON input", () => {

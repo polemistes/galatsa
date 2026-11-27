@@ -624,7 +624,9 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
         if (view.get(id)?.size)
           run("resize", () => ops.resizeElement(doc, id, int(90), int(90), o));
       } else if (roll === 12) {
-        run("set data", () => ops.setData(doc, id, "k", { step }, o));
+        // Null is a value of its own, written as any other.
+        const value = chance(0.2) ? null : { step };
+        run("set data", () => ops.setData(doc, id, "k", value, o));
       } else if (roll === 13) {
         run("lock", () => ops.setLocked(doc, id, view.get(id)?.locked !== true, o));
       } else if (roll === 14 || roll === 15) {
