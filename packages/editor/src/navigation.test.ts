@@ -178,6 +178,31 @@ describe("two fingers", () => {
     editor.pointerUp(pointer(150, 150, { pointerType: "touch" }));
     expect(editor.selection).toEqual([id]);
   });
+
+  it("take back a document change the first finger's press made, with its undo step", () => {
+    const editor = setup();
+    const kept = shape(editor, 600, 600, 10, 10);
+    // An earlier step of the user's own, which must survive.
+    expect(editor.run("galatsa.basics/move", { ids: [kept], dx: 5, dy: 0 }).ok).toBe(
+      true,
+    );
+    const steps = editor.undo.undoStack.length;
+    const count = () =>
+      [...editor.live.ids()].filter((i) => !editor.live.isGone(i)).length;
+    const before = count();
+    // The text sketch inserts a text box as soon as the finger goes down.
+    expect(editor.tools.select("examples.text/text")).toBe(true);
+    editor.pointerDown(pointer(300, 300, { pointerType: "touch" }));
+    expect(count()).toBe(before + 1);
+    editor.pointerWithdraw();
+    expect(count()).toBe(before);
+    expect(editor.undo.undoStack.length).toBe(steps);
+    // Nothing to redo either: the press never happened.
+    expect(editor.undo.redoStack.length).toBe(0);
+    // The tool picked before the press is back.
+    expect(editor.tools.current).toBe("examples.text/text");
+    expect(editor.services.scene.placement(kept)).toMatchObject({ x: 605, y: 600 });
+  });
 });
 
 describe("the wheel", () => {

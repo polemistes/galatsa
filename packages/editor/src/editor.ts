@@ -170,8 +170,14 @@ export class Editor {
   readonly #view: CameraControl;
   /** A pointer is down and belongs to the tool. */
   #toolPointer = false;
-  /** The selection when the tool's pointer went down. */
-  #selectionAtDown: readonly ElementId[] = [];
+  /** What the tool's press may take back (`pointerWithdraw`): the state before it. */
+  #press: {
+    readonly selection: readonly ElementId[];
+    readonly tool: ContributionId | null;
+    /** The undo steps before the press, and the last of them. */
+    readonly steps: number;
+    readonly top: unknown;
+  } | null = null;
 
   constructor(options: EditorOptions) {
     const doc = options.doc;
@@ -554,7 +560,13 @@ export class Editor {
     if (!this.#inputEnabled) return;
     if (this.#view.handDown({ x: e.x, y: e.y })) return;
     this.#toolPointer = true;
-    this.#selectionAtDown = this.#state.selection;
+    const stack = this.undo.undoStack;
+    this.#press = {
+      selection: this.#state.selection,
+      tool: this.tools.current,
+      steps: stack.length,
+      top: stack[stack.length - 1],
+    };
     this.tools.pointerDown(this.#toolEvent(e));
   }
 
@@ -578,13 +590,35 @@ export class Editor {
   }
 
   /**
-   * The tool's press turned out to be the first finger of a pinch: its drag
-   * is cancelled, and the selection is put back as it was before the press.
+   * The press turned out to be the first finger of a pinch: everything it did
+   * is taken back. The hand lets go of it, or the tool's drag is cancelled,
+   * then every undo step made since the press is undone and dropped from the
+   * redo stack (a tool may run a command as soon as the finger goes down, as
+   * the text sketch does), and the selection and the tool are put back as
+   * they were before the press. Steps are only taken back while the stack
+   * still holds the step that was last before the press, so nothing older is
+   * ever undone.
    */
   pointerWithdraw(): void {
-    if (!this.#toolPointer) return;
+    if (this.#view.handUp(null)) return;
+    const press = this.#press;
+    if (!this.#toolPointer || press === null) return;
     this.pointerCancel();
-    this.services.selection.set(this.#selectionAtDown);
+    this.#press = null;
+    const undo = this.undo;
+    if (undo.undoStack[press.steps - 1] === press.top) {
+      let taken = 0;
+      while (undo.undoStack.length > press.steps) {
+        const length = undo.undoStack.length;
+        undo.undo();
+        if (undo.undoStack.length >= length) break;
+        taken++;
+      }
+      undo.redoStack.splice(Math.max(0, undo.redoStack.length - taken), taken);
+    }
+    if (press.tool !== null && this.tools.current !== press.tool)
+      this.tools.select(press.tool);
+    this.services.selection.set(press.selection);
   }
 
   /** The canvas lost focus: keys held down (Space) are let go. */
