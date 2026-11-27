@@ -43,7 +43,32 @@ export {
   PAN_STEP,
   ZOOM_STEP,
 } from "./navigation.ts";
-export { assetImages, documentAssets, type AssetReader } from "./images.ts";
+export {
+  assetImages,
+  documentAssets,
+  type AssetImagesOptions,
+  type AssetReader,
+} from "./images.ts";
+export {
+  ensurePreviews,
+  isImageType,
+  sessionAssetStore,
+  type AssetAccess,
+  type PreviewMaker,
+} from "./assets.ts";
+export {
+  chooseImporter,
+  importSource,
+  IMPORT_CASCADE,
+  IMPORT_NOTICES,
+  MAX_IMPORT_FILES,
+  mergeFragments,
+  placeFragments,
+  readFiles,
+  type ImportFile,
+  type ImportReport,
+  type PlacedFragment,
+} from "./import.ts";
 export {
   loadExtensions,
   registerEditorMessages,
@@ -63,6 +88,7 @@ export {
   withinLimits,
   writeFragment,
   type ClipboardContent,
+  type ClipboardFile,
   type ClipboardOrigin,
   type ClipboardProblem,
   type ClipboardSource,

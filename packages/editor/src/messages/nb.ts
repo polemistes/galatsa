@@ -37,6 +37,11 @@ export default {
     "Dette ble kopiert fra en annen versjon av Galatsa og kan ikke limes inn her.",
   "paste.damaged":
     "Innholdet på utklippstavlen kunne ikke limes inn fordi det er skadet eller ufullstendig.",
+  "import.choose": "Sett inn en fil …",
+  "import.unsupported":
+    "«{name}» kan ikke settes inn: ingen del av programmet leser filer av den typen.",
+  "import.failed": "«{name}» kunne ikke settes inn.",
+  "import.tooMany": "Bare de første {count} filene ble satt inn.",
   "panels.label": "Paneler",
   "nav.zoomIn": "Zoom inn",
   "nav.zoomOut": "Zoom ut",

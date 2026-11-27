@@ -37,6 +37,11 @@ export default {
     "This was copied from another version of Galatsa and cannot be pasted here.",
   "paste.damaged":
     "What is on the clipboard could not be pasted: it is damaged or incomplete.",
+  "import.choose": "Insert a file…",
+  "import.unsupported":
+    "“{name}” cannot be inserted: no part of the program reads files of its kind.",
+  "import.failed": "“{name}” could not be inserted.",
+  "import.tooMany": "Only the first {count} files were inserted.",
   "panels.label": "Panels",
   "nav.zoomIn": "Zoom in",
   "nav.zoomOut": "Zoom out",

@@ -5,7 +5,6 @@
 // (docs/adr/0006, section 7.1), opening a document, the editor over it, and
 // the Svelte interface for panels and the storage dialogs.
 
-import type { AssetId } from "@galatsa/core";
 import type { ContributionId, Mode } from "@galatsa/extension-api";
 import type {
   EditExtension,
@@ -32,6 +31,7 @@ import { mountEditor } from "./dom.ts";
 import { acceptsInput, EditorDocument } from "./document.ts";
 import { Editor } from "./editor.ts";
 import { loadExtensions } from "./extensions.ts";
+import { sessionAssetStore } from "./assets.ts";
 import { assetImages } from "./images.ts";
 import { checkDiscardFile, type DiscardFileCheck } from "./recovery.ts";
 
@@ -94,6 +94,8 @@ function encoderFor(createWorker: (() => WorkerLike) | undefined) {
 export class EditorApp {
   readonly i18n: I18n;
   readonly storage: DocumentStorage;
+  /** Reads of original image files by the renderer, for the open document (tests, diagnosis). */
+  readonly imageStats = { originalReads: 0 };
   readonly #options: EditorAppOptions;
   readonly #loaded: ReturnType<typeof loadExtensions>;
   readonly #stage: HTMLElement;
@@ -205,16 +207,21 @@ export class EditorApp {
       result.notices,
     );
     let editor: Editor | null = null;
+    this.imageStats.originalReads = 0;
+    // Images are drawn from their stored reduced versions; files imported
+    // into the document get theirs made when they are added (docs/adr/0012).
     const images = assetImages(
       session.doc,
-      (id: AssetId) => session.getAsset(id),
+      session,
       (assets) => editor?.renderer.imagesChanged(assets),
+      { stats: this.imageStats },
     );
     editor = new Editor({
       doc: session.doc,
       host: this.#loaded.host,
       i18n: this.i18n,
       images,
+      assetStore: sessionAssetStore(session),
       ...(this.#options.mode ? { mode: this.#options.mode } : {}),
       ...(this.#options.defaultTool ? { defaultTool: this.#options.defaultTool } : {}),
     });
