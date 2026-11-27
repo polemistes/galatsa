@@ -5,7 +5,12 @@
 
 import type { AssetId } from "@galatsa/core";
 import { initDocument, roots, toSnapshot, trackWork } from "@galatsa/core/ydoc";
-import { assetsToWrite, readGalatsaFile, writeGalatsaFile } from "@galatsa/format";
+import {
+  assetsToWrite,
+  readGalatsaFile,
+  writeGalatsaFile,
+  type AssetPreview,
+} from "@galatsa/format";
 import * as Y from "yjs";
 import type { StorageBackend } from "./backend.ts";
 import {
@@ -25,6 +30,7 @@ import {
   type Scheduler,
 } from "./environment.ts";
 import type { FileSource } from "./files.ts";
+import { readPreviews, storePreviews } from "./previews.ts";
 import { FRAME_KIND, decodeFrame } from "./frame.ts";
 import {
   DOC_PREFIX,
@@ -182,7 +188,7 @@ export class DocumentStorage {
   async create(init: { title?: string } = {}): Promise<StorageSession> {
     const doc = new Y.Doc();
     initDocument(doc, init.title === undefined ? {} : { title: init.title });
-    const slot = await this.#newSlot(doc, null, new Map());
+    const slot = await this.#newSlot(doc, null, new Map(), new Map());
     return this.#start(slot.start);
   }
 
@@ -203,7 +209,7 @@ export class DocumentStorage {
         lastGood: await this.#lastGood(name),
       };
     }
-    const slot = await this.#newSlot(read.doc, name, read.assets);
+    const slot = await this.#newSlot(read.doc, name, read.assets, read.previews);
     const session = await this.#start(slot.start);
     const notices = fileNotices(read.warnings);
     if (session.status.problem) notices.push(session.status.problem);
@@ -370,12 +376,16 @@ export class DocumentStorage {
     if (!("doc" in loaded)) return null;
     try {
       const assets = new Map<AssetId, Uint8Array>();
+      const previews = new Map<AssetId, AssetPreview[]>();
       for (const id of assetsToWrite(toSnapshot(loaded.doc))) {
         const bytes = await readAsset(this.backend, slot, id).catch(() => undefined);
         if (bytes) assets.set(id, bytes);
+        const list = await readPreviews(this.backend, slot, id).catch(() => []);
+        if (list.length > 0) previews.set(id, list);
       }
       return writeGalatsaFile(loaded.doc, (id) => assets.get(id), {
         generator: this.#ctx.generator,
+        previews: (id) => previews.get(id),
       }).bytes;
     } finally {
       loaded.doc.destroy();
@@ -393,6 +403,7 @@ export class DocumentStorage {
     doc: Y.Doc,
     fileName: string | null,
     assets: ReadonlyMap<AssetId, Uint8Array>,
+    previews: ReadonlyMap<AssetId, readonly AssetPreview[]>,
   ): Promise<{ start: SessionStart }> {
     trackWork(doc);
     const slot = randomId();
@@ -415,6 +426,15 @@ export class DocumentStorage {
       } catch (error) {
         unstored.add(id);
         problem ??= autosaveProblem(error);
+      }
+    }
+    // Previews are a cache: one that cannot be stored now is stored later.
+    const unstoredPreviews = new Set<AssetId>();
+    for (const [id, list] of previews) {
+      try {
+        await storePreviews(this.backend, slot, id, list);
+      } catch {
+        unstoredPreviews.add(id);
       }
     }
     await this.backend.write(keys.info(slot), encodeJson(info)).catch(() => {});
@@ -453,6 +473,8 @@ export class DocumentStorage {
         needsCheckpoint: generation < 2,
         assets,
         unstoredAssets: unstored,
+        previews,
+        unstoredPreviews,
         problem,
       },
     };
