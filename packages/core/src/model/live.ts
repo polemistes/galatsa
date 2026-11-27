@@ -170,6 +170,45 @@ export class LiveResolver extends Resolver {
   }
 
   /**
+   * Resolves everything anew, as if every record had changed, and reports what
+   * differs. For recovering when an update could not be taken in.
+   */
+  rebuild(): ResolvedChanges {
+    const touched = new Map<ElementId, null>();
+    for (const id of this.#resolved.keys()) touched.set(id, null);
+    for (const id of this.ids()) touched.set(id, null);
+    this.#storedChildren.clear();
+    this.#spaceUsers.clear();
+    const before = new Map(this.#resolved);
+    this.#resolved.clear();
+    this.forget(new Set(touched.keys()));
+    this.indexChildren();
+    for (const id of this.ids()) {
+      if (!this.get(id)) continue;
+      const resolved = this.#resolve(id);
+      this.#resolved.set(id, resolved);
+      this.#index(id, undefined, resolved);
+    }
+    const added = new Set<ElementId>();
+    const changed = new Set<ElementId>();
+    const removed = new Set<ElementId>();
+    for (const id of this.#resolved.keys()) (before.has(id) ? changed : added).add(id);
+    for (const id of before.keys()) if (!this.#resolved.has(id)) removed.add(id);
+    const changes: ResolvedChanges = {
+      added,
+      changed,
+      removed,
+      containers: new Set([
+        null,
+        ...[...this.#resolved.keys()].filter((id) => this.isContainer(id)),
+      ]),
+      drawOrder: true,
+    };
+    for (const listener of [...this.#listeners]) listener(changes);
+    return changes;
+  }
+
+  /**
    * Calls `listener` after every update that concerned at least one element.
    * Returns a function that stops it.
    */

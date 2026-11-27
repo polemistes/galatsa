@@ -309,6 +309,21 @@ describe("the live resolver, on random states", () => {
     expect(reported).toBeLessThan(differed * 4);
   });
 
+  it("rebuilds from scratch after changes it was not told about", () => {
+    const rnd = seeded(99);
+    const lookup = randomDocument(rnd, 30);
+    const live = new LiveResolver(lookup);
+    for (let i = 0; i < 40; i++) mutate(rnd, lookup, new Resolver(lookup));
+    const changes = live.rebuild();
+    const fresh = state(new Resolver(lookup));
+    const now = state(live);
+    expect(now.elements).toEqual(fresh.elements);
+    expect(now.children).toEqual(fresh.children);
+    expect(now.order).toEqual(fresh.order);
+    expect(changes.drawOrder).toBe(true);
+    expect(changes.added.size + changes.changed.size).toBe(fresh.elements.size);
+  });
+
   it("calls subscribers only when something changed, and not after they stop", () => {
     const lookup = randomDocument(seeded(3), 10);
     const live = new LiveResolver(lookup);

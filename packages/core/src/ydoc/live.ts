@@ -85,7 +85,15 @@ export function liveResolver(doc: Y.Doc): LiveResolver {
   doc.on("afterTransaction", (tr: Y.Transaction) => {
     live.pending.delete(tr);
     const touched = touchedBy(elements, tr);
-    if (touched.size > 0) live.resolver.update(touched);
+    if (touched.size === 0) return;
+    try {
+      live.resolver.update(touched);
+    } catch (error) {
+      // Never left out of date: resolve everything anew, then let the error be
+      // seen.
+      live.resolver.rebuild();
+      throw error;
+    }
   });
   return live.resolver;
 }
