@@ -5,8 +5,9 @@
 // scrolling and pinching), and keys, turned into the plain input the editor
 // core takes.
 //
-// - The first pointer that goes down is the tool's until it goes up; other
-//   pointers (a second finger) are ignored for now.
+// - The primary button of the first pointer that goes down is the tool's until
+//   it goes up; other pointers (a second finger) and other buttons are ignored
+//   for now, and a pointer whose pointerup never came is dropped (pointers.ts).
 // - The middle button drags the canvas; the wheel scrolls it, and with Ctrl or
 //   Cmd (which is also what a trackpad pinch sends) zooms about the pointer.
 //   The real camera controls come later; this is enough to reach an element.
@@ -16,6 +17,7 @@
 import type { I18n } from "@galatsa/i18n";
 import type { Editor, PointerInput } from "./editor.ts";
 import { keyInput } from "./keymap.ts";
+import { PointerTracker, type PointerAction, type PointerFacts } from "./pointers.ts";
 
 /** One wheel "line" in pixels, for wheels that report lines. */
 const LINE = 16;
@@ -81,54 +83,60 @@ export function mountEditor(
     };
   };
 
-  /** The pointer the tool has, or the one dragging the canvas. */
-  let active: { id: number; pan: boolean; x: number; y: number } | null = null;
-  const release = (id: number): void => {
-    if (surface.hasPointerCapture?.(id)) surface.releasePointerCapture(id);
+  /** Which pointer the tool has, or which one drags the canvas (pointers.ts). */
+  const pointers = new PointerTracker();
+  const facts = (e: PointerEvent): PointerFacts => ({
+    id: e.pointerId,
+    type: e.pointerType,
+    button: e.button,
+    buttons: e.buttons,
+    x: e.clientX,
+    y: e.clientY,
+  });
+  const perform = (e: PointerEvent, actions: readonly PointerAction[]): void => {
+    for (const action of actions) {
+      switch (action.kind) {
+        case "capture":
+          e.preventDefault();
+          try {
+            surface.setPointerCapture(e.pointerId);
+          } catch {
+            // A pointer that is already gone cannot be captured.
+          }
+          break;
+        case "release":
+          if (surface.hasPointerCapture?.(action.id))
+            surface.releasePointerCapture(action.id);
+          break;
+        case "tool-down":
+          editor.pointerDown(input(e));
+          break;
+        case "tool-move":
+        case "hover":
+          editor.pointerMove(input(e));
+          break;
+        case "tool-up":
+          editor.pointerUp(input(e));
+          break;
+        case "tool-cancel":
+          editor.pointerCancel();
+          break;
+        case "pan":
+          editor.pan(action.dx, action.dy);
+          break;
+      }
+    }
   };
 
   on("pointerdown", (e) => {
     surface.focus({ preventScroll: true });
-    if (active !== null) return;
-    const pan = e.button === 1;
-    if (!pan && e.button !== 0 && e.pointerType !== "mouse") return;
-    e.preventDefault();
-    active = { id: e.pointerId, pan, x: e.clientX, y: e.clientY };
-    try {
-      surface.setPointerCapture(e.pointerId);
-    } catch {
-      // A pointer that is already gone cannot be captured.
-    }
-    if (!pan) editor.pointerDown(input(e));
+    const active = pointers.active;
+    const captured = active !== null && surface.hasPointerCapture?.(active) === true;
+    perform(e, pointers.down(facts(e), captured));
   });
-  on("pointermove", (e) => {
-    if (active === null) {
-      // Hover: tools may show where they would act.
-      if (e.pointerType === "mouse") editor.pointerMove(input(e));
-      return;
-    }
-    if (e.pointerId !== active.id) return;
-    if (active.pan) {
-      editor.pan(e.clientX - active.x, e.clientY - active.y);
-      active.x = e.clientX;
-      active.y = e.clientY;
-      return;
-    }
-    editor.pointerMove(input(e));
-  });
-  on("pointerup", (e) => {
-    if (active === null || e.pointerId !== active.id) return;
-    const was = active;
-    active = null;
-    release(e.pointerId);
-    if (!was.pan) editor.pointerUp(input(e));
-  });
-  const cancel = (e: PointerEvent): void => {
-    if (active === null || e.pointerId !== active.id) return;
-    const was = active;
-    active = null;
-    if (!was.pan) editor.pointerCancel();
-  };
+  on("pointermove", (e) => perform(e, pointers.move(facts(e))));
+  on("pointerup", (e) => perform(e, pointers.up(facts(e))));
+  const cancel = (e: PointerEvent): void => perform(e, pointers.cancel(facts(e)));
   on("pointercancel", cancel);
   on("lostpointercapture", cancel);
   on(
