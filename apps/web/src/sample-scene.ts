@@ -2,7 +2,8 @@
 
 // The sample scene of the development page: the benchmark scene of @galatsa/bench
 // (2,000 elements: shapes, text boxes and images in ten clusters) as a Galatsa
-// document of the example extensions' element types, opened through the
+// document of the shape extension's and the example extensions' element types,
+// opened through the
 // storage layer like any file. The benchmark's images are 2 to 12 megapixels
 // and take half a minute to generate; here each gets a small generated picture
 // of the same proportions instead, so the page opens in a moment.
@@ -23,18 +24,19 @@ import {
   type ElementId,
 } from "@galatsa/core";
 import { fromSnapshot } from "@galatsa/core/ydoc";
+import { IMAGE_TYPE, TEXT_TYPE, imageView, textView } from "@galatsa/extension-examples";
 import {
-  IMAGE_TYPE,
   SHAPE_TYPE,
-  TEXT_TYPE,
-  imageView,
+  newShapeData,
+  shapeKinds,
   shapeView,
-  textView,
-} from "@galatsa/extension-examples";
+} from "@galatsa/extension-shape";
 import { assetIdOf, FILE_EXTENSION, writeGalatsaFile } from "@galatsa/format";
 import type { DocumentStorage, OpenResult } from "@galatsa/storage";
 
-const SLOT_KEY = "galatsa-dev:sample-slot";
+// A new key since the shapes became the shape extension's, so that a copy
+// stored before (of the shape sketch's type) is not opened again.
+const SLOT_KEY = "galatsa-dev:sample-slot-2";
 /** Long side of the generated pictures, in pixels. */
 const PICTURE_SIZE = 160;
 
@@ -129,17 +131,32 @@ export async function sampleSnapshot(
     let type: string;
     let typeVersion: number;
     let data: ElementData;
+    let box = { x: e.x, y: e.y, w: e.width, h: e.height, rot: turn(e.rotation) };
     if (e.kind === "shape") {
       type = SHAPE_TYPE;
       typeVersion = shapeView.typeVersion;
-      data = {
-        kind: e.shape === "ellipse" || e.shape === "triangle" ? e.shape : "rect",
+      // Kinds the shape extension does not have yet are drawn as rectangles.
+      const kind = shapeKinds.kinds.has(e.shape) ? e.shape : "rect";
+      data = newShapeData(shapeKinds, kind, {
         fill: e.fill,
         stroke: e.stroke,
         strokeWidth: e.strokeWidth,
-        cornerRadius: 0,
         opacity: e.opacity,
-      };
+      });
+      if (kind === "line") {
+        // The benchmark's line runs from corner to corner of its box; a line
+        // shape runs along the middle of a box 0 high, turned its way.
+        const length = Math.hypot(e.width, e.height);
+        const cx = e.x + e.width / 2;
+        const cy = e.y + e.height / 2;
+        box = {
+          x: cx - length / 2,
+          y: cy,
+          w: length,
+          h: 0,
+          rot: turn(e.rotation + (Math.atan2(e.height, e.width) * 180) / Math.PI),
+        };
+      }
     } else if (e.kind === "text") {
       type = TEXT_TYPE;
       typeVersion = textView.typeVersion;
@@ -160,7 +177,7 @@ export async function sampleSnapshot(
       typeVersion,
       parent: null,
       order: orders[index]!,
-      pos: { x: e.x, y: e.y, space: null },
+      pos: { x: box.x, y: box.y, space: null },
       rebase: null,
       name: "",
       locked: false,
@@ -171,8 +188,8 @@ export async function sampleSnapshot(
       refs: [],
       ext: {},
       data,
-      size: { w: e.width, h: e.height },
-      rot: turn(e.rotation),
+      size: { w: box.w, h: box.h },
+      rot: box.rot,
     } as Element;
   });
   return {

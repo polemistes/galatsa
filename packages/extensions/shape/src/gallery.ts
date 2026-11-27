@@ -70,9 +70,8 @@ export function shapeGallery(table: KindTable, kind: ShapeKind): GalleryCase[] {
     shape(
       "turned",
       { fill: "#a855f7", stroke: "#3b0764", strokeWidth: 4 },
-      {
-        rot: line ? Math.PI / 3 : Math.PI / 7,
-      },
+      // Not square, so that the turn shows on every kind.
+      line ? { rot: Math.PI / 3 } : { rot: Math.PI / 7, box: box(90, 50) },
     ),
     shape(
       "narrow",

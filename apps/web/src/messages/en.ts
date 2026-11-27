@@ -5,4 +5,5 @@
 export default {
   "sample.title": "Sample scene",
   "page.title": "Galatsa – development page",
+  "gallery.title": "Galatsa – shapes",
 };

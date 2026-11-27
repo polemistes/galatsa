@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs the editor's end-to-end test (tests/e2e/editor.spec.ts) in Chromium,
-# Firefox and WebKit. Playwright's WebKit needs the libraries of the Ubuntu
-# release it was built for, which GitHub's Ubuntu runners have.
+# Runs the editor's end-to-end tests (tests/e2e/editor.spec.ts, and the shape
+# tools in shape-tool.spec.ts) in Chromium, Firefox and WebKit. Playwright's
+# WebKit needs the libraries of the Ubuntu release it was built for, which
+# GitHub's Ubuntu runners have.
 
 name: editor-e2e
 
@@ -47,5 +48,5 @@ jobs:
         run: pnpm --filter @galatsa/e2e exec playwright install --with-deps chromium firefox webkit
 
       # CI=true (set by GitHub) adds the editor-webkit project.
-      - name: Run the editor test
-        run: pnpm --filter @galatsa/e2e exec playwright test editor.spec.ts --project=chromium --project=editor-firefox --project=editor-webkit
+      - name: Run the editor tests
+        run: pnpm --filter @galatsa/e2e exec playwright test editor.spec.ts shape-tool.spec.ts --project=chromium --project=editor-firefox --project=editor-webkit

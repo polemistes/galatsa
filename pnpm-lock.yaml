@@ -250,15 +250,24 @@ importers:
       '@galatsa/editor':
         specifier: workspace:*
         version: link:../../packages/editor
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../../packages/extension-api
       '@galatsa/extension-examples':
         specifier: workspace:*
         version: link:../../packages/extensions/examples
+      '@galatsa/extension-shape':
+        specifier: workspace:*
+        version: link:../../packages/extensions/shape
       '@galatsa/format':
         specifier: workspace:*
         version: link:../../packages/format
       '@galatsa/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@galatsa/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
       '@galatsa/storage':
         specifier: workspace:*
         version: link:../../packages/storage

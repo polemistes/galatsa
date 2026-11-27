@@ -52,7 +52,7 @@ PROBE = """
   const sel = editor.selection.length === 1 ? editor.renderer.screenBounds(editor.selection[0]) : null;
   return JSON.stringify({
     elements: ids.length,
-    shapes: ids.filter((id) => live.get(id).type === "examples.shape/shape").length,
+    shapes: ids.filter((id) => live.get(id).type === "galatsa.shape/shape").length,
     tool: editor.tools.current,
     selection: [...editor.selection],
     box: sel,
@@ -117,7 +117,7 @@ def scenario():
     yield ("xdo", ["key", "r"])
     yield ("wait", 200)
     state = yield ("probe",)
-    assert state["tool"] == "examples.shape/rect", state
+    assert state["tool"] == "galatsa.shape/rect", state
     # Draw with the mouse.
     yield at(WIDTH * 0.3, HEIGHT * 0.3)
     yield ("xdo", ["mousedown", "1"])
