@@ -53,21 +53,26 @@ export interface ResolvedChanges {
   readonly drawOrder: boolean;
 }
 
-/** Keys of an element record whose change can alter how other elements resolve. */
-const STRUCTURE_KEYS: ReadonlySet<string> = new Set([
-  "type",
-  "parent",
-  "pos",
-  "rebase",
-  "rev",
-  "deleted",
-  "dissolved",
-  "purged",
-  "locked",
+/**
+ * Keys of an element record whose change can alter how other elements resolve,
+ * by what they alter. A change of any other key concerns the element alone.
+ * A change of `rev` or `deleted` alone is bookkeeping and not reported unless
+ * it changes what is shown.
+ */
+const KEY_KINDS: ReadonlyMap<
+  string,
+  "structure" | "deleted" | "rev" | "position" | "view"
+> = new Map([
+  ["type", "structure"],
+  ["parent", "structure"],
+  ["deleted", "deleted"],
+  ["rev", "rev"],
+  ["pos", "position"],
+  ["rebase", "position"],
+  ["dissolved", "view"],
+  ["purged", "view"],
+  ["locked", "view"],
 ]);
-
-/** Keys that are bookkeeping only: a change of them alone is not reported. */
-const BOOKKEEPING_KEYS: ReadonlySet<string> = new Set(["rev", "deleted"]);
 
 /** What the live resolver remembers of one element, to compare after a change. */
 interface Resolved {
@@ -84,6 +89,8 @@ interface Resolved {
   readonly h: number;
   readonly rot: number;
   readonly deleted: boolean;
+  /** The deletes that hide it, as text (what is inside depends on them). */
+  readonly deleters: string;
   readonly gone: boolean;
   readonly locked: boolean;
   /** A group or gone container: its bounds come from its descendants. */
@@ -178,44 +185,87 @@ export class LiveResolver extends Resolver {
    * those who draw, and tells the subscribers if anything did.
    */
   update(touched: ReadonlyMap<ElementId, ReadonlySet<string> | null>): ResolvedChanges {
+    // `invalid`: what the Resolver may have cached wrongly, to be forgotten.
+    // `dirty`: what may resolve differently, to be resolved again and compared
+    // (it holds `invalid`).
+    const invalid = new Set<ElementId>();
     const dirty = new Set<ElementId>();
     const content = new Set<ElementId>();
-    const expanded = new Set<ElementId>();
-    const queue: ElementId[] = [];
+    const structure: ElementId[] = [];
+    const deletes: ElementId[] = [];
+    const revisions: ElementId[] = [];
+    const moves: ElementId[] = [];
+    const views: ElementId[] = [];
     for (const [id, keys] of touched) {
+      invalid.add(id);
       dirty.add(id);
-      let structure = keys === null;
-      let worked = keys === null;
-      if (keys !== null) {
-        for (const key of keys) {
-          if (STRUCTURE_KEYS.has(key)) structure = true;
-          if (!BOOKKEEPING_KEYS.has(key)) worked = true;
-        }
+      if (keys === null) {
+        structure.push(id);
+        content.add(id);
+        continue;
       }
-      if (structure) queue.push(id);
-      if (worked) content.add(id);
+      for (const key of keys) {
+        const kind = KEY_KINDS.get(key);
+        if (kind === "structure") structure.push(id);
+        else if (kind === "deleted") deletes.push(id);
+        else if (kind === "rev") revisions.push(id);
+        else if (kind === "position") moves.push(id);
+        else if (kind === "view") views.push(id);
+        if (kind !== "deleted" && kind !== "rev") content.add(id);
+      }
     }
-    // Everything below a structural change: by stored parent, whether that
-    // parent exists or not (the effective parent is the stored parent or the
-    // root, and cycles follow the stored parents; positions, deletes, gone
-    // containers and locks are inherited down the effective tree), and whatever
-    // has a position written in one of these containers (rule 3 of section
-    // 5.3). An element that joins a container is in the set already: its parent
-    // changed.
-    while (queue.length > 0) {
-      const id = queue.pop()!;
-      if (expanded.has(id)) continue;
-      expanded.add(id);
+    // A new revision matters to what is inside only if it changes which
+    // deletes hide the element (recording work after every local change makes
+    // this the common case: nothing to do beyond the element itself).
+    if (revisions.length > 0) {
+      this.forget(new Set(revisions));
+      for (const id of revisions) {
+        if (!this.get(id) || this.#deletersKey(id) !== this.#resolved.get(id)?.deleters)
+          deletes.push(id);
+      }
+    }
+    // Parent or type changed, or the record came or went: the effective parent
+    // of everything below by stored parent may change (whether that parent
+    // exists or not; cycles follow stored parents too), and with it anything
+    // cached about them. A position written in one of them (rule 3 of section
+    // 5.3) may convert differently. An element that joins a container is in the
+    // set already: its parent changed.
+    for (const id of this.#below(structure, (at) => this.#storedChildren.get(at))) {
+      invalid.add(id);
       dirty.add(id);
-      for (const child of this.#storedChildren.get(id) ?? []) queue.push(child);
-      for (const user of this.#spaceUsers.get(id) ?? []) queue.push(user);
+      for (const user of this.#spaceUsers.get(id) ?? []) moves.push(user);
     }
+    // Delete marks changed: which deletes hide what is inside may change.
+    for (const id of this.#below(deletes, (at) => this.children(at))) {
+      invalid.add(id);
+      dirty.add(id);
+    }
+    // Position changed: everything inside is elsewhere in the world, and a
+    // position converted through this container (rule 3) changes. Only the
+    // element's own cached position depends on its record; a converted one
+    // depends on the container positions on its way, so elements that may be
+    // converted are forgotten (inside: their parent's chain passes here; and
+    // with a position written in a container in here).
+    for (const id of moves) invalid.add(id);
+    for (const id of this.#below(moves, (at) => this.children(at))) {
+      dirty.add(id);
+      if (this.#mayConvert(id)) invalid.add(id);
+      for (const user of this.#spaceUsers.get(id) ?? []) {
+        if (!this.#mayConvert(user)) continue;
+        invalid.add(user);
+        for (const inside of this.#below([user], (at) => this.children(at)))
+          dirty.add(inside);
+      }
+    }
+    // Gone or locked changed: what is inside sees other logical parents and
+    // locks, and groups other bounds; nothing cached about it changes.
+    for (const id of this.#below(views, (at) => this.children(at))) dirty.add(id);
     // Groups and gone containers above take their bounds from what is inside:
     // those above anything that changed, as the tree was.
     for (const id of [...dirty])
       this.#addBoundsHolders(id, dirty, (at) => this.#resolved.get(at));
 
-    this.forget(dirty);
+    this.forget(invalid);
 
     const now = new Map<ElementId, Resolved | undefined>();
     for (const id of dirty) now.set(id, this.get(id) ? this.#resolve(id) : undefined);
@@ -275,6 +325,37 @@ export class LiveResolver extends Resolver {
       for (const listener of [...this.#listeners]) listener(changes);
     }
     return changes;
+  }
+
+  /** The given elements and everything below them by `children`. */
+  #below(
+    from: readonly ElementId[],
+    children: (id: ElementId) => Iterable<ElementId> | undefined,
+  ): Set<ElementId> {
+    const out = new Set<ElementId>();
+    const stack = [...from];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (out.has(id)) continue;
+      out.add(id);
+      for (const child of children(id) ?? []) stack.push(child);
+    }
+    return out;
+  }
+
+  /**
+   * Whether the element's position may be converted from another space (rule 3
+   * of section 5.3): only if it was not written in its parent's space.
+   */
+  #mayConvert(id: ElementId): boolean {
+    const resolved = this.#resolved.get(id);
+    return resolved !== undefined && resolved.space !== resolved.parent;
+  }
+
+  #deletersKey(id: ElementId): string {
+    return this.deleters(id)
+      .map((d) => `${d.root} ${d.action}`)
+      .join(",");
   }
 
   /**
@@ -342,6 +423,7 @@ export class LiveResolver extends Resolver {
       h: element.size?.h ?? -1,
       rot: element.rot ?? 0,
       deleted: this.isDeleted(id),
+      deleters: this.#deletersKey(id),
       gone,
       locked: this.isLocked(id),
       derived,

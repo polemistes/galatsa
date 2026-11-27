@@ -224,13 +224,18 @@ function mutate(
   return [id, key];
 }
 
+/** Whether a touch changed more than bookkeeping (must then be reported). */
+function worked(keys: Set<string> | null | undefined): boolean {
+  if (keys === undefined) return false;
+  return keys === null || [...keys].some((k) => k !== "rev" && k !== "deleted");
+}
+
 function check(
   before: ReturnType<typeof state>,
   after: ReturnType<typeof state>,
   live: ReturnType<typeof state>,
   changes: ResolvedChanges,
-  touched: ElementId,
-  touchedKey: string | null,
+  touched: ReadonlyMap<ElementId, Set<string> | null>,
 ): string[] {
   const out: string[] = [];
   for (const [id, text] of after.elements) {
@@ -239,11 +244,7 @@ function check(
     const was = before.elements.get(id);
     if (was === undefined) {
       if (!changes.added.has(id)) out.push(`${id} added, not reported`);
-    } else if (
-      (was !== text ||
-        (id === touched && touchedKey !== "rev" && touchedKey !== "deleted")) &&
-      !changes.changed.has(id)
-    ) {
+    } else if ((was !== text || worked(touched.get(id))) && !changes.changed.has(id)) {
       out.push(`${id} changed, not reported`);
     }
   }
@@ -282,13 +283,21 @@ describe("the live resolver, on random states", () => {
       const live = new LiveResolver(lookup);
       let before = state(new Resolver(lookup));
       for (let step = 0; step < 150 && failures.length === 0; step++) {
-        const [id, key] = mutate(rnd, lookup, new Resolver(lookup));
-        const changes = live.update(
-          new Map([[id, key === null ? null : new Set([key])]]),
-        );
+        // One to three changes, taken in as one (one transaction).
+        const touched = new Map<ElementId, Set<string> | null>();
+        for (let k = 0, n = 1 + Math.floor(rnd() * 3); k < n; k++) {
+          const [id, key] = mutate(rnd, lookup, new Resolver(lookup));
+          const keys = touched.get(id);
+          if (key === null || keys === null) touched.set(id, null);
+          else touched.set(id, new Set([...(keys ?? []), key]));
+        }
+        const changes = live.update(touched);
         const after = state(new Resolver(lookup));
-        for (const f of check(before, after, state(live), changes, id, key))
-          failures.push(`seed ${seed} step ${step} (${id} ${key}): ${f}`);
+        const what = [...touched].map(
+          ([id, keys]) => `${id} ${keys ? [...keys] : "record"}`,
+        );
+        for (const f of check(before, after, state(live), changes, touched))
+          failures.push(`seed ${seed} step ${step} (${what.join("; ")}): ${f}`);
         reported += changes.added.size + changes.changed.size + changes.removed.size;
         for (const [e, text] of after.elements)
           if (before.elements.get(e) !== text) differed++;
