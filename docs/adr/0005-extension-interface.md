@@ -182,7 +182,7 @@ An element type lists its fields in its editing part's `properties` (`S` is its 
 
 ## 4. Commands and the command registry
 
-Every change a user makes to a document goes through a command: menus, toolbars, shortcuts, the property panel, tools, drag and drop, paste and import. A command (`CommandDefinition<A, R>`) has a name (id `"<extension id>/<name>"`), a label, an optional description, icon and shortcuts, a `quick` flag, `enabled` and `visible` predicates, an `undoable` flag, and `execute(ctx, args)`.
+Every change a user makes to a document goes through a command: menus, toolbars, shortcuts, the property panel, tools, drag and drop, paste and import. A command (`CommandDefinition<A, R>`) has a name (id `"<extension id>/<name>"`), a label, an optional description, icon and shortcuts, a `quick` flag, `enabled` and `visible` predicates, an `undoable` flag, and `execute(ctx, args)`. A command may also name a toolbar group (`toolbar`), which gives it a button in the editor's toolbar, and say whether something it switches is on (`active`), which shows the button pressed ([0016](0016-toolbar-and-properties.md)).
 
 ### 4.1 The context
 

@@ -2,7 +2,7 @@
   "name": "@galatsa/web",
   "version": "0.0.0",
   "private": true,
-  "description": "Galatsa in the browser. For now a development page that starts the editor on the benchmark scene",
+  "description": "Galatsa in the browser: the editor, on an empty presentation (the benchmark scene with ?scene=bench)",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
