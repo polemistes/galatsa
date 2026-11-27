@@ -4,13 +4,7 @@
 // See docs/adr/0006-storage.md.
 
 import type { AssetId } from "@galatsa/core";
-import {
-  initDocument,
-  lineageOf,
-  roots,
-  toSnapshot,
-  trackWork,
-} from "@galatsa/core/ydoc";
+import { initDocument, roots, toSnapshot, trackWork } from "@galatsa/core/ydoc";
 import { assetsToWrite, readGalatsaFile, writeGalatsaFile } from "@galatsa/format";
 import * as Y from "yjs";
 import type { StorageBackend } from "./backend.ts";
@@ -408,7 +402,8 @@ export class DocumentStorage {
       return {
         doc: rebuilt.doc,
         checkpoint: rebuilt,
-        absorbed: new Set(),
+        // The journal belongs to the lost Yjs history and cannot be applied.
+        absorbed: new Set(grouped.journal),
         info,
         notices,
         damaged: true,
@@ -431,7 +426,6 @@ export class DocumentStorage {
       absorbed.add(key);
     }
     lost += applyStored(doc, updates);
-    if (lineageOf(doc) === "") damaged++;
     if (damaged > 0) notices.push(notice("restored-previous-copy"));
     if (lost > 0) notices.push(notice("changes-lost", { count: lost }));
     if (doc.store.pendingStructs !== null || doc.store.pendingDs !== null) {

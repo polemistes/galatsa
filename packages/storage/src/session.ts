@@ -370,6 +370,8 @@ export class StorageSession {
     let clean = false;
     try {
       await this.checkpoint();
+      // Changes made while the checkpoint was written.
+      if (this.#pending.length > 0) await this.flush();
       clean = this.#pending.length === 0;
     } catch {
       // Not clean: the record stays.
@@ -683,10 +685,14 @@ export class StorageSession {
         for (const key of this.#absorbed)
           if (!merged.journal.has(key)) this.#absorbed.delete(key);
         const top = merged.generations[merged.generations.length - 1] ?? 0;
+        // A newer checkpoint that was merged is this session's base from now on.
+        this.#generation = merged.base;
+        this.#baseIncludes = merged.baseIncludes;
+        const held = new Set(merged.baseIncludes);
         if (
           this.#dirtySince === null &&
-          top === this.#generation &&
-          [...merged.journal].every((key) => this.#baseIncludes.includes(key))
+          top === merged.base &&
+          [...merged.journal].every((key) => held.has(key))
         ) {
           break;
         }

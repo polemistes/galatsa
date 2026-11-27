@@ -4,6 +4,7 @@ import { revisionOf, roots, setTitle, syncDocs, toSnapshot } from "@galatsa/core
 import { readGalatsaFile, writeGalatsaFile } from "@galatsa/format";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { frameCheckpoint, loadCheckpoint } from "./checkpoint.ts";
 import { memoryChannels } from "./environment.ts";
 import { memoryFile } from "./files.ts";
 import { keys } from "./layout.ts";
@@ -270,6 +271,44 @@ describe("recovery after a crash", () => {
     m.store.data.set(newest, flipped);
     const result = await program(m).storage.open(session.slot);
     expect(toSnapshot(opened(result).doc)).toEqual(expected);
+  });
+
+  it("opens a checkpoint without usable Yjs state from its document, and says what was lost", async () => {
+    const m = machine();
+    const p1 = program(m);
+    const session = await p1.storage.create();
+    addBox(session.doc, 1, 1);
+    await session.checkpoint();
+    const expected = toSnapshot(session.doc);
+    addBox(session.doc, 2, 2);
+    await session.flush();
+    p1.crash(session);
+    // Every checkpoint loses its ydoc.bin (as if that entry were damaged).
+    for (const key of checkpointKeys(m, session.slot)) {
+      const loaded = (await loadCheckpoint(m.store.data.get(key)!))!;
+      const file = writeGalatsaFile(loaded.doc, () => undefined, {
+        includeYdoc: false,
+      }).bytes;
+      m.store.data.set(
+        key,
+        frameCheckpoint(loaded.header, { file, keepState: false }, new Uint8Array(0)),
+      );
+    }
+    const result = await program(m).storage.open(session.slot);
+    const restored = opened(result);
+    const codes = result.ok ? result.notices.map((n) => n.code) : [];
+    expect(codes).toContain("restored-previous-copy");
+    expect(codes).toContain("changes-lost");
+    expect(Object.keys(toSnapshot(restored.doc).elements).sort()).toEqual(
+      Object.keys(expected.elements).sort(),
+    );
+    // From here on it is an ordinary document again.
+    addBox(restored.doc, 3, 3);
+    const later = toSnapshot(restored.doc);
+    await restored.close();
+    expect(toSnapshot(opened(await program(m).storage.open(session.slot)).doc)).toEqual(
+      later,
+    );
   });
 
   it("refuses with a clear notice when every stored copy is damaged", async () => {
