@@ -74,7 +74,12 @@ export function visibleWorld(
   return { x: c.x - w / 2, y: c.y - h / 2, w, h };
 }
 
-/** The camera that shows `rect` (in the space of `space`) filling the view, with a margin. */
+/**
+ * The camera that shows `rect` (in the space of `space`) filling the view,
+ * with a margin, within the zoom range. The precision budget is left to the
+ * camera, which applies it where it anchors the view (a frame inside `space`
+ * may allow more).
+ */
 export function fitCamera(
   rect: Rect,
   space: ElementId | null,
@@ -84,7 +89,12 @@ export function fitCamera(
   const cx = rect.x + rect.w / 2;
   const cy = rect.y + rect.h / 2;
   const zoom = zoomToFit(rect, size.width, size.height) * (1 - 2 * margin);
-  return { space, cx, cy, zoom: clampZoom(zoom > 0 ? zoom : 1, cx, cy) };
+  return {
+    space,
+    cx,
+    cy,
+    zoom: Math.min(Math.max(zoom > 0 ? zoom : 1, MIN_ZOOM), MAX_ZOOM),
+  };
 }
 
 /** A point on screen, in the camera's own space (exact at any zoom). */

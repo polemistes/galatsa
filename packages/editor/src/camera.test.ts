@@ -171,6 +171,15 @@ describe("zoom about the pointer", () => {
     expect(editor.camera.zoom).toBeGreaterThan((PRECISION_BUDGET / far) * 0.99);
   });
 
+  it("fits a small frame far from the root deeper than the root's budget allows", () => {
+    const editor = setup();
+    const far = 2 ** 40;
+    const f = frame(editor, far, far, 1, 1);
+    editor.fit({ x: far, y: far, w: 1, h: 1 }, null);
+    expect(editor.camera.space).toBe(f);
+    expect(editor.camera.zoom).toBeCloseTo(800 * 0.9, 6);
+  });
+
   it("gives tools the pointer exactly in the camera's space", () => {
     const editor = setup();
     const far = 2 ** 40;

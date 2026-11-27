@@ -254,7 +254,7 @@ test("the camera follows the mouse, the trackpad, touch and the keyboard", async
   await touch(page, "pointerup", 2, mid.x + 100, mid.y + 20);
   await touch(page, "pointerup", 1, mid.x - 100, mid.y + 20);
   const pinched = await camera(page);
-  expect(pinched.zoom).toBeCloseTo(2, 6);
+  expect(pinched.zoom).toBeCloseTo(before.zoom * 2, 6);
   expect(close(await onScreen(page, between), { x: mid.x, y: mid.y + 20 })).toBeLessThan(
     1,
   );

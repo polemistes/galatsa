@@ -1,0 +1,83 @@
+# 0008 Camera and navigation
+
+- Status: Accepted
+- Date: 2026-11-27
+- Code: `packages/editor` (`camera.ts`, `anchor.ts`, `camera-control.ts`, `navigation.ts`, `pointers.ts`, `dom.ts`), `ToolPointerEvent.local` and `SceneQuery.offset` in `packages/extension-api`, `tests/e2e/camera.spec.ts`, `tests/e2e/webkitgtk/camera_check.py`
+
+## Context
+
+The editor foundation ([0007](0007-editor-foundation.md)) had just enough camera to reach things: the middle button dragged the canvas, the wheel scrolled it, and Ctrl or Cmd with the wheel zoomed about the pointer, always at the root. The document model ([0001](0001-document-model-and-file-format.md) section 7) asks for more: a camera anchored in the local space of the innermost frame around the view, so the full zoom range (`MIN_ZOOM` 2^-32 to `MAX_ZOOM` 2^32) is there inside every frame however far it is from the root, and a zoom clamped by the precision budget (`|c| × zoom ≤ 2^46`, `maxPreciseZoom`) so that precision runs out as a zoom limit, never as jitter. 0007 also left one question to the camera: how tools get precise positions when the camera is anchored in a frame far from the root.
+
+## Decision
+
+### Anchoring
+
+Every camera the editor sets, from any source (a gesture, a command, an extension through `services.camera.set`, a fit), goes through one place (`CameraControl.place`): it is anchored, then its zoom is clamped to `[MIN_ZOOM, maxPreciseZoom(cx, cy)]` in the space it is anchored in.
+
+- **Where.** The anchor is the innermost shown frame whose box contains the centre of the view (`Anchoring.frameAround`): up from the current anchor to the nearest frame that contains the centre, then down into the topmost child frame that contains it, through groups and gone containers, as far as one is found. Groups do not anchor (they come and go with their members); gone frames do not anchor. The search only decides where; the centre is carried into the new space by adding the offset between the two spaces (`scene.offset`, through their lowest common ancestor), which is exact because the old centre and the offset are near each other (their difference is small).
+- **Staying put when the budget would break.** Precision only needs the centre's numbers to be small in the anchor's space; the anchor does not have to contain the centre. So when the centre leaves a frame for a space where `|c| × zoom` would exceed the budget (out of a frame at 2^40 into the empty root, deep), the camera stays anchored where it was. It moves to the new space as soon as the budget holds there (on zooming out). Only when neither space keeps the budget does the camera move and the zoom get clamped.
+- **Following the anchor.** When the anchor or a container above it moves (the preview of a drag, a move, an undo, someone else's edit), the camera is shifted by as much, so the view stays where it is on screen and the frame is what moves. The anchor's chain of local positions up to the root is remembered when the camera is set (`pin`), and after each change to the document or the preview the shift is the sum of the changes of the chain's local positions, level by level, so it is exact. If the chain is not the same any more (the frame went into another container, or was purged), the centre is carried through root coordinates, losing precision only in that rare case. A deleted frame stops being the anchor; the centre is carried out of it, since its record and place remain.
+- **Reading the camera.** `services.camera.get()` after `set(view)` may name another space for the same view. Commands that change the camera read it again rather than keep what they set.
+
+### Zoom about the pointer
+
+`zoomAbout` keeps the point under the pointer where it is on screen. The point is computed in the camera's own space (`c + d / zoom`, with d the pointer's distance from the centre of the view in CSS pixels); the new centre is that point minus `d / newZoom`. When the zoom moves the view into another space, the point is carried there through the old centre (`c + offset + d / zoom`), never through root coordinates. The zoom is clamped where the view is anchored after the step. When the clamped zoom equals the current one in the same space (pushing against a limit), the camera is returned unchanged, so repeated zooming at a limit cannot make it drift by rounding.
+
+**Precision under zoom (tested).** The point under the pointer stays within one pixel of the pointer through a whole run of zoom steps from zoom 1 to `MAX_ZOOM` and on out to `MIN_ZOOM`, at the root near the origin and in a frame 2^40 from the root; one step across a limit stops at the limit and keeps the point; a hundred more steps against it leave the camera unchanged. Zooming in on a frame 2^40 from the root from a camera at the root re-anchors in the frame on the way and reaches `MAX_ZOOM`, with the point within a pixel at every step. At the root that far out the camera's centre moves in steps of 2^-12 units, so the point under the pointer is only known to that much before the camera anchors in the frame; that is the budget of 0001 at work (zoom at most 64 there), and the point still keeps within a pixel at every step.
+
+### The pointer for tools
+
+`ToolPointerEvent` gains `local`, the pointer in the camera's own space (`{ space, x, y }`, the frame the camera is anchored in, or the root), exact at any zoom; `world` stays as it was, in root space. `SceneQuery` gains `offset(from, to)`, the offset between two spaces as the user sees them (with the preview), through their lowest common ancestor, so a tool can carry `local` into any container exactly. Both are additive (the interface version is now 1.2, [0005](0005-extension-interface.md)); `local` is optional in the type so events built by hand in tests need not have it, and the editor always fills it.
+
+`world` resolves a pixel wherever `|world| × zoom ≤ 2^46`: at zoom 2^20 that is anywhere within 2^26 units of the root's origin, at zoom 1 everywhere a document can reach. Beyond that (deep zoom in a frame far from the root), root-space queries lose sub-pixel precision. The editor keeps clicks right there anyway: `scene.elementAt` called with the `world` of the current pointer event hit-tests at the pointer's own screen position, not at a position recomputed from root coordinates. Rubber bands, bounds and `placement().worldX` stay in root space and keep the limit; tools that need them exact at deep zoom far out use `local` and `offset`.
+
+Rejected: changing `world` to the camera's space (it would break every tool, and root space is what commands take); making `local` required (it would break every hand-built event in other packages' tests for no gain).
+
+### Input
+
+- **Mouse.** The wheel scrolls (Shift turns a vertical wheel sideways where the browser does not already). Ctrl or Cmd with the wheel zooms about the pointer by `e^(0.01 × dy)`, with dy capped at 25 pixels per event: a mouse wheel's notch is 100 pixels in Chromium, 3 lines (48 pixels) in Firefox and 61 pixels in WebKitGTK, and capped, each zooms by about 1.28 per notch; the small steps of a trackpad pinch pass unchanged. The middle button drags the canvas.
+- **Space.** While Space is held (and no drag of the tool is in progress), a drag with the primary button moves the canvas instead of using the tool, with the grab cursor; the tool gets the pointer again when Space is released. The canvas lets go of Space when it loses focus, since its keyup then never comes.
+- **Trackpad.** Two fingers scroll (wheel events without Ctrl); a pinch arrives as the wheel with Ctrl in Chromium, Firefox and WebKitGTK, and as gesture events (`gesturestart`, `gesturechange` with the scale since the start, `gestureend`) in Safari, which zoom about the point between the fingers. On iOS a pinch also comes as two touch pointers, which already zoom; gesture events are then ignored.
+- **Touch.** One finger is the tool's (it selects, draws, drags). A second finger turns the press into a pinch: the tool's press is taken back (its drag is cancelled and the selection put back as it was before the press, so a pinch never leaves a selection behind), and the two fingers pan and zoom: the point of the canvas that was between them stays between them, and the view scales by how much they spread. When one finger is lifted, the other drags the canvas until it is lifted too; a third finger is ignored. Touch pointers are not checked for a lost capture, since browsers end them with `pointercancel`; for mouse and pen the rules of 0007 stay.
+- **Keyboard**, as commands (below).
+
+### Navigation commands
+
+The commands are an extension built into the editor, `editor.navigation` (its labels are in the editor's message namespace `editor`, which prefixes its id), loaded after the basics and before the program's other extensions. They change only the camera (`undoable: false`, offered in quick mode) and use only the editor services, like any extension:
+
+| Command          | Shortcuts                       | What it does                                                              |
+| ---------------- | ------------------------------- | ------------------------------------------------------------------------- |
+| `zoom-in`        | `Mod++`, `Mod+=`, `Mod+Shift++` | Zooms in by 2 about the centre of the view.                               |
+| `zoom-out`       | `Mod+-`                         | Zooms out by 2.                                                           |
+| `actual-size`    | `Mod+0`                         | Zoom 1 (one world unit per CSS pixel), same centre.                       |
+| `view-all`       | `Shift+1`                       | Fits everything at the top level of the canvas, with a 5 % margin.        |
+| `view-selection` | `Shift+2`                       | Fits the given elements (`{ ids }`) or the selection; disabled with none. |
+| `pan-left` …     | `ArrowLeft`, `ArrowRight`, …    | Moves the view by an eighth of its width or height.                       |
+
+`Mod++` is Ctrl and the + key on a Norwegian keyboard (and the keypad's +): the keymap of 0007 matches it by its character, so it is never read as the `Mod+-` of that key's place on a US keyboard. On a US keyboard + needs Shift, so `Mod+Shift++` is there too, and `Mod+=` (Ctrl and =) is what browsers use. `Shift+1` and `Shift+2` give ! and @ or " depending on the layout, and are matched by the digit's place. `view-selection` fits the elements' bounds in the space of their lowest common container (computed with the resolver), so a selection deep in a frame far from the root is shown exactly; `view-all` fits in root space, which is precise enough at the zoom that shows a whole canvas. A fit leaves the precision budget to the camera, which applies it where it anchors the fitted view, so a small frame far out can be fitted closer than the root's budget would allow.
+
+The arrow keys belong to the navigation only when nothing before it uses them: a tool gets keys first (a selection tool that nudges with the arrows takes them while something is selected), and an extension loaded earlier that claims the same shortcut keeps it.
+
+No camera move is animated: zoom steps from the keyboard are immediate. In the editor, moving the camera follows the user's hand, and an animation would only delay it; flights between stops are the player's ([0005](0005-extension-interface.md) section 7).
+
+## Assumptions
+
+- Frames are not rotated (frames and groups only translate, 0001), so a frame's box in its own space is (0, 0, w, h).
+- A tool does not rely on `services.camera.get()` returning the exact view it set.
+
+## Known limitations
+
+- Root-space queries (rubber bands, bounds, `placement().worldX`, `world` of pointer events other than for clicks) lose sub-pixel precision at deep zoom far from the root, as described above; the editor's own tools do not use `local` yet.
+- A frame being looked at deep down, moved into another container or purged, is followed through root coordinates (imprecise far out).
+- The arrow keys pan only where no tool or earlier extension takes them (see above).
+- Pinch and scroll speeds are our choices, not measured with users; the wheel zoom per notch is the same in Chromium, Firefox and WebKitGTK only by the cap.
+- Real touch input is tested in Chromium only (through its DevTools protocol); in Firefox and WebKit the e2e test dispatches touch pointer events itself, which tests the editor's handling but not the browser's.
+- Safari's gesture events are tested with events dispatched by the test, not with a trackpad.
+
+## Tests
+
+- `packages/editor/src/camera.test.ts` (written before the code): the point under the pointer within a pixel from `MAX_ZOOM` to `MIN_ZOOM` at the root; one step across a limit, and no drift against it; within a pixel in a frame 2^40 from the root with the full zoom range; zooming in on such a frame from the root anchors in it and keeps the point at every step; the root's budget limits the zoom far from the origin; a fit of a small far frame goes deeper than the root's budget; tools get the pointer exactly in the camera's space; a pinch keeps the point between the fingers and scales; panning by one pixel moves one pixel at zoom 2^30 in a far frame; anchoring in the innermost frame through groups, out to the outer frame and the root; staying in the frame where the root's budget would break; the view keeps still while the anchor frame is previewed, moved and the move undone; a deleted anchor gives the root without moving the view.
+- `packages/editor/src/navigation.test.ts`: Ctrl and + on a Norwegian keyboard (code `Minus`), Ctrl and =, Ctrl, Shift and = and the keypad's + zoom in; Ctrl and - on both layouts zooms out; Ctrl+0; Cmd on macOS; the zoom limit; `Shift+1` and `Shift+2` (disabled without a selection), and a tiny selection in a far frame shown exactly; the arrow keys; Space with a drag moves the canvas and leaves the selection, and the tool has the pointer again afterwards; Space is not taken from a drag in progress; a second finger takes back the first finger's press; the wheel's zoom per notch in each browser.
+- `packages/editor/src/pointers.test.ts`: two fingers pinch and pan, a third is ignored, one lifted leaves the other dragging the canvas, cancelled fingers end the pinch, a finger while a pen draws is ignored unless the pen lost its capture.
+- `tests/e2e/camera.spec.ts` (Chromium, Firefox; WebKit where Playwright's WebKit runs): the wheel scrolls; Ctrl with the wheel zooms in 30 notches and out in 40 small pinch steps with the point under the pointer within a pixel; Ctrl+0, Ctrl and + (a "+" without Shift, as a Norwegian keyboard gives it), Ctrl and =, Ctrl and -, without the browser zooming the page; an arrow key; the middle button; Space with a drag; `Shift+1`; two touch pointers pinch and pan without selecting; Safari's gesture events; `Shift+2`. In Chromium also two real fingers through the DevTools protocol.
+- `tests/e2e/webkitgtk/camera_check.py`: in the system's WebKitGTK with real input from xdotool under Xvfb: the wheel, Ctrl with the wheel (the point under the pointer within a pixel), Ctrl and plus, equal, minus and 0 on a US keymap, the middle button, Space with a drag, `Shift+1`.
