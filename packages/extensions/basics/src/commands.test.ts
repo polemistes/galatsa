@@ -275,6 +275,34 @@ describe("rotate", () => {
     expect(t.element(a).rot).toBe(1);
   });
 
+  it("turns elements together about a point, in one transaction and one step", () => {
+    const t = setupBasics();
+    const f = t.frame(100, 0, 200, 200);
+    const a = t.shape(0, 0, 10, 10); // centre (5, 5)
+    const b = t.shape(30, 0, 10, 20, f); // centre (135, 10) in root space
+    const before = steps(t);
+    const n = updates(t, () =>
+      t.must(BASICS.rotate, { ids: [a, b], by: Math.PI / 2, about: { x: 70, y: 5 } }),
+    );
+    expect(n).toBeLessThanOrEqual(2); // the change and the work tracker's
+    expect(steps(t)).toBe(before + 1);
+    // A quarter turn clockwise about (70, 5): (5, 5) goes to (70, -60), (135, 10) to (65, 70).
+    const wa = world(t, a);
+    expect(wa.x + 5).toBeCloseTo(70, 9);
+    expect(wa.y + 5).toBeCloseTo(-60, 9);
+    const wb = world(t, b);
+    expect(wb.x + 5).toBeCloseTo(65, 9);
+    expect(wb.y + 10).toBeCloseTo(70, 9);
+    expect(t.element(a).rot).toBeCloseTo(Math.PI / 2);
+    // b stays in its frame, at a position in the frame's space.
+    expect(t.resolver().parentOf(b)).toBe(f);
+    t.must(BASICS.undo);
+    expect(world(t, a)).toEqual({ x: 0, y: 0 });
+    expect(world(t, b)).toEqual({ x: 130, y: 0 });
+    refused(t, BASICS.rotate, { ids: [a], rot: 1, about: { x: 0, y: 0 } });
+    refused(t, BASICS.rotate, { ids: [a], by: 1, about: { x: Number.NaN, y: 0 } });
+  });
+
   it("refuses frames, groups, elements of a missing extension, rigid types and locked elements", () => {
     const t = setupBasics();
     const f = t.frame(0, 0);
@@ -640,6 +668,54 @@ describe("copy and paste", () => {
         `elements.${second}: is not inside one of the roots`,
       ]);
     }
+  });
+
+  it("refuses positions written in the space of an element outside the fragment", () => {
+    const t = setupBasics();
+    const outside = t.shape(300, 300);
+    const a = t.shape(0, 0);
+    const b = t.shape(30, 0);
+    const g = t.must<ElementId>(BASICS.group, { ids: [a, b] });
+    const fragment = t.must<Fragment>(BASICS.copy, { ids: [g] });
+    const [child, other] = Object.keys(fragment.elements).filter((id) => id !== g) as [
+      string,
+      string,
+    ];
+    const inSpace = (space: string | null): unknown => ({
+      ...fragment,
+      elements: {
+        ...fragment.elements,
+        [child]: {
+          ...fragment.elements[child]!,
+          pos: { ...fragment.elements[child]!.pos, space },
+        },
+      },
+    });
+    for (const space of [outside, null, "missingElement00000000"]) {
+      const variant = inSpace(space);
+      refused(t, BASICS.paste, { fragment: variant });
+      expect(readFragment(variant).problems).toEqual([
+        `elements.${child}.pos: space must be an element of the fragment`,
+      ]);
+    }
+    // The space of another element of the fragment is renamed with it.
+    const { ids } = t.must<PasteOutcome>(BASICS.paste, { fragment: inSpace(other) });
+    const pasted = order(t, ids[0]!);
+    const records = pasted.map((id) => t.element(id));
+    for (const record of records) expect([ids[0], ...pasted]).toContain(record.pos.space);
+    // A root's space is the paste's target, whatever the fragment says.
+    const rootIn = {
+      ...fragment,
+      elements: {
+        ...fragment.elements,
+        [g]: {
+          ...fragment.elements[g]!,
+          pos: { ...fragment.elements[g]!.pos, space: outside },
+        },
+      },
+    };
+    const { ids: rootIds } = t.must<PasteOutcome>(BASICS.paste, { fragment: rootIn });
+    expect(t.element(rootIds[0]!).pos.space).toBeNull();
   });
 
   it("refuses frame and group data that is not theirs", () => {

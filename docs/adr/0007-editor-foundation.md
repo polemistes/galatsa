@@ -36,7 +36,7 @@ The overlay is in screen space so that its contract does not depend on where the
 
 The services of 0005 section 4.8 are implemented over the editor's state and the live resolver:
 
-- **Clicks** ask the renderer (`hitTest`), so a click hits what each element type says is its outline. What a click inside a group selects is the editor's decision: the outermost group the element is in, up to the nearest frame. Locked elements are passed over.
+- **Clicks** ask the renderer (`hitTest`), so a click hits what each element type says is its outline. What a click inside a group selects is the editor's decision: the outermost group the element is in, up to the nearest frame. Locked elements are passed over (a right click, which opens the context menu, does select them, so they can be unlocked: [0008](0008-selection.md)).
 - **Rubber bands and bounds** answer from the live resolver: the elements at the top level of the canvas as the user sees it (members of a dissolved group in its place).
 - **Visible elements** (candidates for snapping) come from the renderer's spatial index, at the top level of the root.
 - **Text** is not editable in place yet: the service reports no text being edited.
@@ -56,7 +56,7 @@ A `ToolController` holds the current tool and gives it a `ToolSession`. A sessio
 
 ### The keyboard map
 
-A key press goes first to the current tool (Escape cancels its drag), then to the keyboard map of the current mode: the command registry's shortcuts (`shortcuts(mode)`), then the tools' shortcuts, which pick a tool. A shortcut runs its command the way a menu would: with the selection as its elements (`{ ids }`), except copy, cut and paste: Mod+C, Mod+X and Mod+V are left to the browser (their default is not prevented), which sends its copy, cut and paste events, and the page passes those to the editor (`clipboardCopy`, `clipboardCut`, `clipboardPaste`). So the system clipboard can carry fragments and pasted images later; for now the fragment is kept in the editor's memory. When a shortcut matches, the browser's default is prevented even if the command is disabled, so that Ctrl+D with nothing selected does not open the browser's bookmark dialog. Shortcuts written with `Ctrl` mean the same as `Mod` on Windows and Linux.
+A key press goes first to the current tool (Escape cancels its drag), then to the keyboard map of the current mode: the command registry's shortcuts (`shortcuts(mode)`), then the tools' shortcuts, which pick a tool. A shortcut runs its command the way a menu would: with the selection as its elements (`{ ids }`), except copy, cut and paste: Mod+C, Mod+X and Mod+V are left to the browser (their default is not prevented), which sends its copy, cut and paste events, and the page passes those to the editor (`clipboardCopy`, `clipboardCut`, `clipboardPaste`). So the system clipboard carries the fragments ([0008](0008-selection.md)), and can carry pasted images later. When a shortcut matches, the browser's default is prevented even if the command is disabled, so that Ctrl+D with nothing selected does not open the browser's bookmark dialog. Shortcuts written with `Ctrl` mean the same as `Mod` on Windows and Linux.
 
 A key press may name a shortcut in more than one way; the candidates are tried in order:
 
@@ -85,7 +85,7 @@ The user interface around the canvas is Svelte 5, with runes, chosen by the proj
 
 ### The development page
 
-`apps/web` is for now a development page: it starts `EditorApp` with the example extensions (and the basics, which the editor always loads first, so they keep their shortcuts when a sketch claims the same one; the conflict is shown). It opens the sample scene: the benchmark scene of `bench/` (2,000 elements in ten clusters) as a document of the examples' element types, imported through the storage layer as a file. The benchmark's images are 2 to 12 megapixels and take half a minute to generate, so each gets a small generated picture of the same proportions instead. The page remembers the stored copy and opens it again; `?fresh` makes a new one, `?scene=empty` starts an empty document, `?lang=nb|en` chooses the language and `?mode=advanced` the mode. `window.galatsaDev` gives tests and the console the running editor. The page depends on `@galatsa/bench` for the scene; when the page becomes the installable web app, the sample scene goes behind a development switch.
+`apps/web` is for now a development page: it starts `EditorApp` with the sketches of the element types (and the basics and the selection tool, which the editor always loads first, so they keep their shortcuts when a sketch claims the same one; the conflict is shown; the selection sketch is left out, [0008](0008-selection.md)). It opens the sample scene: the benchmark scene of `bench/` (2,000 elements in ten clusters) as a document of the examples' element types, imported through the storage layer as a file. The benchmark's images are 2 to 12 megapixels and take half a minute to generate, so each gets a small generated picture of the same proportions instead. The page remembers the stored copy and opens it again; `?fresh` makes a new one, `?scene=empty` starts an empty document, `?lang=nb|en` chooses the language and `?mode=advanced` the mode. `window.galatsaDev` gives tests and the console the running editor. The page depends on `@galatsa/bench` for the scene; when the page becomes the installable web app, the sample scene goes behind a development switch.
 
 Images are drawn from the storage session's asset bytes, one stored version each (the original), until reduced versions are stored with the document.
 
@@ -97,7 +97,6 @@ Images are drawn from the storage session's asset bytes, one stored version each
 
 ## Known limitations
 
-- Copy, cut and paste come through the browser's clipboard events, but the fragment is kept in the editor's memory, not on the system clipboard.
 - In-place text editing is not built; the text sketch's tool inserts a text box, and asking to edit it does nothing.
 - The camera is the minimum: no touch gestures, no keyboard camera, no anchoring in frames.
 - Only the first pointer is used; multi-touch is later.

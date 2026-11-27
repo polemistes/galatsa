@@ -2,10 +2,14 @@
 
 import { defineConfig, devices } from "@playwright/test";
 
-/** Port of the bench harness dev server (bench/index.html). */
-export const BENCH_PORT = 5199;
+/**
+ * Port of the bench harness dev server (bench/index.html). E2E_BENCH_PORT and
+ * E2E_WEB_PORT change the ports, so that test runs in several checkouts at once
+ * do not reuse each other's servers.
+ */
+export const BENCH_PORT = Number(process.env["E2E_BENCH_PORT"] ?? 5199);
 /** Port of the web app's dev server (apps/web, the editor's development page). */
-export const WEB_PORT = 5198;
+export const WEB_PORT = Number(process.env["E2E_WEB_PORT"] ?? 5198);
 
 /**
  * Playwright's WebKit needs the libraries of the Ubuntu release it was built
@@ -57,17 +61,17 @@ export default defineConfig({
       use: { ...devices["Desktop Firefox"] },
     },
     {
-      // The editor's development page in Firefox and WebKit too. Chromium runs it
-      // in the "chromium" project above.
+      // The editor's development page and the selection tool in Firefox and
+      // WebKit too. Chromium runs them in the "chromium" project above.
       name: "editor-firefox",
-      testMatch: "editor.spec.ts",
+      testMatch: ["editor.spec.ts", "selection.spec.ts"],
       use: { ...devices["Desktop Firefox"] },
     },
     ...(WEBKIT
       ? [
           {
             name: "editor-webkit",
-            testMatch: "editor.spec.ts",
+            testMatch: ["editor.spec.ts", "selection.spec.ts"],
             use: { ...devices["Desktop Safari"] },
           },
         ]

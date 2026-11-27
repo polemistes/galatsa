@@ -29,5 +29,13 @@ export default {
   "recovery.otherDocument":
     "«{name}» er en annen presentasjon. Ingenting er forkastet. Velg filen presentasjonen sist ble lagret til.",
   "problems.heading": "Noe ble ikke lastet",
+  "menu.label": "Handlinger",
+  "menu.cut": "Klipp ut",
+  "paste.tooLarge":
+    "Det er for mye på utklippstavlen til å lime inn på én gang. Kopier færre elementer og prøv igjen.",
+  "paste.otherVersion":
+    "Dette ble kopiert fra en annen versjon av Galatsa og kan ikke limes inn her.",
+  "paste.damaged":
+    "Innholdet på utklippstavlen kunne ikke limes inn fordi det er skadet eller ufullstendig.",
   "panels.label": "Paneler",
 };

@@ -331,6 +331,9 @@ importers:
       '@galatsa/extension-basics':
         specifier: workspace:*
         version: link:../extensions/basics
+      '@galatsa/extension-select':
+        specifier: workspace:*
+        version: link:../extensions/select
       '@galatsa/format':
         specifier: workspace:*
         version: link:../format
@@ -409,6 +412,28 @@ importers:
       '@galatsa/extension-api':
         specifier: workspace:*
         version: link:../../extension-api
+      '@galatsa/i18n':
+        specifier: workspace:*
+        version: link:../../i18n
+      yjs:
+        specifier: 13.6.33
+        version: 13.6.33
+    devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
+
+  packages/extensions/select:
+    dependencies:
+      '@galatsa/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../../extension-api
+      '@galatsa/extension-basics':
+        specifier: workspace:*
+        version: link:../basics
       '@galatsa/i18n':
         specifier: workspace:*
         version: link:../../i18n
