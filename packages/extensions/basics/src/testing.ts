@@ -220,8 +220,8 @@ const WEIGHTS: ReadonlyArray<readonly [string, number]> = [
   [BASICS.sendBackward, 2],
   [BASICS.frame, 3],
   ["frame-rect", 1],
-  [BASICS.removeFrame, 1],
-  [BASICS.rename, 1],
+  [BASICS.removeFrame, 2],
+  [BASICS.rename, 2],
   [BASICS.moveIntoFrame, 2],
   [BASICS.moveOutOfFrame, 2],
   ["move-into", 3],
@@ -361,9 +361,25 @@ export function randomCommands(
       return [
         {
           id: kind,
-          args: { id: pick(random, visible), name: pick(random, ["", "A", "Ramme"])! },
+          args: {
+            id: pick(random, visible),
+            name: pick(random, [
+              "",
+              "A",
+              "Ramme",
+              `Ramme ${Math.floor(random() * 100)}`,
+            ])!,
+          },
         },
       ];
+    case BASICS.moveOutOfFrame: {
+      // Some of what one frame holds, so that it is mostly accepted.
+      const frame = pick(random, frames);
+      const inside = frame === undefined ? [] : r.logicalChildren(frame);
+      return [
+        { id: kind, args: { ids: inside.length > 0 ? some(random, inside, 2) : ids() } },
+      ];
+    }
     case BASICS.moveIntoFrame:
       return [
         {
