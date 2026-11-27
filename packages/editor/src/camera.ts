@@ -3,7 +3,7 @@
 // Camera arithmetic: conversions between the screen (CSS pixels of the
 // drawing area), the camera's own space and root space, and the camera moves
 // (zoom about a point on screen, panning, fitting a rectangle). See
-// docs/adr/0008-camera.md.
+// docs/adr/0010-camera.md.
 //
 // Everything that must stay exact at deep zoom is computed in the camera's
 // own space (the frame it is anchored in), never through root coordinates.

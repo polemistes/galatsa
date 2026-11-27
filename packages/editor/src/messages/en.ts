@@ -29,6 +29,14 @@ export default {
   "recovery.otherDocument":
     "“{name}” is a different presentation. Nothing was discarded. Choose the file the presentation was last saved to.",
   "problems.heading": "Something was not loaded",
+  "menu.label": "Actions",
+  "menu.cut": "Cut",
+  "paste.tooLarge":
+    "There is too much on the clipboard to paste at once. Copy fewer elements and try again.",
+  "paste.otherVersion":
+    "This was copied from another version of Galatsa and cannot be pasted here.",
+  "paste.damaged":
+    "What is on the clipboard could not be pasted: it is damaged or incomplete.",
   "panels.label": "Panels",
   "nav.zoomIn": "Zoom in",
   "nav.zoomOut": "Zoom out",

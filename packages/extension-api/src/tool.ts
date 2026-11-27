@@ -5,7 +5,12 @@
 // docs/adr/0005-extension-interface.md, section 5.
 
 import type { ElementId, Point } from "@galatsa/core";
-import type { CommandEnvironment, CommandOutcome, Gesture } from "./command.ts";
+import type {
+  CommandEnvironment,
+  CommandOutcome,
+  ExtensionLookup,
+  Gesture,
+} from "./command.ts";
 import type { DrawContext } from "./draw.ts";
 import type { ContributionId, IconRef, Label, Shortcut } from "./ids.ts";
 
@@ -67,7 +72,12 @@ export type Cursor =
   | "grab"
   | "grabbing"
   | "pointer"
-  | "not-allowed";
+  | "not-allowed"
+  /** Resizing along a diagonal, an axis (since 1.2). */
+  | "nwse-resize"
+  | "nesw-resize"
+  | "ns-resize"
+  | "ew-resize";
 
 /** What the editor gives a tool while it is the current tool. */
 export interface ToolSession {
@@ -75,6 +85,18 @@ export interface ToolSession {
   environment(): CommandEnvironment;
   /** Runs a command (one undo step), like a menu or a shortcut would. */
   run<R = unknown>(command: ContributionId, args?: unknown): CommandOutcome<R>;
+  /**
+   * Whether `run(command, args)` would be accepted now, as a menu greys out
+   * an entry: a tool offers only what its commands would do (the selection
+   * tool shows a handle only where its command is enabled). Since 1.2.
+   */
+  isEnabled(command: ContributionId, args?: unknown): boolean;
+  /**
+   * The loaded extensions: element types and what the user may do to an
+   * element (`capabilitiesOf`, `planScale`), so that a preview shows what the
+   * command it ends in will do. Since 1.2.
+   */
+  readonly extensions: ExtensionLookup;
   /**
    * Starts a gesture: a drag previews its result without changing the
    * document, and ends in one command (one undo step) or in nothing.

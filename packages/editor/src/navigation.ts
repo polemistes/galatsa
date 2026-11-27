@@ -4,9 +4,9 @@
 // out, actual size, show everything, show the selection, and moving the view
 // with the arrow keys. They change only the camera (undoable: false) and use
 // nothing but the editor services, like any other extension. The editor loads
-// them after the basics and before the program's other extensions, so the
-// basics keep their shortcuts and a tool that uses the arrow keys (to nudge a
-// selection) gets them first. See docs/adr/0008-camera.md.
+// them after the basics and the selection tool and before the program's other
+// extensions, so the basics keep their shortcuts and the selection tool, which
+// nudges a selection with the arrow keys, gets them first. See docs/adr/0010-camera.md.
 
 import { Resolver, type ElementId, type Rect } from "@galatsa/core";
 import { yLookup } from "@galatsa/core/ydoc";

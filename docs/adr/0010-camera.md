@@ -1,4 +1,4 @@
-# 0008 Camera and navigation
+# 0010 Camera and navigation
 
 - Status: Accepted
 - Date: 2026-11-27
@@ -28,7 +28,7 @@ Every camera the editor sets, from any source (a gesture, a command, an extensio
 
 ### The pointer for tools
 
-`ToolPointerEvent` gains `local`, the pointer in the camera's own space (`{ space, x, y }`, the frame the camera is anchored in, or the root), exact at any zoom; `world` stays as it was, in root space. `SceneQuery` gains `offset(from, to)`, the offset between two spaces as the user sees them (with the preview), through their lowest common ancestor, so a tool can carry `local` into any container exactly. Both are additive (the interface version is now 1.2, [0005](0005-extension-interface.md)); `local` is optional in the type so events built by hand in tests need not have it, and the editor always fills it.
+`ToolPointerEvent` gains `local`, the pointer in the camera's own space (`{ space, x, y }`, the frame the camera is anchored in, or the root), exact at any zoom; `world` stays as it was, in root space. `SceneQuery` gains `offset(from, to)`, the offset between two spaces as the user sees them (with the preview), through their lowest common ancestor, so a tool can carry `local` into any container exactly. Both are additive (they raise the interface version to 1.4, [0005](0005-extension-interface.md)); `local` is optional in the type so events built by hand in tests need not have it, and the editor always fills it.
 
 `world` resolves a pixel wherever `|world| × zoom ≤ 2^46`: at zoom 2^20 that is anywhere within 2^26 units of the root's origin, at zoom 1 everywhere a document can reach. Beyond that (deep zoom in a frame far from the root), root-space queries lose sub-pixel precision. The editor keeps clicks right there anyway: `scene.elementAt` called with the `world` of the current pointer event hit-tests at the pointer's own screen position, not at a position recomputed from root coordinates. Rubber bands, bounds and `placement().worldX` stay in root space and keep the limit; tools that need them exact at deep zoom far out use `local` and `offset`.
 
@@ -44,7 +44,7 @@ Rejected: changing `world` to the camera's space (it would break every tool, and
 
 ### Navigation commands
 
-The commands are an extension built into the editor, `editor.navigation` (its labels are in the editor's message namespace `editor`, which prefixes its id), loaded after the basics and before the program's other extensions. They change only the camera (`undoable: false`, offered in quick mode) and use only the editor services, like any extension:
+The commands are an extension built into the editor, `editor.navigation` (its labels are in the editor's message namespace `editor`, which prefixes its id), loaded after the basics and the selection tool and before the program's other extensions. They change only the camera (`undoable: false`, offered in quick mode) and use only the editor services, like any extension:
 
 | Command          | Shortcuts                       | What it does                                                              |
 | ---------------- | ------------------------------- | ------------------------------------------------------------------------- |
@@ -57,7 +57,7 @@ The commands are an extension built into the editor, `editor.navigation` (its la
 
 `Mod++` is Ctrl and the + key on a Norwegian keyboard (and the keypad's +): the keymap of 0007 matches it by its character, so it is never read as the `Mod+-` of that key's place on a US keyboard. On a US keyboard + needs Shift, so `Mod+Shift++` is there too, and `Mod+=` (Ctrl and =) is what browsers use. `Shift+1` and `Shift+2` give ! and @ or " depending on the layout, and are matched by the digit's place. `view-selection` fits the elements' bounds in the space of their lowest common container (computed with the resolver), so a selection deep in a frame far from the root is shown exactly; `view-all` fits in root space, which is precise enough at the zoom that shows a whole canvas. A fit leaves the precision budget to the camera, which applies it where it anchors the fitted view, so a small frame far out can be fitted closer than the root's budget would allow.
 
-The arrow keys belong to the navigation only when nothing before it uses them: a tool gets keys first (a selection tool that nudges with the arrows takes them while something is selected), and an extension loaded earlier that claims the same shortcut keeps it.
+The arrow keys belong to the navigation only when nothing before it uses them: a tool gets keys first, and the selection tool (`galatsa.select`) nudges the selection with them while something is selected; with nothing selected they move the view. An extension loaded earlier that claims the same shortcut keeps it. The editor loads the basics, then the selection tool, then the navigation, then the program's other extensions.
 
 No camera move is animated: zoom steps from the keyboard are immediate. In the editor, moving the camera follows the user's hand, and an animation would only delay it; flights between stops are the player's ([0005](0005-extension-interface.md) section 7).
 

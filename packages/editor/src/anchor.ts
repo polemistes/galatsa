@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Where the camera is anchored (docs/adr/0001, section 7.3; docs/adr/0008).
+// Where the camera is anchored (docs/adr/0001, section 7.3; docs/adr/0010).
 //
 // The camera's centre is kept in the local space of the innermost frame that
 // contains it, so its numbers stay small however far the frame is from the

@@ -5,6 +5,7 @@
 export {
   Editor,
   type EditorChange,
+  type EditorNotice,
   type EditorOptions,
   type FrameScheduler,
   type KeyResult,
@@ -49,6 +50,32 @@ export {
   type LoadedExtensions,
 } from "./extensions.ts";
 export { mountEditor, wheelZoomFactor } from "./dom.ts";
+export {
+  FRAGMENT_MIME,
+  MAX_CLIPBOARD_TEXT,
+  MAX_PASTE_DEPTH,
+  MAX_PASTE_ELEMENTS,
+  decodeEnvelope,
+  decodeFragment,
+  encodeFragment,
+  readClipboard,
+  readClipboardText,
+  withinLimits,
+  writeFragment,
+  type ClipboardContent,
+  type ClipboardOrigin,
+  type ClipboardProblem,
+  type ClipboardSource,
+  type ClipboardTarget,
+} from "./clipboard.ts";
+export {
+  ContextMenu,
+  menuEntries,
+  openContextMenu,
+  type MenuClipboard,
+  type MenuEntry,
+  type MenuState,
+} from "./context-menu.ts";
 export {
   EditorDocument,
   type DocumentOptions,
