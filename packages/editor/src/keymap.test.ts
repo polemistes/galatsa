@@ -96,6 +96,16 @@ describe("shortcut candidates", () => {
         PC,
       ),
     ).toEqual([]);
+    // Windows reports AltGr as Ctrl and Alt: AltGr and a dead key names no
+    // Mod+Alt shortcut either, with or without AltGraph (F-I).
+    for (const altGraph of [true, false])
+      for (const code of ["BracketRight", "Equal"])
+        expect(
+          shortcutCandidates(
+            press("Dead", code, { ctrlKey: true, altKey: true, altGraph }),
+            PC,
+          ),
+        ).toEqual([]);
   });
 
   it("reaches the stacking shortcuts on a Norwegian keyboard, by place and by AltGr", () => {

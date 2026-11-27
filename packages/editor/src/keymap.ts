@@ -194,7 +194,9 @@ function isAltGr(input: KeyInput, platform: Platform): boolean {
   if (platform.mac) return false;
   const single = [...input.key].length === 1;
   const plain = single && /^[\p{L}\p{N}]$/u.test(input.key);
-  if (input.ctrlKey && input.altKey) return single && !plain;
+  // A dead key with Ctrl and Alt is AltGr starting a character on Windows
+  // (¨ or ~ with AltGr); it gives no character to tell by.
+  if (input.ctrlKey && input.altKey) return input.key === "Dead" || (single && !plain);
   return input.altGraph;
 }
 
