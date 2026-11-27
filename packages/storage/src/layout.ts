@@ -7,6 +7,7 @@
 //   doc/<slot>/cp/<generation>      checkpoints: the whole document (framed .galatsa)
 //   doc/<slot>/j/<session>-<seq>    journal: Yjs updates since the checkpoints (framed)
 //   doc/<slot>/a/<asset id>         asset bytes, by content address
+//   doc/<slot>/p/<asset id>/<w>x<h>.<ext>  reduced versions of image assets (previews.ts)
 //   doc/<slot>/s/<session>          one record per session that has the document open
 
 export const DOC_PREFIX = "doc/";
@@ -24,6 +25,7 @@ export const keys = {
     `${DOC_PREFIX}${slot}/j/${session}-${String(seq).padStart(SEQ_DIGITS, "0")}`,
   assets: (slot: string) => `${DOC_PREFIX}${slot}/a/`,
   asset: (slot: string, id: string) => `${DOC_PREFIX}${slot}/a/${id}`,
+  previews: (slot: string) => `${DOC_PREFIX}${slot}/p/`,
   sessions: (slot: string) => `${DOC_PREFIX}${slot}/s/`,
   session: (slot: string, id: string) => `${DOC_PREFIX}${slot}/s/${id}`,
 };

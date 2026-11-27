@@ -35,6 +35,14 @@ import {
   type Manifest,
 } from "./layout.ts";
 import { newerVersion, readAssets, readParts, type ReadOptions } from "./parts.ts";
+import {
+  normalizePreviews,
+  previewsFromEntries,
+  previewEntryName,
+  type AssetPreview,
+  type PreviewSource,
+  type PreviewsKept,
+} from "./previews.ts";
 import { writeZip, type ZipEntryInput } from "./zip.ts";
 
 export interface WriteOptions {
@@ -54,6 +62,18 @@ export interface WriteOptions {
    * (section 9.7): 256 MiB each for document.json and ydoc.bin, 4 GiB in all.
    */
   limits?: { maxDocumentSize?: number; maxYdocSize?: number; maxFileSize?: number };
+  /**
+   * Reduced versions of the image assets (docs/adr/0012). Written for every
+   * asset whose bytes belong in the file, external ones included; never part
+   * of the document.
+   */
+  previews?: PreviewSource;
+  /**
+   * Which previews to write: "all" by default, "smallest" by default for an
+   * export for sharing (enough to open it without decoding an original, at a
+   * fraction of the size; the receiver makes the others again).
+   */
+  previewsKept?: PreviewsKept;
 }
 
 export interface WriteResult {
@@ -153,6 +173,45 @@ export function writeGalatsaFile(
   if (options.thumbnail) {
     entries.push({ name: ENTRY.thumbnail, data: options.thumbnail, compress: false });
   }
+  // Previews last: they are a cache, so a file that does not fit with them is
+  // written without them rather than not at all.
+  const previews: ZipEntryInput[] = [];
+  const kept = options.previewsKept ?? (options.forSharing ? "smallest" : "all");
+  if (options.previews && kept !== "none") {
+    for (const id of assetsToWrite(snapshot)) {
+      let given: readonly AssetPreview[] | undefined;
+      try {
+        given = options.previews(id);
+      } catch {
+        given = undefined;
+      }
+      const natural = Object.hasOwn(snapshot.assets, id)
+        ? snapshot.assets[id]
+        : undefined;
+      for (const preview of normalizePreviews(given, kept, natural ?? {})) {
+        previews.push({
+          name: previewEntryName(id, preview),
+          data: preview.bytes,
+          compress: false,
+        });
+      }
+    }
+  }
+  if (previews.length > 0) {
+    try {
+      return {
+        bytes: writeZip([...entries, ...previews], options.limits?.maxFileSize),
+        warnings,
+      };
+    } catch (error) {
+      if (!(error instanceof FileFormatError) || error.code !== "too-large") throw error;
+      warnings.push({
+        code: "previews-not-written",
+        message:
+          "The reduced versions of the images were left out, because the file would be too large with them.",
+      });
+    }
+  }
   return { bytes: writeZip(entries, options.limits?.maxFileSize), warnings };
 }
 
@@ -163,6 +222,8 @@ export interface ReadResult {
   snapshot: DocumentSnapshot;
   /** Verified asset bytes found in the file (views of the file bytes). */
   assets: Map<AssetId, Uint8Array>;
+  /** Reduced versions of image assets found in the file, smallest first (views of the file bytes). */
+  previews: Map<AssetId, AssetPreview[]>;
   thumbnail: Uint8Array | null;
   /** The format version the file was written with. */
   formatVersion: number;
@@ -271,6 +332,7 @@ export async function readGalatsaFile(
     doc,
     snapshot: result,
     assets: await readAssets(parts, result, warnings),
+    previews: previewsFromEntries(parts.entries, result.assets),
     thumbnail: parts.thumbnail,
     formatVersion: parts.formatVersion,
     mergeIdentityKept,

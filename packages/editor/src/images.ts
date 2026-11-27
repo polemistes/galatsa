@@ -1,15 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Images for the renderer from where the document's asset bytes are kept (the
-// storage session), until the asset store with reduced versions exists: each
-// image has one stored version, the original, with the pixel size its asset
-// description gives. Bytes are fetched when the renderer first asks, and the
-// renderer is told when they arrive.
+// storage session): each image's stored reduced versions, smallest first, and
+// the original last, with the pixel size its asset description gives
+// (docs/adr/0012-images-and-assets.md). Only the list of versions is fetched
+// when the renderer first asks; the bytes of a version are read when the
+// renderer decodes it, so opening a document reads and decodes no original.
+//
+// An image without reduced versions (from a file of an older version, a
+// shared export that carries only the smallest, or pasted from another
+// document) gets them made in the background, one image at a time, when the
+// renderer first asks for it; until then it is drawn from its original.
 
 import type { AssetId, Size } from "@galatsa/core";
 import { roots } from "@galatsa/core/ydoc";
-import type { ImageSource, SceneAssets } from "@galatsa/renderer";
+import { fitsOriginal, type PreviewFacts } from "@galatsa/format";
+import {
+  SVG_TYPE,
+  type ImageLevel,
+  type ImageSource,
+  type SceneAssets,
+} from "@galatsa/renderer";
 import type * as Y from "yjs";
+import {
+  ensurePreviews,
+  missingPreviews,
+  type AssetAccess,
+  type PreviewMaker,
+} from "./assets.ts";
 
 interface Description {
   readonly width?: unknown;
@@ -47,48 +65,178 @@ export function documentAssets(doc: Y.Doc): SceneAssets {
 /** Where asset bytes are read from (the storage session's `getAsset`). */
 export type AssetReader = (id: AssetId) => Promise<Uint8Array | undefined>;
 
+/** What is known of an asset's stored versions. */
+interface Known {
+  readonly previews: readonly PreviewFacts[];
+  /** The original's bytes, read already (only for images without previews). */
+  original: Blob | null;
+}
+
+export interface AssetImagesOptions {
+  /** Makes reduced versions that are missing (default the renderer's; null: never). */
+  readonly makePreviews?: PreviewMaker | null;
+  /** Counts reads of originals, for tests and diagnosis. */
+  readonly stats?: { originalReads: number };
+}
+
 /**
- * An image source over an asset reader. `onArrived` is called with assets
- * whose bytes arrived; pass them to the renderer's `imagesChanged`.
+ * An image source over the session's assets and reduced versions.
+ * `onArrived` is called with assets whose versions or bytes arrived or
+ * changed; pass them to the renderer's `imagesChanged`. Takes a plain asset
+ * reader too (no reduced versions then).
  */
 export function assetImages(
   doc: Y.Doc,
-  read: AssetReader,
+  access: AssetAccess | AssetReader,
   onArrived: (assets: string[]) => void,
+  options: AssetImagesOptions = {},
 ): ImageSource {
-  const bytes = new Map<string, Blob>();
+  const full: Partial<AssetAccess> =
+    typeof access === "function" ? { getAsset: access } : access;
+  // Called as a method: the session's methods use their own object.
+  const getAsset = (id: AssetId): Promise<Uint8Array | undefined> => full.getAsset!(id);
+  const known = new Map<string, Known>();
   const asking = new Set<string>();
-  const fetch = (asset: string): void => {
+  const making = new Set<string>();
+  /** Images whose versions are made again over what is stored (some would not decode). */
+  const remake = new Set<string>();
+  const queue: string[] = [];
+  /**
+   * Images whose versions were made (or asked to be made again) in this
+   * session: each at most once of each kind, so a maker that gives other
+   * sizes than asked for, or versions that do not decode either, cannot keep
+   * the background busy for ever.
+   */
+  const tried = new Set<string>();
+  const remade = new Set<string>();
+  const enqueue = (asset: string): void => {
+    if (making.has(asset)) return;
+    making.add(asset);
+    queue.push(asset);
+    pump();
+  };
+  let busy = false;
+  const typeOf = (asset: string): string => {
+    const type = describe(doc, asset)?.mediaType;
+    return typeof type === "string" ? type : "";
+  };
+  const readOriginal = async (asset: string): Promise<Blob | undefined> => {
+    if (options.stats) options.stats.originalReads++;
+    const data = await getAsset(asset as AssetId);
+    return data === undefined
+      ? undefined
+      : new Blob([data as Uint8Array<ArrayBuffer>], { type: typeOf(asset) });
+  };
+  // Reduced versions are made one image at a time, in the background.
+  const make = options.makePreviews === undefined ? undefined : options.makePreviews;
+  const pump = (): void => {
+    if (busy || full.putPreviews === undefined || make === null) return;
+    const asset = queue.shift();
+    if (asset === undefined) return;
+    busy = true;
+    void (async () => {
+      try {
+        const entry = known.get(asset);
+        const blob = entry?.original ?? (await readOriginal(asset));
+        const size = sizeOf(describe(doc, asset));
+        if (blob === undefined || size === undefined) return;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const replace = remake.delete(asset);
+        const made = await ensurePreviews(
+          full as AssetAccess,
+          asset as AssetId,
+          bytes,
+          { mediaType: blob.type, width: size.w, height: size.h },
+          make ?? undefined,
+          { replace },
+        );
+        if (made) {
+          known.delete(asset);
+          onArrived([asset]);
+        }
+      } catch {
+        // Drawn from the original and the versions there are, as before.
+      } finally {
+        making.delete(asset);
+        busy = false;
+        pump();
+      }
+    })();
+  };
+  const learn = (asset: string): void => {
     if (asking.has(asset)) return;
     asking.add(asset);
-    read(asset as AssetId)
-      .then((data) => {
-        if (data === undefined) return;
-        const type = describe(doc, asset)?.mediaType;
-        bytes.set(
-          asset,
-          new Blob([data as Uint8Array<ArrayBuffer>], {
-            type: typeof type === "string" ? type : "",
-          }),
-        );
+    void (async () => {
+      try {
+        const size = sizeOf(describe(doc, asset));
+        if (size === undefined) return;
+        const natural = { width: size.w, height: size.h };
+        // Only versions that fit the image: smaller than it, of its proportions.
+        const previews = (
+          full.previewFacts
+            ? await full.previewFacts(asset as AssetId).catch(() => [])
+            : []
+        ).filter((p) => fitsOriginal(p, natural));
+        // Without reduced versions, the original must be there to draw at all.
+        const original = previews.length === 0 ? await readOriginal(asset) : null;
+        if (previews.length === 0 && original === undefined) return;
+        known.set(asset, { previews, original: original ?? null });
         onArrived([asset]);
-      })
-      .catch(() => {})
-      .finally(() => asking.delete(asset));
+        // Versions that are missing (all of them, or the larger ones of a
+        // file shared with the smallest only) are made in the background.
+        if (missingPreviews(natural, previews).length > 0 && !tried.has(asset)) {
+          tried.add(asset);
+          enqueue(asset);
+        }
+      } catch {
+        // Asked again when the renderer retries.
+      } finally {
+        asking.delete(asset);
+      }
+    })();
   };
   return {
     levels(asset) {
       const size = sizeOf(describe(doc, asset));
       if (size === undefined) return undefined;
-      if (!bytes.has(asset)) {
-        fetch(asset);
+      const entry = known.get(asset);
+      if (entry === undefined) {
+        learn(asset);
         return undefined;
       }
-      return [{ width: size.w, height: size.h }];
+      const original: ImageLevel =
+        typeOf(asset) === SVG_TYPE
+          ? { width: size.w, height: size.h, scalable: true }
+          : { width: size.w, height: size.h };
+      return [
+        ...entry.previews.map((p) => ({ width: p.width, height: p.height })),
+        original,
+      ];
     },
-    blob(asset) {
-      const blob = bytes.get(asset);
+    failed(asset, level) {
+      // A stored version that does not decode: the set is made again over it,
+      // once. The renderer draws another version meanwhile.
+      const entry = known.get(asset);
+      if (entry === undefined || level >= entry.previews.length || remade.has(asset))
+        return;
+      remade.add(asset);
+      remake.add(asset);
+      enqueue(asset);
+    },
+    async blob(asset, level) {
+      const entry = known.get(asset);
+      if (entry === undefined) throw new Error(`Nothing known of ${asset}`);
+      const preview = entry.previews[level];
+      if (preview !== undefined) {
+        const bytes = await full.getPreview?.(asset as AssetId, preview);
+        if (bytes === undefined) throw new Error(`No preview ${level} of ${asset}`);
+        return new Blob([bytes as Uint8Array<ArrayBuffer>], { type: preview.mediaType });
+      }
+      if (entry.original !== null) return entry.original;
+      const blob = await readOriginal(asset);
       if (blob === undefined) throw new Error(`No bytes for ${asset}`);
+      // Kept: the renderer decodes it again at other sizes as the zoom changes.
+      if (known.get(asset) === entry) entry.original = blob;
       return blob;
     },
   };

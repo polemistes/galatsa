@@ -40,7 +40,8 @@ export type NoticeCode =
   | "save-download-failed"
   | "save-too-large"
   | "save-newer-version"
-  | "save-no-merge-state";
+  | "save-no-merge-state"
+  | "save-without-previews";
 
 export type Severity = "info" | "warning" | "error";
 
@@ -82,6 +83,7 @@ const SEVERITY: Record<NoticeCode, Severity> = {
   "save-too-large": "error",
   "save-newer-version": "error",
   "save-no-merge-state": "warning",
+  "save-without-previews": "info",
 };
 
 export function notice(
@@ -160,6 +162,7 @@ export function fileNotices(warnings: readonly FileWarning[]): Notice[] {
     out.push(notice("assets-missing", { count: counts.get("asset-missing")! }));
   }
   if (has("ydoc-not-written")) out.push(notice("save-no-merge-state"));
+  if (has("previews-not-written")) out.push(notice("save-without-previews"));
   return out;
 }
 
