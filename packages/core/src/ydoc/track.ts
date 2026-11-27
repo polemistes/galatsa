@@ -29,9 +29,15 @@
 
 import * as Y from "yjs";
 import { revisionDigest } from "../model/digest.ts";
-import { Problems, envelopeField, jsonEquals } from "../model/grammar.ts";
+import { MAX_SHIFTS, Problems, envelopeField, jsonEquals } from "../model/grammar.ts";
 import { defaultRandomBytes, newId, type RandomBytes } from "../model/ids.ts";
-import { Resolver, withoutMarks, type ElementLookup } from "../model/resolve.ts";
+import {
+  Resolver,
+  withoutMarks,
+  type ElementLookup,
+  type Point,
+} from "../model/resolve.ts";
+import type { Rebase, Shift } from "../model/types.ts";
 import { jsonFromY } from "./encode.ts";
 import { INTERNAL_ORIGINS, ORIGIN, roots } from "./schema.ts";
 import { marksOf, revisionOf, yLookup } from "./snapshot.ts";
@@ -161,6 +167,9 @@ function markKey(located: Located, action: string): string {
 
 function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void {
   if (!tr.local || INTERNAL_ORIGINS.has(tr.origin)) return;
+  // The writes that finish an undo or redo are part of it; the step itself is
+  // judged (below).
+  if (tr.origin instanceof SettleOrigin) return;
   const worked = new Map<RecordMap, Work>();
   const work = (located: Located | null, force = false) => {
     if (!located) return;
@@ -233,7 +242,7 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
   }
   // An undo or redo is finished before its work is judged (section 10).
   if (tr.origin instanceof DocumentUndoManager && tr.origin.currStackItem !== null)
-    settleStep(doc, tr, tr.origin.currStackItem.deletions, ignoredElements);
+    settleStep(doc, tr, tr.origin, ignoredElements);
   for (const [record, force] of tracker.noted) work(locateRecord(doc, record), force);
   tracker.noted.clear();
   if (worked.size === 0 && written.size === 0) return;
@@ -346,6 +355,19 @@ export function noteWork(
 }
 
 /**
+ * The origin of the writes that finish an undo or redo (settleStep). The undo
+ * manager tracks it, and joins what it writes to the step being undone or
+ * redone, so a redo or a later undo takes those writes back with the rest.
+ */
+class SettleOrigin {
+  readonly manager: DocumentUndoManager;
+
+  constructor(manager: DocumentUndoManager) {
+    this.manager = manager;
+  }
+}
+
+/**
  * Finishes an undo or redo step that Yjs left half done. When the step has to
  * bring back a map entry (the value a key had before the change being undone),
  * Yjs refuses if a concurrent change by someone else to the same key is on
@@ -354,7 +376,7 @@ export function noteWork(
  * This puts the value back, but only where the key has no value, so nothing
  * anyone wrote is overwritten.
  */
-function fillHoles(doc: Y.Doc, deletions: unknown): void {
+function fillHoles(doc: Y.Doc, deletions: unknown, origin: unknown): void {
   doc.transact((tr) => {
     Y.iterateDeletedStructs(
       tr,
@@ -371,7 +393,7 @@ function fillHoles(doc: Y.Doc, deletions: unknown): void {
           (parent as Y.Map<unknown>).set(struct.parentSub, values[0]);
       },
     );
-  }, ORIGIN.track);
+  }, origin);
 }
 
 /** Envelope keys that place an element: its container, stacking slot and position. */
@@ -381,6 +403,8 @@ type PlaceKey = (typeof PLACE_KEYS)[number];
 type OldPlace = Partial<Record<PlaceKey, unknown>>;
 
 const QUIET = new Problems(0);
+
+type StackItem = DocumentUndoManager["undoStack"][number];
 
 /** A lookup that sees some elements placed as they were before a transaction. */
 function placedAsBefore(
@@ -417,36 +441,40 @@ function placedAsBefore(
   };
 }
 
-function samePoint(a: { x: number; y: number }, b: { x: number; y: number }): boolean {
+function samePoint(a: Point, b: Point): boolean {
   const close = (u: number, v: number) =>
     Math.abs(u - v) <= 1e-9 * Math.max(1, Math.abs(u), Math.abs(v));
   return close(a.x, b.x) && close(a.y, b.y);
 }
 
 /**
- * Finishes an undo or redo transaction before the tracker judges its work, in
- * a transaction of its own that undo does not track (section 10):
+ * Finishes an undo or redo transaction before the tracker judges its work
+ * (section 10). What it writes joins the step, so a redo, or a later undo,
+ * takes it back together with the rest.
  *
  * 1. Holes are filled (see fillHoles). Judging first would see an element whose
  *    parent has no value at the root, outside a delete that hides it, and its
  *    new revision would bring it back for good.
- * 2. A change of container is kept back where it would take an element out of
- *    a delete that hides it: an undo or redo made after receiving a delete
- *    leaves what it hides deleted, as an undo of a move of the element itself
- *    does. And where it would move the element on the canvas while the step
- *    moves neither it nor anything it is in: an undo takes back the user's own
- *    container changes, never the moves another user made since (undoing a
- *    grouping after someone moved the group leaves the members where that move
- *    put them, as an ungrouping would). The element then stays in its container
- *    as before the undo, where a redo would put it anyway.
+ * 2. A change of container that would take an element (or something in it) out
+ *    of a delete that hides it is kept back: the element keeps the place it had
+ *    before the undo. An undo or redo made after receiving a delete leaves what
+ *    the delete hides deleted, as an undo of a move of the element itself does.
+ * 3. A change of container that would move something visible on the canvas,
+ *    although the step writes no position that its place depends on, is done,
+ *    but with a rebase that keeps the element where it was on the canvas. An
+ *    undo takes back the user's own change of container, which never moves
+ *    anything; it must not take back, in effect, a move another user made since
+ *    (undoing a grouping after someone moved the group leaves the members where
+ *    that move put them, as an ungrouping would).
  */
 function settleStep(
   doc: Y.Doc,
   tr: Y.Transaction,
-  deletions: unknown,
+  manager: DocumentUndoManager,
   ignoredElements: ReadonlySet<string>,
 ): void {
-  fillHoles(doc, deletions);
+  const origin = manager.settleOrigin;
+  fillHoles(doc, manager.currStackItem!.deletions, origin);
   const elements = roots(doc).elements;
   const before = new Map<string, OldPlace>();
   for (const [type, keys] of tr.changed) {
@@ -472,23 +500,8 @@ function settleStep(
   const then = new Resolver(placedAsBefore(lookup, before));
   const ids = [...then.ids()];
   const writesPos = (id: string) => Object.hasOwn(before.get(id) ?? {}, "pos");
-  const keepBack = (keep: Iterable<string>, keys: readonly PlaceKey[]): void => {
-    doc.transact(() => {
-      for (const id of keep) {
-        moved.delete(id);
-        const map = elements.get(id) as Y.Map<unknown>;
-        const old = before.get(id)!;
-        for (const key of keys) {
-          if (!Object.hasOwn(old, key)) continue;
-          const value = old[key];
-          if (value === undefined) map.delete(key);
-          else map.set(key, value);
-        }
-      }
-    }, ORIGIN.track);
-  };
 
-  // 1. Nothing comes out of a delete. Only what changed its effective parent
+  // 2. Nothing comes out of a delete. Only what changed its effective parent
   // (the moved elements, and what a cycle made or broke moves with them), and
   // what is inside it, can.
   let now = new Resolver(lookup);
@@ -502,14 +515,24 @@ function settleStep(
     (at) => then.isDeleted(at) && now.get(at) !== undefined && !now.isDeleted(at),
   );
   if (revived.length > 0) {
-    keepBack(
-      blame(revived, moved, (at) => [at, ...ancestorsOf(then, at)]),
-      PLACE_KEYS,
-    );
+    const keep = blame(revived, moved, (at) => [at, ...ancestorsOf(then, at)]);
+    doc.transact(() => {
+      for (const id of keep) {
+        moved.delete(id);
+        const map = elements.get(id) as Y.Map<unknown>;
+        const old = before.get(id)!;
+        for (const key of PLACE_KEYS) {
+          if (!Object.hasOwn(old, key)) continue;
+          const value = old[key];
+          if (value === undefined) map.delete(key);
+          else map.set(key, value);
+        }
+      }
+    }, origin);
     now = new Resolver(lookup);
   }
 
-  // 2. Nothing visible moves on the canvas unless the step writes the position
+  // 3. Nothing visible moves on the canvas unless the step writes the position
   // of something its place depends on.
   const still = new Set([...moved].filter((id) => !writesPos(id)));
   if (still.size === 0) return;
@@ -521,8 +544,51 @@ function settleStep(
       !now.isGone(id) &&
       !depends(id).some(writesPos),
   );
-  if (shifted.length > 0)
-    keepBack(blame(shifted, still, depends), ["parent", "rebase", "order"]);
+  if (shifted.length === 0) return;
+  // A rebase for each moved element the shift depends on. One that did not move
+  // itself gets one too: its position may be what others are converted from.
+  const rebases = [...blame(shifted, still, depends)]
+    .filter((id) => now.get(id) !== undefined)
+    .map((id) => [id, placeKeeping(then, now, id)] as const);
+  doc.transact(() => {
+    for (const [id, rebase] of rebases)
+      (elements.get(id) as Y.Map<unknown>).set("rebase", rebase);
+  }, origin);
+}
+
+/**
+ * A rebase that puts an element, in the container it is in now, where it was on
+ * the canvas before (`then`), without writing its position (section 5.3). Like
+ * a reparent's, it shifts the stored position, and covers a move another user
+ * writes in the container they saw the element in before.
+ */
+function placeKeeping(then: Resolver, now: Resolver, id: string): Rebase {
+  const envelope = now.get(id)!;
+  const parent = now.parentOf(id);
+  const world = then.worldOrigin(id);
+  const origin = now.spaceOrigin(parent);
+  const target = { x: world.x - origin.x, y: world.y - origin.y };
+  const pos = envelope.pos;
+  const shifts: Shift[] = [];
+  const add = (from: string | null, dx: number, dy: number) => {
+    if (from === parent || shifts.some((s) => s.from === from)) return;
+    if (shifts.length < MAX_SHIFTS) shifts.push({ from, dx, dy });
+  };
+  add(pos.space, target.x - pos.x, target.y - pos.y);
+  const before = then.parentOf(id);
+  const was = then.spaceOrigin(before);
+  add(before, was.x - origin.x, was.y - origin.y);
+  const restored = envelope.rebase;
+  if (restored && restored.to === parent)
+    for (const s of restored.shifts) add(s.from, s.dx, s.dy);
+  return {
+    to: parent,
+    base:
+      pos.space === parent
+        ? { x: pos.x, y: pos.y, dx: target.x - pos.x, dy: target.y - pos.y }
+        : null,
+    shifts,
+  };
 }
 
 /** The ancestors of an element in the effective tree, nearest first. */
@@ -577,6 +643,9 @@ function blame(
  * recording of work.
  */
 export class DocumentUndoManager extends Y.UndoManager {
+  /** The origin of the writes that finish this manager's undos and redos. */
+  readonly settleOrigin: SettleOrigin = new SettleOrigin(this);
+
   /**
    * Runs several operations as one undo step, whatever the capture timeout. This
    * is how a command composes operations. (Wrapping them in one Yjs transaction
@@ -641,8 +710,25 @@ export function createUndoManager(
       captureTimeout: options.captureTimeout ?? 500,
     },
   );
-  manager.on("stack-item-popped", (event: { stackItem: { deletions: unknown } }) =>
-    fillHoles(doc, event.stackItem.deletions),
+  const settle = manager.settleOrigin;
+  manager.trackedOrigins.add(settle);
+  // What finishes an undo or redo joins its step (on the other stack): Yjs
+  // makes a stack item of its own for every tracked transaction while undoing.
+  manager.on(
+    "stack-item-added",
+    (event: { stackItem: StackItem; origin: unknown; type: "undo" | "redo" }) => {
+      if (event.origin !== settle) return;
+      const stack = event.type === "redo" ? manager.redoStack : manager.undoStack;
+      const item = stack[stack.length - 1];
+      const step = stack[stack.length - 2];
+      if (item !== event.stackItem || step === undefined) return;
+      step.insertions = Y.mergeDeleteSets([step.insertions, item.insertions]);
+      step.deletions = Y.mergeDeleteSets([step.deletions, item.deletions]);
+      stack.pop();
+    },
+  );
+  manager.on("stack-item-popped", (event: { stackItem: StackItem }) =>
+    fillHoles(doc, event.stackItem.deletions, settle),
   );
   return manager;
 }
