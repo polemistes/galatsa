@@ -192,3 +192,32 @@ export async function makeImagePreviews(
   }
   return out;
 }
+
+/**
+ * The pixel size of an image file as the browser shows it (orientation
+ * applied), by decoding it: for files whose headers do not say. SVG gets the
+ * size the browser gives it in an image element.
+ */
+export async function measureImage(
+  blob: Blob,
+): Promise<{ width: number; height: number }> {
+  if (blob.type === SVG_TYPE) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      if (!(image.naturalWidth > 0) || !(image.naturalHeight > 0))
+        throw new Error("SVG without a size");
+      return { width: image.naturalWidth, height: image.naturalHeight };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  const bitmap = await createImageBitmap(blob);
+  try {
+    return { width: bitmap.width, height: bitmap.height };
+  } finally {
+    bitmap.close();
+  }
+}

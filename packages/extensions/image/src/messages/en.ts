@@ -21,7 +21,6 @@ export default {
   "file-type.jpeg": "JPEG image",
   "file-type.webp": "WebP image",
   "file-type.svg": "SVG image",
-  "notice.size-unknown":
-    "The size of {name} could not be read, so the image was inserted as a square.",
+  "notice.size-unknown": "{name} could not be read as an image, so it was not inserted.",
   "notice.not-image": "{name} is not an image this program can read.",
 };

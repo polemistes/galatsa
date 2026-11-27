@@ -4,7 +4,7 @@
 // built here byte by byte: only the headers matter.
 
 import { describe, expect, it } from "vitest";
-import { imageFacts, sniffImage } from "./facts.ts";
+import { imageFacts, sniffImage, svgLength, svgRootAttributes } from "./facts.ts";
 
 /** ASCII text as bytes (TextEncoder is not in this package's environment). */
 const asciiBytes = (text: string): Uint8Array =>
@@ -183,5 +183,97 @@ describe("image facts", () => {
     expect(sniffImage(svg("  <svg>"))).toBe("image/svg+xml");
     expect(sniffImage(svg("<svgfoo>"))).toBeNull();
     expect(sniffImage(svg("<html><svg></svg></html>"))).toBeNull();
+  });
+});
+
+/** A PNG header with an eXIf chunk (a TIFF header, big endian) of the given orientation. */
+function pngWithExif(width: number, height: number, orientation: number): Uint8Array {
+  const head = png(width, height);
+  const tiff = [
+    ...ascii("MM"),
+    0,
+    42,
+    ...be32(8),
+    ...be16(1),
+    ...be16(0x0112),
+    ...be16(3),
+    ...be32(1),
+    ...be16(orientation),
+    0,
+    0,
+    ...be32(0),
+  ];
+  // Checksums are not checked when the size is read.
+  return new Uint8Array([
+    ...head,
+    0,
+    0,
+    0,
+    0,
+    ...be32(tiff.length),
+    ...ascii("eXIf"),
+    ...tiff,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    ...ascii("IDAT"),
+  ]);
+}
+
+describe("orientation and SVG text", () => {
+  it("swaps width and height of a PNG turned a quarter by its eXIf chunk", () => {
+    expect(imageFacts(pngWithExif(400, 200, 6))).toMatchObject({
+      width: 200,
+      height: 400,
+    });
+    expect(imageFacts(pngWithExif(400, 200, 3))).toMatchObject({
+      width: 400,
+      height: 200,
+    });
+  });
+
+  it("finds the SVG root in linear time, however the text before it is made", () => {
+    const crafted = "<!---->".repeat(4000) + "x";
+    const started = Date.now();
+    expect(sniffImage(asciiBytes(crafted.slice(0, 4096)))).toBeNull();
+    expect(svgRootAttributes(crafted)).toBeNull();
+    expect(svgRootAttributes("<!--" + "-".repeat(60000))).toBeNull();
+    expect(svgRootAttributes("<svg " + 'a="'.repeat(20000))).toBeNull();
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(
+      svgRootAttributes("<!---->".repeat(100) + '<svg width="3">')?.get("width"),
+    ).toBe("3");
+  });
+
+  it("reads root attributes, quoted either way, and a doctype with an internal subset", () => {
+    const attributes = svgRootAttributes(
+      `<?xml version="1.0"?><!DOCTYPE svg [ <!ENTITY a "b"> ]><svg xmlns='x' width = "10" flag height="20"/>`,
+    );
+    expect(Object.fromEntries(attributes!)).toEqual({
+      xmlns: "x",
+      width: "10",
+      flag: "",
+      height: "20",
+    });
+    expect(svgRootAttributes("<svgx>")).toBeNull();
+    expect(svgRootAttributes("<html><svg>")).toBeNull();
+  });
+
+  it("converts absolute SVG lengths and leaves others out", () => {
+    expect(svgLength("10")).toBe(10);
+    expect(svgLength(" 2in ")).toBe(192);
+    expect(svgLength("2.54cm")).toBeCloseTo(96, 9);
+    expect(svgLength("72pt")).toBeCloseTo(96, 9);
+    expect(svgLength("1e2px")).toBe(100);
+    expect(svgLength("100%")).toBeUndefined();
+    expect(svgLength("2em")).toBeUndefined();
+    expect(svgLength("1e")).toBeUndefined();
+    expect(svgLength("-5")).toBeUndefined();
+    expect(svgLength("1" + "1".repeat(50000) + "x")).toBeUndefined();
   });
 });

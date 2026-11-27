@@ -34,6 +34,7 @@ export {
   type MadePreview,
   type PreviewOptions,
   makeImagePreviews,
+  measureImage,
   previewSizes,
   PREVIEW_LARGEST,
   PREVIEW_MARGIN,

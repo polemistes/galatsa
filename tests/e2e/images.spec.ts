@@ -562,3 +562,90 @@ test("WebP and SVG files are imported and drawn", async ({ page }) => {
   expect(pixel.rgb).toEqual([255, 0, 0]);
   expect(pixel.failures).toBe(0);
 });
+
+test("the size of a PNG or WebP turned by EXIF is the size browsers show", async ({
+  page,
+}) => {
+  await start(page);
+  const result = await page.evaluate(async () => {
+    const dev = window as unknown as Dev;
+    const editor = dev.galatsaDev.editor()!;
+    const crcTable = Array.from({ length: 256 }, (_, n) => {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      return c >>> 0;
+    });
+    const crc = (bytes: Uint8Array): number => {
+      let c = 0xffffffff;
+      for (const b of bytes) c = crcTable[(c ^ b) & 0xff]! ^ (c >>> 8);
+      return (c ^ 0xffffffff) >>> 0;
+    };
+    // A TIFF header with one entry: orientation 6 (turned a quarter).
+    const tiff = new Uint8Array([
+      0x4d, 0x4d, 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0,
+      0, 0,
+    ]);
+    const be32 = (n: number) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+    const le32 = (n: number) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, n >>> 24];
+    const le24 = (n: number) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255];
+    const ascii = (s: string) => [...s].map((c) => c.charCodeAt(0));
+    const sizes: Record<string, unknown> = {};
+    for (const type of ["image/png", "image/webp"]) {
+      const plain = new Uint8Array(
+        await (await dev.galatsaTestImage(400, 200, 8, type)).arrayBuffer(),
+      );
+      let bytes: Uint8Array;
+      if (type === "image/png") {
+        const body = new Uint8Array([...ascii("eXIf"), ...tiff]);
+        const chunk = [...be32(tiff.length), ...body, ...be32(crc(body))];
+        bytes = new Uint8Array([
+          ...plain.subarray(0, 33),
+          ...chunk,
+          ...plain.subarray(33),
+        ]);
+      } else {
+        const extended = String.fromCharCode(...plain.subarray(12, 16)) === "VP8X";
+        const image = plain.subarray(extended ? 30 : 12);
+        const vp8x = [
+          ...ascii("VP8X"),
+          ...le32(10),
+          (extended ? plain[20]! : 0) | 0x08,
+          0,
+          0,
+          0,
+          ...le24(399),
+          ...le24(199),
+        ];
+        const exif = [...ascii("EXIF"), ...le32(tiff.length), ...tiff];
+        const chunks = [...vp8x, ...image, ...exif];
+        bytes = new Uint8Array([
+          ...ascii("RIFF"),
+          ...le32(chunks.length + 4),
+          ...ascii("WEBP"),
+          ...chunks,
+        ]);
+      }
+      const blob = new Blob([bytes], { type });
+      const bitmap = await createImageBitmap(blob);
+      await editor.importFiles([new File([blob], `turned.${type.slice(6)}`, { type })]);
+      const asset = String(editor.scene.element(editor.selection[0]!)!.data["asset"]);
+      const description = (
+        editor.doc as { getMap(n: string): { get(k: string): unknown } }
+      )
+        .getMap("assets")
+        .get(asset) as { width: number; height: number };
+      sizes[type] = {
+        browser: [bitmap.width, bitmap.height],
+        described: [description.width, description.height],
+      };
+    }
+    return sizes;
+  });
+  for (const type of ["image/png", "image/webp"]) {
+    const { browser, described } = result[type] as {
+      browser: number[];
+      described: number[];
+    };
+    expect(described, type).toEqual(browser);
+  }
+});

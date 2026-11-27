@@ -9,7 +9,7 @@
 import type { AssetId, AssetInfo } from "@galatsa/core";
 import type { AssetStore } from "@galatsa/extension-api/editing";
 import type { AssetPreview, PreviewFacts } from "@galatsa/format";
-import { makeImagePreviews, previewSizes } from "@galatsa/renderer";
+import { makeImagePreviews, measureImage, previewSizes } from "@galatsa/renderer";
 
 /** What the editor needs of the storage session for assets. */
 export interface AssetAccess {
@@ -72,11 +72,38 @@ export async function ensurePreviews(
   }
 }
 
-/** The asset store for importers: stores bytes once and makes an image's reduced versions. */
-export function sessionAssetStore(access: AssetAccess, make?: PreviewMaker): AssetStore {
+/** Finds an image's pixel size by decoding it (the renderer's, by default). */
+export type ImageMeasurer = (blob: Blob) => Promise<{ width: number; height: number }>;
+
+/**
+ * The asset store for importers: stores bytes once and makes an image's
+ * reduced versions. An image whose importer could not read its size from the
+ * header gets it by decoding, so it can be drawn; if that fails too, the
+ * description has no size and the importer does not insert it.
+ */
+export function sessionAssetStore(
+  access: AssetAccess,
+  make?: PreviewMaker,
+  measure: ImageMeasurer = measureImage,
+): AssetStore {
   return {
-    async put(bytes, facts) {
+    async put(bytes, given) {
       const id = await access.putAsset(bytes);
+      let facts = given;
+      if (
+        isImageType(facts.mediaType) &&
+        (facts.width === undefined || facts.height === undefined)
+      ) {
+        try {
+          const size = await measure(
+            new Blob([bytes as Uint8Array<ArrayBuffer>], { type: facts.mediaType }),
+          );
+          if (size.width > 0 && size.height > 0)
+            facts = { ...facts, width: size.width, height: size.height };
+        } catch {
+          // Not an image the browser can decode: no size.
+        }
+      }
       await ensurePreviews(access, id, bytes, facts, make);
       const info: AssetInfo = { ...facts, byteLength: bytes.length };
       return { id, info };

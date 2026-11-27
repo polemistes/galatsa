@@ -73,12 +73,80 @@ function ascii(bytes: Uint8Array, limit: number): string {
   return out;
 }
 
-/** The root element of SVG text: after the XML declaration, comments and a doctype. */
-const SVG_ROOT =
-  /^(?:\?\?\?)?\s*(?:<\?xml[^>]*\?>\s*)?(?:(?:<!--[\s\S]*?-->|<!DOCTYPE[^>[]*(?:\[[\s\S]*?\])?\s*>)\s*)*<svg(?=[\s/>])([^>]*)>/i;
+function isSpace(c: string | undefined): boolean {
+  return c === " " || c === "\t" || c === "\n" || c === "\r";
+}
+
+/**
+ * The attributes of the root element of SVG text, after a byte order mark
+ * (read as "???"), the XML declaration, comments, processing instructions and
+ * a doctype; null if the text does not start with an SVG root element. A
+ * single pass with `indexOf`, no regular expression: the time is linear in
+ * the text whatever it holds (a pattern with nested repetition took seconds
+ * on a few hundred bytes of crafted comments).
+ */
+export function svgRootAttributes(text: string): Map<string, string> | null {
+  let at = text.startsWith("???") ? 3 : 0;
+  const skipSpace = (): void => {
+    while (isSpace(text[at])) at++;
+  };
+  for (;;) {
+    skipSpace();
+    if (text.startsWith("<?", at)) {
+      const end = text.indexOf("?>", at + 2);
+      if (end < 0) return null;
+      at = end + 2;
+    } else if (text.startsWith("<!--", at)) {
+      const end = text.indexOf("-->", at + 4);
+      if (end < 0) return null;
+      at = end + 3;
+    } else if (text.slice(at, at + 9).toUpperCase() === "<!DOCTYPE") {
+      const close = text.indexOf(">", at);
+      const open = text.indexOf("[", at);
+      if (close < 0) return null;
+      if (open >= 0 && open < close) {
+        // An internal subset: up to "]", then ">".
+        const subset = text.indexOf("]", open);
+        if (subset < 0) return null;
+        const end = text.indexOf(">", subset);
+        if (end < 0) return null;
+        at = end + 1;
+      } else at = close + 1;
+    } else break;
+  }
+  if (text.slice(at, at + 4).toLowerCase() !== "<svg") return null;
+  at += 4;
+  const next = text[at];
+  if (!isSpace(next) && next !== "/" && next !== ">") return null;
+  // Attributes: name, "=", a quoted value; up to ">" or "/>".
+  const attributes = new Map<string, string>();
+  for (;;) {
+    skipSpace();
+    const c = text[at];
+    if (c === undefined) return null;
+    if (c === ">" || c === "/") return attributes;
+    const start = at;
+    while (at < text.length && !isSpace(text[at]) && !"=/>".includes(text[at]!)) at++;
+    const name = text.slice(start, at);
+    skipSpace();
+    if (text[at] !== "=") {
+      if (name === "") return null;
+      attributes.set(name, "");
+      continue;
+    }
+    at++;
+    skipSpace();
+    const quote = text[at];
+    if (quote !== '"' && quote !== "'") return null;
+    const end = text.indexOf(quote, at + 1);
+    if (end < 0) return null;
+    if (!attributes.has(name)) attributes.set(name, text.slice(at + 1, end));
+    at = end + 1;
+  }
+}
 
 function isSvgText(text: string): boolean {
-  return SVG_ROOT.test(text);
+  return svgRootAttributes(text) !== null;
 }
 
 /** The media type from the first bytes, or null if they are not an image this extension reads. */
@@ -94,17 +162,35 @@ export function sniffImage(head: Uint8Array): ImageMediaType | null {
   return null;
 }
 
+/** Width and height swapped for EXIF orientations 5 to 8, which turn the picture a quarter. */
+function oriented(width: number, height: number, orientation: number) {
+  return orientation >= 5 ? size(height, width) : size(width, height);
+}
+
 function pngSize(b: Uint8Array): { width?: number; height?: number } {
   // The IHDR chunk comes first: length, "IHDR", width, height.
   if (b.length < 24 || !startsWith(b, [0x49, 0x48, 0x44, 0x52], 12)) return {};
-  return size(u32be(b, 16), u32be(b, 20));
+  const width = u32be(b, 16);
+  const height = u32be(b, 20);
+  // An eXIf chunk (a TIFF header and its entries) may turn the picture, as
+  // browsers apply it; it comes before the image data.
+  let orientation = 1;
+  for (let at = 8; at + 8 <= b.length;) {
+    const length = u32be(b, at);
+    const type = ascii(b.subarray(at + 4, at + 8), 4);
+    if (type === "IDAT" || type === "IEND") break;
+    const body = at + 8;
+    const end = Math.min(b.length, body + length);
+    if (type === "eXIf") orientation = tiffOrientation(b, body, end);
+    at = body + length + 4;
+  }
+  return oriented(width, height, orientation);
 }
 
-/** The EXIF orientation (1 to 8) in an APP1 segment's payload, or 1. */
-function exifOrientation(b: Uint8Array, start: number, end: number): number {
-  // "Exif\0\0", then a TIFF header.
-  if (!startsWith(b, [0x45, 0x78, 0x69, 0x66, 0, 0], start)) return 1;
-  const tiff = start + 6;
+/** The orientation (1 to 8) in a TIFF header and its first entries, or 1. */
+function tiffOrientation(b: Uint8Array, tiff: number, end: number): number {
+  // Some writers keep JPEG's "Exif\0\0" before the TIFF header.
+  if (startsWith(b, [0x45, 0x78, 0x69, 0x66, 0, 0], tiff)) tiff += 6;
   if (tiff + 8 > end) return 1;
   const little = b[tiff] === 0x49 && b[tiff + 1] === 0x49;
   const big = b[tiff] === 0x4d && b[tiff + 1] === 0x4d;
@@ -123,6 +209,13 @@ function exifOrientation(b: Uint8Array, start: number, end: number): number {
     }
   }
   return 1;
+}
+
+/** The EXIF orientation (1 to 8) in a JPEG APP1 segment's payload, or 1. */
+function exifOrientation(b: Uint8Array, start: number, end: number): number {
+  // "Exif\0\0", then a TIFF header.
+  if (!startsWith(b, [0x45, 0x78, 0x69, 0x66, 0, 0], start)) return 1;
+  return tiffOrientation(b, start, end);
 }
 
 function jpegSize(b: Uint8Array): { width?: number; height?: number } {
@@ -157,8 +250,7 @@ function jpegSize(b: Uint8Array): { width?: number; height?: number } {
       if (body + 5 > b.length) return {};
       const height = u16be(b, body + 1);
       const width = u16be(b, body + 3);
-      // Orientations 5 to 8 turn the picture a quarter: width and height swap.
-      return orientation >= 5 ? size(height, width) : size(width, height);
+      return oriented(width, height, orientation);
     }
     at += 2 + length;
   }
@@ -178,6 +270,8 @@ function webpSize(b: Uint8Array): { width?: number; height?: number } {
     const bits = u32le(b, 21);
     return size((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1);
   }
+  // Browsers do not turn WebP by an EXIF chunk (checked in Chromium and
+  // Firefox), so its size is the stored one.
   if (chunk === "VP8X") return size(u24le(b, 24) + 1, u24le(b, 27) + 1);
   return {};
 }
@@ -192,30 +286,35 @@ const CSS_UNITS: { readonly [unit: string]: number } = {
   pc: 16,
 };
 
-function attribute(attributes: string, name: string): string | undefined {
-  const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(
-    attributes,
-  );
-  return match ? (match[1] ?? match[2]) : undefined;
-}
-
-/** An absolute SVG length in pixels, or undefined (percentages, em, missing). */
-function length(value: string | undefined): number | undefined {
+/**
+ * An absolute SVG length in pixels, or undefined (percentages, em, missing).
+ * The renderer converts lengths the same way when it draws SVG at a size
+ * (`svgAtSize` in @galatsa/renderer); the two must agree.
+ */
+export function svgLength(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
-  const match = /^\s*([0-9]*\.?[0-9]+(?:e[+-]?[0-9]+)?)\s*([a-z]*)\s*$/i.exec(value);
-  if (!match) return undefined;
-  const factor = CSS_UNITS[match[2]!.toLowerCase()];
-  const n = Number(match[1]) * (factor ?? Number.NaN);
+  const text = value.trim().toLowerCase();
+  let unitStart = text.length;
+  while (unitStart > 0 && text[unitStart - 1]! >= "a" && text[unitStart - 1]! <= "z")
+    unitStart--;
+  // An exponent ("1e3") is part of the number, not a unit.
+  if (unitStart > 0 && text[unitStart] === "e" && unitStart + 1 === text.length)
+    return undefined;
+  const number = text.slice(0, unitStart).trim();
+  const factor = CSS_UNITS[text.slice(unitStart)];
+  if (number === "" || factor === undefined || !/^[0-9.e+-]+$/.test(number))
+    return undefined;
+  const n = Number(number) * factor;
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 function svgSize(b: Uint8Array): { width?: number; height?: number } {
-  const match = SVG_ROOT.exec(ascii(b, 1 << 16));
-  if (!match) return {};
-  const attributes = match[1]!;
-  let width = length(attribute(attributes, "width"));
-  let height = length(attribute(attributes, "height"));
-  const box = attribute(attributes, "viewBox")
+  const attributes = svgRootAttributes(ascii(b, 1 << 16));
+  if (attributes === null) return {};
+  let width = svgLength(attributes.get("width"));
+  let height = svgLength(attributes.get("height"));
+  const box = attributes
+    .get("viewBox")
     ?.trim()
     .split(/[\s,]+/)
     .map(Number);

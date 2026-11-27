@@ -213,6 +213,7 @@ describe("import", () => {
     expect(odd.notices.map((n) => n.message)).toEqual([
       "galatsa.image:notice.size-unknown",
     ]);
+    expect(odd.fragment.roots).toEqual([]);
     expect(t.importer.sniff!(png(1, 1))).toBe(true);
     expect(t.importer.sniff!(asciiBytes("<svg width='1'/>"))).toBe(true);
     expect(t.importer.sniff!(asciiBytes("plain"))).toBe(false);
@@ -271,18 +272,20 @@ describe("commands", () => {
     expect(t.element(id).size).toEqual({ w: 200, h: 150 });
   });
 
-  it("refuses to crop locked images, other elements and images of unknown size", () => {
+  it("refuses to crop locked images and other elements, and to insert images of unknown size", () => {
     const t = setup();
     const id = t.must<ElementId>(IMAGE_INSERT, { asset: ASSET, info: INFO });
     const crop: Rect = { x: 0, y: 0, w: 10, h: 10 };
     setLocked(t.doc, id, true);
     expect(t.run(IMAGE_CROP, { id, crop }).ok).toBe(false);
     const other = `sha256-${"cd".repeat(32)}` as AssetId;
-    const unsized = t.must<ElementId>(IMAGE_INSERT, {
-      asset: other,
-      info: { mediaType: "image/png", byteLength: 3 },
-    });
-    expect(t.run(IMAGE_CROP, { id: unsized, crop }).ok).toBe(false);
+    // An image without a size is not inserted at all: it could not be drawn.
+    expect(
+      t.run(IMAGE_INSERT, {
+        asset: other,
+        info: { mediaType: "image/png", byteLength: 3 },
+      }).ok,
+    ).toBe(false);
     expect(t.run(IMAGE_CROP, { id: "nothing", crop }).ok).toBe(false);
   });
 });

@@ -116,6 +116,22 @@ export function fitSize(
   return { w: w * fit, h: h * fit };
 }
 
+/** True if an asset description gives a pixel size. */
+export function hasSize(info: {
+  readonly width?: number | undefined;
+  readonly height?: number | undefined;
+}): boolean {
+  const { width, height } = info;
+  return (
+    typeof width === "number" &&
+    typeof height === "number" &&
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width > 0 &&
+    height > 0
+  );
+}
+
 function resolve(ctx: Pick<CommandContext, "doc">): Resolver {
   return new Resolver(yLookup(ctx.doc));
 }
@@ -164,12 +180,14 @@ const insertImage = defineCommand<InsertImageArgs, ElementId>({
   label: imageLabel("insert"),
   undoLabel: imageLabel("insert.step"),
   quick: true,
+  // An image without a pixel size could never be drawn: refused.
   enabled: (_ctx, args) =>
     args !== undefined &&
     typeof args.asset === "string" &&
     ASSET_ID_PATTERN.test(args.asset) &&
     typeof args.info === "object" &&
-    args.info !== null,
+    args.info !== null &&
+    hasSize(args.info),
   execute(ctx, args) {
     // The asset reference and its description are written by the same command.
     addAsset(ctx.doc, args.asset, args.info);
@@ -385,13 +403,9 @@ const imageFiles: ImporterDefinition = {
       };
     }
     const notices: Notice[] = [];
-    if (facts.width === undefined)
-      notices.push({
-        message: imageLabel("notice.size-unknown"),
-        values: { name: source.name },
-      });
     // The host stores the bytes once (by their hash) and makes the reduced
-    // versions; the same file imported again gives the same asset.
+    // versions; the same file imported again gives the same asset. A size the
+    // header did not give, the host may find by decoding the image.
     const { id, info } = await context.assets.put(bytes, {
       mediaType: facts.mediaType,
       name: source.name,
@@ -399,7 +413,16 @@ const imageFiles: ImporterDefinition = {
     });
     throwIfCancelled(context.cancellation);
     context.progress(1);
-    const size = fitSize(facts, context.view);
+    if (!hasSize(info)) {
+      // An image without a size cannot be drawn: it is not inserted.
+      return {
+        fragment: buildFragment([]),
+        notices: [
+          { message: imageLabel("notice.size-unknown"), values: { name: source.name } },
+        ],
+      };
+    }
+    const size = fitSize(info, context.view);
     const fragment = buildFragment(
       [
         {

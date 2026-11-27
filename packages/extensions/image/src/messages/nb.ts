@@ -22,6 +22,6 @@ export default {
   "file-type.webp": "WebP-bilde",
   "file-type.svg": "SVG-bilde",
   "notice.size-unknown":
-    "Størrelsen på {name} kunne ikke leses, så bildet ble satt inn som et kvadrat.",
+    "{name} kunne ikke leses som et bilde, så det ble ikke satt inn.",
   "notice.not-image": "{name} er ikke et bilde programmet kan lese.",
 };
