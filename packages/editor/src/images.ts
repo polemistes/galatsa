@@ -88,7 +88,8 @@ export function assetImages(
 ): ImageSource {
   const full: Partial<AssetAccess> =
     typeof access === "function" ? { getAsset: access } : access;
-  const getAsset = full.getAsset!;
+  // Called as a method: the session's methods use their own object.
+  const getAsset = (id: AssetId): Promise<Uint8Array | undefined> => full.getAsset!(id);
   const known = new Map<string, Known>();
   const asking = new Set<string>();
   const making = new Set<string>();

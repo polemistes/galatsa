@@ -5,7 +5,7 @@
 // crop, as in other presentation programs), and the crop tool, which drags the
 // edges of the shown part over the whole image and ends in one command.
 
-import type { ElementId, Point, Rect, Size } from "@galatsa/core";
+import type { AssetId, ElementId, Point, Rect, Size } from "@galatsa/core";
 import type {
   DrawContext,
   ElementPlacement,
@@ -157,6 +157,8 @@ export function dragCrop(
 /** What the crop tool needs to know about an image, from the document. */
 export interface CropTarget {
   readonly id: ElementId;
+  /** The image's asset, drawn whole under the shade where the overlay can (unturned images). */
+  readonly asset?: AssetId;
   readonly placement: ElementPlacement;
   /** The image's natural size. */
   readonly natural: Size;
@@ -350,10 +352,16 @@ export function drawCropOverlay(
     list.forEach((p, i) => (i === 0 ? path.moveTo(p.x, p.y) : path.lineTo(p.x, p.y)));
     path.closePath();
   };
+  // The whole image under a shade, so the user sees what the crop leaves
+  // out. The overlay only translates, so a turned image gets the shade alone.
+  if (target.asset !== undefined && box.rot === 0) {
+    const at = fromBoxFrame({ x: whole.x, y: whole.y }, box);
+    ctx.drawImage(target.asset, { x: at.x, y: at.y, w: whole.w, h: whole.h });
+  }
   const shade = ctx.createPath();
   outline(shade, corners(whole));
   outline(shade, corners(inner), true);
-  ctx.fill(shade, "rgba(15, 23, 42, 0.45)");
+  ctx.fill(shade, "rgba(15, 23, 42, 0.55)");
   const wholePath = ctx.createPath();
   outline(wholePath, corners(whole));
   ctx.stroke(wholePath, { color: "#64748b", width: px, dash: [4 * px, 4 * px] });

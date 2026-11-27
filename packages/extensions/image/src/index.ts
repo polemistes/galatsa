@@ -321,7 +321,13 @@ function cropTarget(session: ToolSession, id: ElementId): CropTarget | null {
   if (model.asset === null) return null;
   const natural = assetSize(env.doc, model.asset);
   if (natural === null) return null;
-  return { id, placement, natural, crop: model.crop ?? fullCrop(natural) };
+  return {
+    id,
+    asset: model.asset,
+    placement,
+    natural,
+    crop: model.crop ?? fullCrop(natural),
+  };
 }
 
 /** Whether the crop command would take some crop of this image (it is editable). */

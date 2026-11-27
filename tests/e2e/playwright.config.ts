@@ -63,7 +63,7 @@ export default defineConfig({
     {
       // The editor's development page, the selection tool, the camera and the
       // shape tools in Firefox and WebKit too, and (Firefox only, until WebKit
-      // pictures are stored) the shape screenshots. Chromium runs them in the
+      // pictures are stored) the shape screenshots and the image tests. Chromium runs them in the
       // "chromium" project above.
       name: "editor-firefox",
       testMatch: [
@@ -72,6 +72,7 @@ export default defineConfig({
         "camera.spec.ts",
         "shape-tool.spec.ts",
         "shapes-visual.spec.ts",
+        "images.spec.ts",
       ],
       use: { ...devices["Desktop Firefox"] },
     },
