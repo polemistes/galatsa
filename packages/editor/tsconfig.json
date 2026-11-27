@@ -1,0 +1,11 @@
+{
+  // Browser library: DOM types (see tsconfig.base.json). The tests run in Node:
+  // nothing may touch the DOM when a module is imported, and the editor core runs
+  // over an attached 2D context without a page.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.mts", "src/**/*.cts"]
+}
