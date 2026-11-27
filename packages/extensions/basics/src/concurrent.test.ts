@@ -3,17 +3,18 @@
 // Undo with two users. Two replicas run random commands (the basic commands,
 // insertions, undo and redo) and sync at random moments; at the end each user
 // undoes everything, syncing after every step. Every undo and redo is checked
-// against what "each user undoes only their own changes, and none of the other
-// user's changes is lost" means under the rules of docs/adr/0001, sections 5
-// and 10:
+// against what "each user undoes only their own changes, the undo is done, and
+// none of the other user's changes is lost" means under the rules of
+// docs/adr/0001, sections 5 and 10:
 //
 // 1. Values and places. No value the other user wrote that is current when the
 //    undo starts is replaced or removed by it: envelope keys (position, size,
 //    rotation, stacking key, container, rebase, lock, name, dissolved flag,
 //    layout version), data and ext keys, and what is inside shared types there.
-//    And no element moves on the canvas unless the undo takes back a move of
-//    it, or of something it is in: an undo never takes back, in effect, a move
-//    the other user made (moving a group, or the frame an element was put in).
+//    And nothing moves on the canvas except by positions the undo writes: put
+//    back every position the undo changed, and every element is where it was
+//    before. So an undo never takes back, in effect, a move the other user made
+//    (moving a group, or the frame an element was put in).
 // 2. Deletes. Nothing the other user's delete hides comes back.
 // 3. What disappears. An element that the user saw and that is gone after the
 //    undo is gone through a delete mark or a dissolve of this user's own: the
@@ -21,16 +22,31 @@
 //    delete. Such a removal hides only what the user saw, keeps what the other
 //    user did without knowing of it, and can be taken back (section 5.5); it is
 //    not a loss.
+// 4. The undo is done. Every value the step wrote that is still there when the
+//    undo starts is taken back: afterwards the key holds the value from before
+//    the step, or at least no longer the step's value (a container change done
+//    with a rebase that keeps the place). Only a change that would bring back
+//    something the other user deleted is held back (rule 2).
 //
 // And after every sync the two replicas hold the same document.
+//
+// CONCURRENT_SEEDS ("1-40" or "1,5,9") and CONCURRENT_STEPS change the run.
 
-import { roots, syncDocs, toSnapshot, forkDoc } from "@galatsa/core/ydoc";
+import {
+  Resolver,
+  lookupFromRecord,
+  type DocumentSnapshot,
+  type ElementId,
+  type Point,
+} from "@galatsa/core";
 import { seededRandom } from "@galatsa/core/testing";
-import type { ElementId, Point, Resolver } from "@galatsa/core";
+import { forkDoc, roots, syncDocs, toSnapshot } from "@galatsa/core/ydoc";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { BASICS } from "./index.ts";
 import {
+  envList,
+  envNumber,
   randomCommands,
   runRandom,
   setupBasics,
@@ -39,9 +55,12 @@ import {
   type RandomMemory,
 } from "./testing.ts";
 
-const STEPS = 400;
+/** A Yjs delete set, as stack items hold them. */
+type DeleteSet = Parameters<typeof Y.isDeleted>[0];
+
+const STEPS = envNumber("CONCURRENT_STEPS", 400);
 // Seeds 1 to 40 with 600 steps passed when this was written; these run by default.
-const SEEDS = [1, 2, 3, 4];
+const SEEDS = envList("CONCURRENT_SEEDS", [1, 2, 3, 4]);
 
 /** The map entry that holds a key's current value (Yjs keeps one per key). */
 function entry(map: Y.Map<unknown>, key: string) {
@@ -91,17 +110,64 @@ function collect(
 
 const TRACKER_KEYS = new Set(["rev", "deleted"]);
 
+function records(doc: Y.Doc): Array<[ElementId, Y.Map<unknown>]> {
+  return [...roots(doc).elements.entries()].filter(
+    (e): e is [ElementId, Y.Map<unknown>] => e[1] instanceof Y.Map,
+  );
+}
+
 function writtenBy(doc: Y.Doc, client: number): Written[] {
   const out: Written[] = [];
-  for (const [id, record] of roots(doc).elements.entries())
-    if (record instanceof Y.Map)
-      collect(
-        record as unknown as Y.AbstractType<unknown>,
-        id,
-        client,
-        out,
-        TRACKER_KEYS,
-      );
+  for (const [id, record] of records(doc))
+    collect(record as unknown as Y.AbstractType<unknown>, id, client, out, TRACKER_KEYS);
+  return out;
+}
+
+interface StepValue {
+  readonly label: string;
+  readonly id: ElementId;
+  readonly map: Y.Map<unknown>;
+  readonly key: string;
+  /** What the step wrote. */
+  readonly value: string;
+  /** What the key held before the step, if the step replaced a value. */
+  readonly old: string | undefined;
+}
+
+const json = (item: { content: { getContent(): unknown[] } }): string =>
+  JSON.stringify(item.content.getContent()[0] ?? null);
+
+/**
+ * The plain values in element records and their data that a step (a Yjs stack
+ * item) wrote and that are still current, with what they replaced.
+ */
+function stepValues(
+  doc: Y.Doc,
+  step: { insertions: DeleteSet; deletions: DeleteSet },
+): StepValue[] {
+  const out: StepValue[] = [];
+  const look = (id: ElementId, map: Y.Map<unknown>, prefix: string) => {
+    for (const [key, item] of map._map) {
+      if (item.deleted || TRACKER_KEYS.has(key) || item.content instanceof Y.ContentType)
+        continue;
+      if (!Y.isDeleted(step.insertions, item.id)) continue;
+      let old: string | undefined;
+      for (let left = item.left; left !== null; left = left.left)
+        if (
+          Y.isDeleted(step.deletions, left.id) &&
+          !Y.isDeleted(step.insertions, left.id)
+        ) {
+          old = json(left);
+          break;
+        }
+      out.push({ label: `${id}.${prefix}${key}`, id, map, key, value: json(item), old });
+    }
+  };
+  for (const [id, record] of records(doc)) {
+    look(id, record, "");
+    const data = record.get("data");
+    if (data instanceof Y.Map) look(id, data, "data.");
+  }
   return out;
 }
 
@@ -145,52 +211,44 @@ function samePoint(a: Point, b: Point): boolean {
   return close(a.x, b.x) && close(a.y, b.y);
 }
 
-/**
- * The elements whose positions an element's place on the canvas depends on: it,
- * the containers it is in, and the containers its position is written in
- * (after conflicting container changes, a position is converted from the space
- * it was written in, docs/adr/0001 section 5.3, rule 3), and so on up.
- */
-function placedBy(r: Resolver, id: ElementId): ElementId[] {
-  const out = new Set<ElementId>();
-  const queue: ElementId[] = [id];
-  while (queue.length > 0) {
-    const at = queue.pop()!;
-    if (out.has(at) || r.get(at) === undefined) continue;
-    out.add(at);
-    const parent = r.parentOf(at);
-    if (parent !== null) queue.push(parent);
-    const space = r.get(at)!.pos.space;
-    if (space !== null) queue.push(space);
+/** The state after, with every position put back that changed since the state before. */
+function withPositionsOf(after: DocumentSnapshot, before: DocumentSnapshot): Resolver {
+  const elements = { ...after.elements };
+  for (const [id, element] of Object.entries(after.elements)) {
+    const old = Object.hasOwn(before.elements, id) ? before.elements[id] : undefined;
+    if (old && JSON.stringify(old.pos) !== JSON.stringify(element.pos))
+      elements[id] = { ...element, pos: old.pos };
   }
-  return [...out];
+  return new Resolver(lookupFromRecord(elements));
 }
 
-/** Runs undo or redo for `me`, checking rules 1 to 3 against `other`. */
+/** Runs undo or redo for `me`, checking rules 1 to 4 against `other`. */
 function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): boolean {
   const mine = me.doc.clientID;
   const theirs = other.doc.clientID;
-  const elements = roots(me.doc).elements;
-  const posEntry = (id: ElementId) => entry(elements.get(id) as Y.Map<unknown>, "pos");
   const values = writtenBy(me.doc, theirs);
   const deleted = deletedBy(me, theirs);
-  const r0 = me.resolver();
+  // A resolver over the live document reads it when asked: keep the state before.
+  const snap0 = toSnapshot(me.doc);
+  const r0 = new Resolver(lookupFromRecord(snap0.elements));
   const seen = r0.drawOrder();
-  const places = new Map(
-    seen.map((id) => [id, { at: r0.worldOrigin(id), up: placedBy(r0, id) }]),
-  );
-  const positions = new Map([...elements.keys()].map((id) => [id, posEntry(id)]));
+  const stack = command === BASICS.undo ? me.undo.undoStack : me.undo.redoStack;
+  const size = stack.length;
+  const step = stack[size - 1];
+  const own = step ? stepValues(me.doc, step) : [];
   const outcome = me.run<boolean>(command);
   if (!outcome.ok || !outcome.value) return false;
   const r = me.resolver();
-  // 1. Values the other user wrote stay, and nothing moves on the canvas unless
-  // the undo moved it or something it is in.
+  // 1. Values the other user wrote stay, and nothing moves on the canvas except
+  // by the positions the undo writes.
   for (const w of values) expect(w.kept(), `value of the other: ${w.label}`).toBe(true);
-  for (const [id, { at, up }] of places) {
-    if (r.isGone(id) || samePoint(at, r.worldOrigin(id))) continue;
-    const movers = [...up, ...placedBy(r, id)];
-    const moved = movers.some((m) => posEntry(m) !== positions.get(m));
-    expect(moved, `${id} moved on the canvas by a step that did not move it`).toBe(true);
+  const back = withPositionsOf(toSnapshot(me.doc), snap0);
+  for (const id of seen) {
+    if (r.isGone(id)) continue;
+    expect(
+      samePoint(r0.worldOrigin(id), back.worldOrigin(id)),
+      `${id} moved on the canvas by something other than a position the step wrote`,
+    ).toBe(true);
   }
   // 2. What the other user deleted stays deleted.
   for (const id of deleted)
@@ -201,6 +259,15 @@ function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): b
     const by = removers(me, id);
     expect(by.has(mine), `${id} gone by ${[...by].join(",")}`).toBe(true);
   }
+  // 4. The undo is done (when Yjs undid this very step and did not skip it),
+  // except what would bring back something deleted by someone else.
+  if (stack.length === size - 1)
+    for (const v of own) {
+      if (r0.isDeleted(v.id) && r.isDeleted(v.id)) continue;
+      const item = entry(v.map, v.key);
+      const now = item && !item.deleted ? json(item) : undefined;
+      expect(now !== v.value || now === v.old, `${v.label} not taken back`).toBe(true);
+    }
   return true;
 }
 
@@ -382,7 +449,7 @@ describe("two users undoing concurrently", () => {
     [1, 2],
     [2, 1],
   ] as const)
-    it(`a half-done undo does not bring back what the other user deleted (clients ${clients.join("/")})`, () => {
+    it(`a half-done undo is finished (the hole filled) before it is judged, and brings back nothing the other user deleted (clients ${clients.join("/")})`, () => {
       const { a, b, sync } = pair(clients);
       const f = a.frame(0, 0, 400, 400);
       const l = a.frame(10, 10, 300, 300, f);
@@ -391,17 +458,20 @@ describe("two users undoing concurrently", () => {
       sync();
       // Concurrently: A moves X out to the root, B groups X and Y.
       a.must(BASICS.reparent, { ids: [x], target: null });
-      b.must<ElementId>(BASICS.group, { ids: [x, y] });
+      const g = b.must<ElementId>(BASICS.group, { ids: [x, y] });
       sync();
       a.must(BASICS.delete, { ids: [f] });
       sync();
-      const hiddenBefore = b.resolver().isGone(x);
+      // If B's grouping won X's parent, the undo cannot put the parent back (A's
+      // write is on record): a hole, filled with L.
+      const grouped = b.resolver().parentOf(x) === g;
+      expect(b.resolver().isGone(x)).toBe(grouped);
       b.must(BASICS.undo);
       sync();
       for (const user of [a, b]) {
         const r = user.resolver();
         expect(r.isGone(y)).toBe(true);
-        if (hiddenBefore) expect(r.isGone(x)).toBe(true);
+        if (grouped) expect([r.parentOf(x), r.isGone(x)]).toEqual([l, true]);
       }
     });
 

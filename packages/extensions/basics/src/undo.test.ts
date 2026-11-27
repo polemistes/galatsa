@@ -21,6 +21,9 @@ import {
   visibleState,
   withSeed,
   type BasicsSetup,
+  envList,
+  envNumber,
+  watchSettle,
   type RandomMemory,
 } from "./testing.ts";
 
@@ -28,9 +31,12 @@ const COMMANDS = 1000;
 // A seed takes a few seconds with the two ends checked, and about two minutes
 // with every step checked (a snapshot per step). Seeds 1 to 42 passed with
 // every step checked when this was written. By default three seeds run with
-// the ends checked, and one with every step checked over fewer commands.
-const SEEDS = [1, 2, 3];
-const STEP_CHECKED = { seed: 4, commands: 250 };
+// the ends checked, and one with every step checked over fewer commands. The
+// environment can change both: UNDO_SEEDS and UNDO_STEP_SEEDS ("1-42" or
+// "1,5,9"), UNDO_STEP_COMMANDS.
+const SEEDS = envList("UNDO_SEEDS", [1, 2, 3]);
+const STEP_SEEDS = envList("UNDO_STEP_SEEDS", [4]);
+const STEP_COMMANDS = envNumber("UNDO_STEP_COMMANDS", 250);
 
 /** Where two states differ, briefly. */
 function diff(a: DocumentSnapshot, b: DocumentSnapshot): string {
@@ -131,6 +137,7 @@ function scenario(seed: number, count = COMMANDS, checks = false) {
     const doc = new Y.Doc();
     doc.clientID = seed;
     const t = setupBasics({ doc });
+    const stats = watchSettle(t);
     const empty = visibleState(doc);
     const random = seededRandom(seed);
     const memory: RandomMemory = {};
@@ -163,7 +170,7 @@ function scenario(seed: number, count = COMMANDS, checks = false) {
       if (outcomes.every((o) => !o.ok)) expect(updates).toBe(updatesBefore);
       history.after(id, last.ok, last.ok ? last.value : undefined, before, u0, r0);
     }
-    return { t, empty, log, succeeded, history };
+    return { t, empty, log, succeeded, history, stats };
   });
 }
 
@@ -189,11 +196,11 @@ function redoSteps(history: History, count: number): void {
 describe("a thousand random commands", () => {
   const runs = [
     ...SEEDS.map((seed) => ({ seed, commands: COMMANDS, checks: false })),
-    { ...STEP_CHECKED, checks: true },
+    ...STEP_SEEDS.map((seed) => ({ seed, commands: STEP_COMMANDS, checks: true })),
   ];
   for (const { seed, commands, checks } of runs) {
     it(`undo back to the empty document and redo to the same result (${commands} commands, seed ${seed}${checks ? ", every step checked" : ""})`, () => {
-      const { t, empty, succeeded, history } = scenario(seed, commands, checks);
+      const { t, empty, succeeded, history, stats } = scenario(seed, commands, checks);
       const final = visibleState(t.doc);
       expect(Object.keys(final.elements).length).toBeGreaterThan(10);
       // The scenario exercised the commands it is about.
@@ -224,7 +231,9 @@ describe("a thousand random commands", () => {
         expect(visibleState(t.doc)).toEqual(final);
       });
       expect(history.mismatches).toEqual([]);
-    }, 120_000);
+      // One user alone: no undo ever has to be finished.
+      expect(stats).toEqual({ holes: 0, settled: 0 });
+    }, 1_200_000);
   }
 
   it("is reproducible from its seed", () => {

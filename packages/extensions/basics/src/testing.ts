@@ -21,6 +21,7 @@ import {
   addElement,
   createUndoManager,
   initDocument,
+  roots,
   toSnapshot,
   yLookup,
 } from "@galatsa/core/ydoc";
@@ -434,4 +435,66 @@ export function withSeed<T>(seed: number, fn: () => T): T {
     if (ownValues) crypto.getRandomValues = own;
     else delete (crypto as { getRandomValues?: unknown }).getRandomValues;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Settings from the environment, and counting how undos are finished
+// ---------------------------------------------------------------------------
+
+function env(name: string): string | undefined {
+  return (globalThis as { process?: { env: Record<string, string | undefined> } }).process
+    ?.env[name];
+}
+
+/**
+ * A list of numbers from an environment variable ("1,2,5" or "1-40"), for
+ * running the random tests with more seeds than by default.
+ */
+export function envList(name: string, fallback: readonly number[]): number[] {
+  const raw = env(name);
+  if (!raw) return [...fallback];
+  const range = /^(\d+)-(\d+)$/.exec(raw);
+  if (range) {
+    const [from, to] = [Number(range[1]), Number(range[2])];
+    return Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  }
+  return raw.split(",").map(Number);
+}
+
+/** A number from an environment variable. */
+export function envNumber(name: string, fallback: number): number {
+  const raw = env(name);
+  return raw ? Number(raw) : fallback;
+}
+
+/** How often the undo manager had to finish an undo or redo (docs/adr/0001, section 10). */
+export interface SettleStats {
+  /** Holes filled. */
+  holes: number;
+  /** Other writes: changes of container held back, or done with a rebase that keeps the place. */
+  settled: number;
+}
+
+/** Counts the transactions that finish the undos and redos of `t`'s undo manager. */
+export function watchSettle(t: BasicsSetup): SettleStats {
+  const stats: SettleStats = { holes: 0, settled: 0 };
+  const elements = roots(t.doc).elements;
+  t.doc.on("afterTransaction", (tr: Y.Transaction) => {
+    if (tr.origin !== t.undo.settleOrigin) return;
+    let hole = false;
+    let other = false;
+    for (const [type, keys] of tr.changed) {
+      const item = type._item;
+      if (!(type instanceof Y.Map) || item === null || item.parent !== elements) continue;
+      const changes = new Y.YMapEvent(type as Y.Map<unknown>, tr, keys as Set<string>)
+        .changes.keys;
+      for (const change of changes.values()) {
+        if (change.action === "add") hole = true;
+        else other = true;
+      }
+    }
+    if (hole) stats.holes += 1;
+    if (other) stats.settled += 1;
+  });
+  return stats;
 }
