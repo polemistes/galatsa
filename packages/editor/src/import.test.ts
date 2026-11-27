@@ -13,7 +13,12 @@ import { previewSizes } from "@galatsa/renderer";
 import { describe, expect, it } from "vitest";
 import { ensurePreviews, sessionAssetStore, type AssetAccess } from "./assets.ts";
 import { readClipboard } from "./clipboard.ts";
-import { chooseImporter, importSource, type ImportFile } from "./import.ts";
+import {
+  chooseImporter,
+  importSource,
+  MAX_IMPORT_BYTES,
+  type ImportFile,
+} from "./import.ts";
 import { testEditor } from "./test-support.ts";
 
 function png(width: number, height: number, salt = 0): Uint8Array {
@@ -217,5 +222,50 @@ describe("reduced versions", () => {
         throw new Error("cannot decode");
       }),
     ).toBe(false);
+  });
+});
+
+describe("reading files", () => {
+  it("reads only the first bytes to recognise a file", async () => {
+    let whole = 0;
+    let part = 0;
+    const big: ImportFile = {
+      name: "noname",
+      type: "",
+      size: 10_000_000,
+      arrayBuffer: async () => {
+        whole++;
+        return new ArrayBuffer(10_000_000);
+      },
+      slice: (start, end) => ({
+        arrayBuffer: async () => {
+          part++;
+          return png(1, 1).slice(start, end).buffer;
+        },
+      }),
+    };
+    const head = await importSource(big).head();
+    expect(head.length).toBe(40);
+    expect([whole, part]).toEqual([0, 1]);
+  });
+
+  it("refuses files larger than the limit, unread, with a notice", async () => {
+    const { editor } = editorWithStore();
+    let read = 0;
+    const huge: ImportFile = {
+      name: "huge.png",
+      type: "image/png",
+      size: MAX_IMPORT_BYTES + 1,
+      arrayBuffer: async () => {
+        read++;
+        return new ArrayBuffer(0);
+      },
+    };
+    expect(await editor.importFiles([huge])).toBe(false);
+    expect(read).toBe(0);
+    expect(editor.notice).toEqual({
+      message: "editor:import.tooLarge",
+      values: { name: "huge.png", size: 256 },
+    });
   });
 });

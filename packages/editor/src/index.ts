@@ -61,6 +61,7 @@ export {
   importSource,
   IMPORT_CASCADE,
   IMPORT_NOTICES,
+  MAX_IMPORT_BYTES,
   MAX_IMPORT_FILES,
   mergeFragments,
   placeFragments,

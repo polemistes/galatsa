@@ -56,6 +56,8 @@ export default {
     "Denne presentasjonen trenger en nyere versjon av Galatsa, så denne versjonen kan ikke lagre den.",
   "notice.save-no-merge-state":
     "Fila ble lagret, men uten historikken som gjør at den kan flettes med andre kopier.",
+  "notice.save-without-previews":
+    "Fila ble lagret uten de mindre utgavene av bildene, fordi den ville blitt for stor med dem. Den åpnes litt langsommere; ingenting av presentasjonen mangler.",
   "recovery.heading": "Ulagret arbeid",
   "recovery.offer":
     "«{title}» ble ikke lukket som vanlig. Siste endring ble gjort {when, date, medium} klokka {when, time, short}. Vil du fortsette der du slapp?",

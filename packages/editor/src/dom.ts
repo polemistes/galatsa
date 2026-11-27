@@ -96,8 +96,15 @@ function filesOf(data: DataTransfer): ImportFile[] {
   return files;
 }
 
-/** Image items of the asynchronous clipboard, as files to import. */
-async function imageFilesOf(items: readonly ClipboardItem[]): Promise<ImportFile[]> {
+/**
+ * Image items of the asynchronous clipboard, as files to import. They have no
+ * name of their own; the one they get ("Pasted image 1") is the user's
+ * language, since it becomes the element's name and may be shown in notices.
+ */
+async function imageFilesOf(
+  items: readonly ClipboardItem[],
+  i18n: I18n,
+): Promise<ImportFile[]> {
   const files: ImportFile[] = [];
   for (const [i, item] of items.entries()) {
     const type = item.types.find((t) => t.startsWith("image/"));
@@ -108,7 +115,7 @@ async function imageFilesOf(items: readonly ClipboardItem[]): Promise<ImportFile
       .replace("svg+xml", "svg")
       .replace("jpeg", "jpg");
     files.push({
-      name: `clipboard-${i + 1}.${suffix}`,
+      name: `${i18n.t("editor:import.clipboardName", { number: i + 1 })}.${suffix}`,
       type,
       size: blob.size,
       arrayBuffer: () => blob.arrayBuffer(),
@@ -412,7 +419,7 @@ export function mountEditor(
       }
       readItems().then(
         async (items) => {
-          const files = await imageFilesOf(items);
+          const files = await imageFilesOf(items, i18n);
           if (files.length > 0) void editor.importFiles(files);
           else pasteText();
         },

@@ -160,11 +160,13 @@ describe("notices", () => {
       { code: "asset-missing", message: "" },
       { code: "migrated", message: "" },
       { code: "thumbnail-missing", message: "" },
+      { code: "previews-not-written", message: "" },
     ]);
     expect(notices.map((n) => [n.code, n.values?.["count"]])).toEqual([
       ["file-upgraded", undefined],
       ["merge-identity-lost", undefined],
       ["assets-missing", 2],
+      ["save-without-previews", undefined],
     ]);
   });
 });

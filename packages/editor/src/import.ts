@@ -28,12 +28,20 @@ export interface ImportFile {
   readonly type: string;
   readonly size?: number;
   arrayBuffer(): Promise<ArrayBuffer>;
+  /** A part of the file (a `File` has it), so the first bytes can be read alone. */
+  slice?(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> };
 }
 
 /** How many bytes `sniff` gets. */
 export const SNIFF_BYTES = 4096;
 /** The most files one import takes; more are left out with a notice. */
 export const MAX_IMPORT_FILES = 100;
+/**
+ * The largest file one import takes, in bytes (256 MiB): larger ones are
+ * named in a notice and not read. Files are read whole into memory, and a
+ * presentation file is limited to 4 GiB in all.
+ */
+export const MAX_IMPORT_BYTES = 256 * 1024 * 1024;
 /** Files after the first are placed this many screen pixels down and right of the one before. */
 export const IMPORT_CASCADE = 24;
 
@@ -52,7 +60,11 @@ export function importSource(file: ImportFile): ImportSource & {
     async *chunks() {
       yield await all();
     },
-    head: async () => (await all()).subarray(0, SNIFF_BYTES),
+    // The first bytes alone where the file can give a part of itself.
+    head: async () =>
+      bytes === null && file.slice !== undefined
+        ? new Uint8Array(await file.slice(0, SNIFF_BYTES).arrayBuffer())
+        : (await all()).subarray(0, SNIFF_BYTES),
   };
 }
 
@@ -162,6 +174,7 @@ export const IMPORT_NOTICES = {
   unsupported: "editor:import.unsupported",
   failed: "editor:import.failed",
   tooMany: "editor:import.tooMany",
+  tooLarge: "editor:import.tooLarge",
 } as const;
 
 /** Runs the importers over files, one after another. Never throws. */
@@ -179,6 +192,13 @@ export async function readFiles(
       values: { count: MAX_IMPORT_FILES },
     });
   for (const file of files.slice(0, MAX_IMPORT_FILES)) {
+    if (file.size !== undefined && file.size > MAX_IMPORT_BYTES) {
+      notices.push({
+        message: IMPORT_NOTICES.tooLarge,
+        values: { name: file.name, size: Math.round(MAX_IMPORT_BYTES / 1024 ** 2) },
+      });
+      continue;
+    }
     const source = importSource(file);
     try {
       const importer = await chooseImporter(host, source, mode);
