@@ -195,6 +195,35 @@ describe("loading", () => {
     expect(host.commands.get("broken/x")).toBeUndefined();
   });
 
+  it("offers overlays per mode, checks their names and takes them back on unload", () => {
+    const host = new EditorHost();
+    const overlay = (name: string, quick?: boolean) => ({
+      name,
+      ...(quick !== undefined ? { quick } : {}),
+      draw: () => {},
+    });
+    const withOverlays = (id: string, overlays: ReturnType<typeof overlay>[]) => {
+      const e = ext(id);
+      return { ...e, contributes: { ...e.contributes, overlays } };
+    };
+    const problems = host.load([
+      withOverlays("lines", [overlay("route", true), overlay("grid")]),
+      withOverlays("twice", [overlay("a"), overlay("a")]),
+      withOverlays("badname", [overlay("Not ok")]),
+    ]);
+    expect(problems.map((p) => [p.extension, p.code])).toEqual([
+      ["twice", "invalid"],
+      ["badname", "invalid"],
+    ]);
+    expect(host.overlays("quick").map((o) => o.id)).toEqual(["lines/route"]);
+    expect(host.overlays("advanced").map((o) => o.id)).toEqual([
+      "lines/route",
+      "lines/grid",
+    ]);
+    host.unload("lines");
+    expect(host.overlays()).toEqual([]);
+  });
+
   it("has a user-facing message for every problem", () => {
     const message = problemMessage({
       extension: "a",

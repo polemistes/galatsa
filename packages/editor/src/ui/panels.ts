@@ -10,12 +10,24 @@ import type {
   PanelDefinition,
   Registered,
 } from "@galatsa/extension-api/editing";
+import type { I18n } from "@galatsa/i18n";
 import type { Component } from "svelte";
 
 /** What a custom panel's Svelte component gets. */
 export interface PanelProps {
   /** The command context of the editor's document now (services, history, run). */
   readonly context: CommandContext;
+  /**
+   * The program's translations, for the panel's text in the language the
+   * user chose (docs/adr/0013: a custom panel had no way to its text).
+   */
+  readonly i18n: I18n;
+  /**
+   * Gives the canvas the keyboard focus. A panel calls it after the user
+   * acted with a button or a list, so that undo and the canvas's other keys
+   * work at once, without a click on the canvas (docs/adr/0013).
+   */
+  focusCanvas(): void;
 }
 
 declare module "@galatsa/extension-api/editing" {

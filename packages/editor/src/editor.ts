@@ -116,9 +116,10 @@ export interface PointerInput {
 
 export type EditorChange = StateChange | "tool" | "cursor" | "notice";
 
-/** A message the interface shows (a message key of the editor's bundle). */
+/** A message the interface shows (a message key, of the editor's bundle or an extension's). */
 export interface EditorNotice {
   readonly message: string;
+  readonly values?: MessageValues;
 }
 
 /** The notice for each reason a paste is refused. */
@@ -187,6 +188,7 @@ export class Editor {
   #clipboard: { readonly fragment: Fragment; readonly origin: ClipboardOrigin } | null =
     null;
   #notice: EditorNotice | null = null;
+  #focusCanvas: (() => void) | null = null;
   /** The context menu (right click), drawn by the interface. */
   readonly contextMenu = new ContextMenu();
   #disposed = false;
@@ -253,6 +255,11 @@ export class Editor {
         this.invalidate();
       }),
     );
+    // Overlays show what the live resolver does not report (stops, routes):
+    // any change to the document draws them again (docs/adr/0013).
+    const documentChanged = (): void => this.#overlaysChanged();
+    doc.on("update", documentChanged);
+    this.#cleanup.push(() => doc.off("update", documentChanged));
     this.services = createServices(
       {
         live: this.live,
@@ -268,11 +275,14 @@ export class Editor {
             if (current !== null && !this.tools.available().some((t) => t.id === current))
               this.tools.selectDefault();
           }
+          // An overlay may be shown only while a panel is open, or per mode.
+          if (what === "mode" || what === "panels") this.#overlaysChanged();
           this.#emit(what);
         },
         placeCamera: (view) => this.#view.place(view),
         previewChanged: () => this.#view.follow(),
         toScreen: (point) => this.#view.toScreen(point),
+        notify: (message, values) => this.#notify(message, values),
       },
       this.#state,
     );
@@ -443,12 +453,31 @@ export class Editor {
     this.renderer.render();
   }
 
+  /** Draws again if any extension draws an overlay. */
+  #overlaysChanged(): void {
+    if (this.host.overlays(this.#state.mode).length > 0) this.invalidate();
+  }
+
   /**
-   * The overlay, in screen space (CSS pixels): the selection outline from the
-   * renderer's screen rectangles, then the tool's preview, which the tool
-   * draws in root space through a projection.
+   * The overlay, in screen space (CSS pixels): the extensions' overlays, which
+   * draw in root space through a projection (docs/adr/0013), the selection
+   * outline from the renderer's screen rectangles, then the tool's preview,
+   * also in root space.
    */
   #drawOverlay(ctx: DrawContext): void {
+    const overlays = this.host.overlays(this.#state.mode);
+    if (overlays.length > 0) {
+      const context = this.host.commands.context(this.environment());
+      const projected = projectedContext(ctx, this.projection(null));
+      for (const overlay of overlays) {
+        try {
+          if (overlay.definition.visible?.(context) === false) continue;
+          overlay.definition.draw(projected, context);
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    }
     const px = 1 / ctx.scale;
     for (const id of this.#state.selection) {
       const rect = this.renderer.screenBounds(id);
@@ -844,9 +873,23 @@ export class Editor {
     this.#emit("notice");
   }
 
-  #notify(message: string): void {
-    this.#notice = { message };
+  #notify(message: string, values?: MessageValues): void {
+    this.#notice = values === undefined ? { message } : { message, values };
     this.#emit("notice");
+  }
+
+  /**
+   * Gives the canvas the keyboard focus, so its keys (undo, the tools'
+   * shortcuts) work again after the user acted in a panel or a dialog. Does
+   * nothing until the canvas is mounted in a page.
+   */
+  focusCanvas(): void {
+    this.#focusCanvas?.();
+  }
+
+  /** How to focus the canvas; set by the page that mounts it (`mountEditor`). */
+  setCanvasFocus(focus: (() => void) | null): void {
+    this.#focusCanvas = focus;
   }
 
   /**

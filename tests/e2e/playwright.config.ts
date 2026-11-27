@@ -62,7 +62,7 @@ export default defineConfig({
     },
     {
       // The editor's development page, the selection tool, the camera and the
-      // shape tools in Firefox and WebKit too, and (Firefox only, until WebKit
+      // shape tools and the routes panel in Firefox and WebKit too, and (Firefox only, until WebKit
       // pictures are stored) the shape screenshots. Chromium runs them in the
       // "chromium" project above.
       name: "editor-firefox",
@@ -72,6 +72,7 @@ export default defineConfig({
         "camera.spec.ts",
         "shape-tool.spec.ts",
         "shapes-visual.spec.ts",
+        "routes.spec.ts",
       ],
       use: { ...devices["Desktop Firefox"] },
     },
@@ -84,6 +85,7 @@ export default defineConfig({
               "selection.spec.ts",
               "camera.spec.ts",
               "shape-tool.spec.ts",
+              "routes.spec.ts",
             ],
             use: { ...devices["Desktop Safari"] },
           },

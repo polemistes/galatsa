@@ -96,6 +96,9 @@ export function mountEditor(
   });
   container.append(surface);
   editor.mountCanvas(surface);
+  editor.setCanvasFocus(() => {
+    if (surface.isConnected) surface.focus({ preventScroll: true });
+  });
 
   const offList: Array<() => void> = [];
   const on = <K extends keyof HTMLElementEventMap>(
@@ -321,6 +324,7 @@ export function mountEditor(
   });
   offList.push(stopMenu);
   offList.push(() => editor.contextMenu.close());
+  offList.push(() => editor.setCanvasFocus(null));
   // A middle click would start the browser's autoscroll.
   on("auxclick", (e) => e.preventDefault());
 
