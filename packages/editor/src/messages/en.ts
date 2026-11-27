@@ -26,6 +26,8 @@ export default {
   "recovery.deleteConfirm": "Yes, delete the presentation",
   "recovery.discardConfirm": "Choose the file and discard the changes",
   "recovery.discardNoFile": "No file was chosen. Nothing was discarded.",
+  "recovery.otherDocument":
+    "“{name}” is a different presentation. Nothing was discarded. Choose the file the presentation was last saved to.",
   "problems.heading": "Something was not loaded",
   "panels.label": "Panels",
 };

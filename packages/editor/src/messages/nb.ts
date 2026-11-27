@@ -26,6 +26,8 @@ export default {
   "recovery.deleteConfirm": "Ja, slett presentasjonen",
   "recovery.discardConfirm": "Velg filen og forkast endringene",
   "recovery.discardNoFile": "Filen ble ikke valgt. Ingenting er forkastet.",
+  "recovery.otherDocument":
+    "«{name}» er en annen presentasjon. Ingenting er forkastet. Velg filen presentasjonen sist ble lagret til.",
   "problems.heading": "Noe ble ikke lastet",
   "panels.label": "Paneler",
 };

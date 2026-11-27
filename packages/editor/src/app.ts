@@ -33,6 +33,7 @@ import { EditorDocument } from "./document.ts";
 import { Editor } from "./editor.ts";
 import { loadExtensions } from "./extensions.ts";
 import { assetImages } from "./images.ts";
+import { checkDiscardFile, type DiscardFileCheck } from "./recovery.ts";
 
 export type AppPhase =
   | "starting"
@@ -283,12 +284,20 @@ export class EditorApp {
   /**
    * "Discard the changes", for a document saved to a file: the user picks the
    * file (no file handle is kept yet), which is opened before the stored copy
-   * goes. Resolves to null if the user did not pick a file.
+   * goes. Resolves to null if the user did not pick a file. A file that is
+   * not the same presentation is refused before anything is discarded
+   * ("other-document"); the user can pick again.
    */
-  async discard(slot: string): Promise<DiscardResult | null> {
-    const file = await pickFileToOpen(this.i18n.t("editor:file.type"));
-    if (file === null) return null;
-    const result = await this.storage.discardChanges(slot, file);
+  async discard(
+    slot: string,
+  ): Promise<DiscardResult | Extract<DiscardFileCheck, { ok: false }> | null> {
+    const offer = this.#state.offers.find((o) => o.slot === slot);
+    if (offer === undefined) return null;
+    const picked = await pickFileToOpen(this.i18n.t("editor:file.type"));
+    if (picked === null) return null;
+    const check = await checkDiscardFile(offer, picked);
+    if (!check.ok) return check;
+    const result = await this.storage.discardChanges(slot, check.file);
     if (result.ok) {
       this.#set({ offers: this.#without(slot) });
       await this.#show(result);

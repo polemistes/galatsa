@@ -29,6 +29,8 @@
   function discard(): void {
     void app.discard(offer.slot).then((result) => {
       if (result === null) message = t("editor:recovery.discardNoFile");
+      else if (!result.ok && result.reason === "other-document")
+        message = t("editor:recovery.otherDocument", { name: result.name });
       else if (!result.ok && result.reason === "file-failed")
         message = noticeText(i18n, result.problem);
     });
