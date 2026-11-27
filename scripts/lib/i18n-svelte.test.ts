@@ -182,6 +182,48 @@ describe("findHardcodedText follows the component's script into the markup", () 
     ]);
   });
 
+  it("follows $state.raw, $state.snapshot and $derived.by", () => {
+    const source = [
+      '<script lang="ts">',
+      "  let { busy, n } = $props();",
+      '  let raw = $state.raw("Raw text");',
+      '  let copy = $state.snapshot(busy ? "Snapshot A" : "Snapshot B");',
+      "  let summary = $derived.by(() => {",
+      '    if (n === 0) return "Nothing";',
+      "    return `${n} items`;",
+      "  });",
+      '  let short = $derived.by(() => (busy ? "Busy" : "Ready"));',
+      "  function pick() {",
+      '    return "Picked";',
+      "  }",
+      "  let named = $derived.by(pick);",
+      "  let quiet = $derived.by(() => n + 1); // a number, not text",
+      "</script>",
+      "<p>{raw} {copy} {summary} {short} {named} {quiet}</p>",
+    ].join("\n");
+    expect(texts(source)).toEqual([
+      "Raw text",
+      "Snapshot A",
+      "Snapshot B",
+      "Nothing",
+      "items",
+      "Busy",
+      "Ready",
+      "Picked",
+    ]);
+  });
+
+  it("does not report the runes' arguments where they are not shown", () => {
+    const source = [
+      "<script>",
+      '  let mode = $state.raw("advanced");',
+      '  let key = $derived.by(() => "editor:toolbar.save");',
+      "</script>",
+      '<div data-mode={mode} class={$state.snapshot("wide")}>{t(key)}</div>',
+    ].join("\n");
+    expect(texts(source)).toEqual([]);
+  });
+
   it("checks a module script too", () => {
     const source = [
       "<script module>",

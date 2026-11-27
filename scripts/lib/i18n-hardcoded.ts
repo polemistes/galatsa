@@ -63,7 +63,8 @@
 // in the markup, expressions in the markup and text attributes are text places as
 // in JSX, and the <script> blocks and every expression of the markup are checked
 // as one TypeScript script with the rules above. Runes that stand for their first
-// argument ($state, $derived) are followed like the value itself.
+// argument ($state, $state.raw, $state.snapshot, $derived) are followed like the
+// value itself, and $derived.by through what its function returns.
 
 import { parse as parseSvelte } from "svelte/compiler";
 import ts from "typescript";
@@ -223,8 +224,17 @@ const TEXT_OPTIONS: ReadonlyMap<string, readonly [number, readonly string[]]> = 
   ["showNotification", [1, ["body"]]],
 ]);
 
-/** Svelte runes whose value is their first argument: $state("Save") is "Save". */
-const SVELTE_VALUE_RUNES: readonly string[] = ["$state", "$derived"];
+/**
+ * Svelte runes whose value is their first argument: $state("Save") is "Save", and
+ * so are $state.raw("Save") and $state.snapshot. ($derived.by is what its function
+ * returns; see checkValue.)
+ */
+const SVELTE_VALUE_RUNES: readonly string[] = [
+  "$state",
+  "$state.raw",
+  "$state.snapshot",
+  "$derived",
+];
 
 /** String methods whose result contains the text of the string they are called on. */
 const STRING_METHODS: readonly string[] = [
@@ -514,7 +524,29 @@ function scanScript(
     } else if (ts.isCallExpression(expression)) {
       const callee = expression.expression;
       if (ts.isPropertyAccessExpression(callee)) {
-        if (STRING_METHODS.includes(callee.name.text)) {
+        const rune = ts.isIdentifier(callee.expression)
+          ? `${callee.expression.text}.${callee.name.text}`
+          : undefined;
+        const first = expression.arguments[0];
+        if (rune !== undefined && SVELTE_VALUE_RUNES.includes(rune)) {
+          // $state.raw("Save") and $state.snapshot(x) are their first argument.
+          if (first !== undefined) again(first);
+        } else if (rune === "$derived.by") {
+          // $derived.by(() => "Save") is what its function returns.
+          let fn: ts.Expression | undefined = first;
+          while (fn !== undefined && ts.isParenthesizedExpression(fn)) fn = fn.expression;
+          let target: ts.FunctionLikeDeclaration | undefined;
+          if (fn !== undefined && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)))
+            target = fn;
+          else if (fn !== undefined && ts.isIdentifier(fn)) {
+            const declaration = resolve(fn);
+            target = declaration && functionOf(declaration);
+          }
+          if (target !== undefined && !seen.has(target)) {
+            seen.add(target);
+            for (const value of returnedValues(target)) again(value);
+          }
+        } else if (STRING_METHODS.includes(callee.name.text)) {
           again(callee.expression);
           if (callee.name.text === "concat") expression.arguments.forEach(again);
         }
