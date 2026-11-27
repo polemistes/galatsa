@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Test helpers for extensions: a drawing context that records what is drawn
-// instead of drawing pixels. Exported as "@galatsa/extension-api/testing"; not
-// part of the program.
+// instead of drawing pixels, and editor services over a real document. Exported
+// as "@galatsa/extension-api/testing"; not part of the program.
 
 import type { AssetId, Rect } from "@galatsa/core";
+
+export { createTestServices, type TestServices } from "./testing-services.ts";
 import type { MessageValues } from "@galatsa/i18n";
 import type {
   Color,

@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FileFormatError } from "./errors.ts";
 import { deflateSync } from "fflate";
 import { fromUtf8, utf8 } from "./json.ts";
 import { crc32, isSafeEntryName, readZip, writeZip } from "./zip.ts";
+
+// Counts the compressed bytes the reader feeds to fflate's streaming inflater, so
+// a test can check how much work the reader did without measuring time.
+const inflateInput = vi.hoisted(() => ({ bytes: 0 }));
+vi.mock("fflate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("fflate")>();
+  class Inflate extends real.Inflate {
+    override push(chunk: Uint8Array, final?: boolean): void {
+      inflateInput.bytes += chunk.length;
+      super.push(chunk, final);
+    }
+  }
+  return { ...real, Inflate };
+});
 
 function replaceAll(bytes: Uint8Array, from: string, to: string): Uint8Array {
   const out = bytes.slice();
@@ -210,9 +224,14 @@ describe("zip reader limits (review findings)", () => {
       crc32(new Uint8Array(1)),
       ["a"],
     );
-    const start = Date.now();
+    const compressed = deflateSync(raw, { level: 9 });
+    inflateInput.bytes = 0;
     expect(code(() => readZip(file))).toBe("damaged");
-    expect(Date.now() - start).toBeLessThan(150);
+    // The first chunk (16 KiB of compressed input) already overflows the declared
+    // size; the reader must stop there instead of inflating all 64 MiB.
+    expect(inflateInput.bytes).toBeGreaterThan(0);
+    expect(inflateInput.bytes).toBeLessThanOrEqual(16 * 1024);
+    expect(inflateInput.bytes).toBeLessThan(compressed.length);
   });
 
   it("rejects a local header whose name differs from the directory", () => {

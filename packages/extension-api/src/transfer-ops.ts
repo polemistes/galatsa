@@ -22,17 +22,16 @@ import {
 import { pasteFragment, toSnapshot, type PasteResult } from "@galatsa/core/ydoc";
 import type * as Y from "yjs";
 import type { CommandContext } from "./command.ts";
-import type { ElementTypeDefinition } from "./element-type.ts";
+import type { AnyElementEditing } from "./element-editing.ts";
+import type { AnyElementView } from "./element-type.ts";
 import type { ExportInput, ImportResult } from "./transfer.ts";
 
 /** A new element for a fragment, positioned in the fragment's common space. */
 export interface FragmentElement {
-  /** The element type id and its definition, so the data is written in its current layout. */
+  /** The element type id and its parts, so the data is written in its current layout. */
   readonly type: string;
-  readonly definition: Pick<
-    ElementTypeDefinition<unknown>,
-    "typeVersion" | "read" | "references"
-  >;
+  readonly view: AnyElementView;
+  readonly editing?: AnyElementEditing;
   readonly x: number;
   readonly y: number;
   readonly w: number;
@@ -62,10 +61,10 @@ export function buildFragment(
   };
   elements.forEach((init, i) => {
     const id = newId();
-    const model = init.definition.read(init.data, init.definition.typeVersion, () => {});
+    const model = init.view.read(init.data, init.view.typeVersion, () => {});
     const element: Element = {
       type: init.type,
-      typeVersion: init.definition.typeVersion,
+      typeVersion: init.view.typeVersion,
       parent: null,
       order: keys[i]!,
       pos: { x: init.x, y: init.y, space: null },
@@ -78,7 +77,7 @@ export function buildFragment(
       deleted: {},
       dissolved: false,
       purged: false,
-      refs: [...new Set(init.definition.references?.(model) ?? [])].sort(),
+      refs: [...new Set(init.editing?.references?.(model) ?? [])].sort(),
       ext: {},
       data: init.data,
     };

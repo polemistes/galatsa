@@ -1,132 +1,58 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Sketch of the text extension: a text box whose content is shared rich text,
-// edited in place through the renderer, with style properties, a tool that
-// places a box and starts editing, a panel for the default font size, and an
-// exporter of all text as a plain outline. Data layout version 2; version 1
-// had no font family and alignment, and is upgraded when the user edits such
-// an element.
+// Sketch of the text extension, editing part: in-place editing through the
+// renderer, style properties, bold for the selected text, a tool that places a
+// box and starts editing, a panel for the default font size, and an exporter of
+// all text as a plain outline.
 
 import {
   Resolver,
   lookupFromRecord,
   type ElementData,
   type ElementId,
-  type YTextValue,
 } from "@galatsa/core";
-import { roots, setSetting } from "@galatsa/core/ydoc";
+import { dataMap, edit, roots, setSetting } from "@galatsa/core/ydoc";
 import {
+  capabilitiesOf,
   defineCommand,
-  defineElementType,
-  defineExtension,
+  defineEditExtension,
+  defineElementEditing,
+  elementFacts,
   insertElement,
   throwIfCancelled,
   updateElementData,
-  capabilitiesOf,
-  elementFacts,
   type CommandContext,
   type ExporterDefinition,
   type FieldDefinition,
-  type TextStyle,
-} from "@galatsa/extension-api";
+} from "@galatsa/extension-api/editing";
+import * as Y from "yjs";
+import { label, readFieldChange } from "./common.ts";
 import {
-  API,
-  label,
-  readChoice,
-  readColor,
-  readFieldChange,
-  readNumber,
-} from "./common.ts";
-import { exampleMessages } from "./messages/index.ts";
+  ALIGNS,
+  DEFAULT_COLOR,
+  DEFAULT_SIZE,
+  FAMILIES,
+  LINE_HEIGHT,
+  TEXT_EXTENSION,
+  TEXT_TYPE,
+  plainText,
+  styleOf,
+  textView,
+  textViewExtension,
+} from "./text-view.ts";
 
-export const TEXT_EXTENSION = "examples.text";
-export const TEXT_TYPE = `${TEXT_EXTENSION}/text`;
+export * from "./text-view.ts";
+
 export const TEXT_INSERT = `${TEXT_EXTENSION}/insert`;
 export const TEXT_SET_STYLE = `${TEXT_EXTENSION}/set-style`;
 export const TEXT_SET_DEFAULT = `${TEXT_EXTENSION}/set-default`;
+export const TEXT_TOGGLE_BOLD = `${TEXT_EXTENSION}/toggle-bold`;
 /** Document setting with the font size of new text boxes. */
 export const DEFAULT_SIZE_SETTING = `${TEXT_EXTENSION}.defaultFontSize`;
 
-/** Font families by generic name; the renderer maps them to the fonts it bundles. */
-const FAMILIES = ["sans", "serif"] as const;
-const ALIGNS = ["left", "center", "right"] as const;
-
-export interface TextModel {
-  readonly text: YTextValue;
-  readonly fontSize: number;
-  readonly color: string;
-  readonly fontFamily: (typeof FAMILIES)[number];
-  readonly align: (typeof ALIGNS)[number];
-}
-
-const EMPTY_TEXT: YTextValue = { $y: "text", delta: [] };
-const DEFAULT_SIZE = 24;
-const DEFAULT_COLOR = "#1e293b";
-const LINE_HEIGHT = 1.2;
-
-function isText(value: unknown): value is YTextValue {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    (value as { $y?: unknown }).$y === "text" &&
-    Array.isArray((value as { delta?: unknown }).delta)
-  );
-}
-
-function styleOf(model: TextModel): TextStyle {
-  return {
-    fontFamily: model.fontFamily,
-    fontSize: model.fontSize,
-    color: model.color,
-    align: model.align,
-    lineHeight: LINE_HEIGHT,
-  };
-}
-
-/** The text as plain characters (embeds left out). */
-export function plainText(text: YTextValue): string {
-  return text.delta
-    .map((run) => (typeof run.insert === "string" ? run.insert : ""))
-    .join("");
-}
-
-export const textType = defineElementType<TextModel>({
-  name: "text",
-  label: label("text.name"),
-  typeVersion: 2,
-  read(data, typeVersion, report) {
-    const text = Object.hasOwn(data, "text") ? data["text"] : undefined;
-    if (!isText(text)) report("text", "must be shared text, read as empty");
-    return {
-      text: isText(text) ? text : EMPTY_TEXT,
-      fontSize: readNumber(data, "fontSize", DEFAULT_SIZE, report, {
-        min: 0.01,
-        max: 1e6,
-      }),
-      color: readColor(data, "color", DEFAULT_COLOR, report) ?? DEFAULT_COLOR,
-      // Version 1 had neither key: its text was always left-aligned sans serif.
-      fontFamily:
-        typeVersion < 2
-          ? "sans"
-          : readChoice(data, "fontFamily", FAMILIES, "sans", report),
-      align: typeVersion < 2 ? "left" : readChoice(data, "align", ALIGNS, "left", report),
-    };
-  },
-  upgrade(_data, from) {
-    // Adds the keys version 2 introduced, with what version 1 implied.
-    return from < 2 ? { fontFamily: "sans", align: "left" } : {};
-  },
-  draw(model, ctx, box) {
-    if (ctx.detail === "box") {
-      // A few pixels tall: a faint bar in the text colour stands in for the text.
-      const bar = ctx.createPath();
-      bar.rect(0, 0, box.w, Math.min(box.h, model.fontSize));
-      ctx.withOpacity(0.3, () => ctx.fill(bar, model.color));
-      return;
-    }
-    const layout = ctx.layoutText(model.text, styleOf(model), box.w);
-    ctx.drawText(layout, 0, 0);
-  },
+export const textEditing = defineElementEditing(textView, {
+  // No upgrade function: version 2 only added keys, whose defaults mean what
+  // version 1 implied. The host raises the version before the first edit.
   textEditing(model, box) {
     return {
       key: "text",
@@ -200,7 +126,7 @@ const insertText = defineCommand<InsertTextArgs | undefined, ElementId>({
     const content = args?.text ?? "";
     const w = args?.w ?? fontSize * 10;
     const h = Math.max(1, content.split("\n").length) * fontSize * LINE_HEIGHT;
-    const view = ctx.viewport;
+    const view = ctx.services.camera.viewport();
     const data: ElementData = {
       text: { $y: "text", delta: content === "" ? [] : [{ insert: content }] },
       fontSize,
@@ -211,8 +137,8 @@ const insertText = defineCommand<InsertTextArgs | undefined, ElementId>({
     return insertElement(ctx, {
       type: TEXT_TYPE,
       parent: args?.parent ?? null,
-      x: args?.x ?? (view ? view.x + view.w / 2 - w / 2 : 0),
-      y: args?.y ?? (view ? view.y + view.h / 2 - h / 2 : 0),
+      x: args?.x ?? view.x + view.w / 2 - w / 2,
+      y: args?.y ?? view.y + view.h / 2 - h / 2,
       size: { w, h },
       data,
     });
@@ -248,6 +174,50 @@ const setStyle = defineCommand<unknown, void>({
     const change = readFieldChange(args)!;
     for (const id of change.ids)
       updateElementData(ctx, id, { [change.key]: change.value });
+  },
+});
+
+/** The shared text being edited and the selected range, if bold can apply. */
+function editedRange(
+  ctx: CommandContext,
+): { text: Y.Text; index: number; length: number } | undefined {
+  const state = ctx.services.text.current();
+  if (state === null || state.length === 0) return undefined;
+  if (!allEditableText(ctx, [state.id])) return undefined;
+  const text = dataMap(ctx.doc, state.id).get(state.key);
+  return text instanceof Y.Text
+    ? { text, index: state.index, length: state.length }
+    : undefined;
+}
+
+/** True if every character in the range is bold. */
+function allBold(text: Y.Text, index: number, length: number): boolean {
+  let at = 0;
+  for (const run of text.toDelta() as Array<{ insert: unknown; attributes?: object }>) {
+    const size = typeof run.insert === "string" ? run.insert.length : 1;
+    const overlaps = at < index + length && at + size > index;
+    if (overlaps && (run.attributes as { bold?: unknown } | undefined)?.bold !== true)
+      return false;
+    at += size;
+  }
+  return true;
+}
+
+/**
+ * Bold for the selected text, through the editor's text service: the command
+ * formats the shared text in place, as one undo step separate from the typing
+ * before it.
+ */
+const toggleBold = defineCommand<undefined, void>({
+  name: "toggle-bold",
+  label: label("text.bold"),
+  shortcuts: ["Mod+B"],
+  quick: true,
+  enabled: (ctx) => editedRange(ctx) !== undefined,
+  execute(ctx) {
+    const { text, index, length } = editedRange(ctx)!;
+    const bold = allBold(text, index, length) ? null : true;
+    edit(ctx.doc, () => text.format(index, length, { bold }));
   },
 });
 
@@ -308,8 +278,8 @@ const outlineExporter: ExporterDefinition = {
       throwIfCancelled(context.cancellation);
       const element = snapshot.elements[id]!;
       if (element.type !== TEXT_TYPE || (chosen && !chosen.has(id))) return;
-      if (element.typeVersion > textType.typeVersion) return;
-      const model = textType.read(element.data, element.typeVersion, () => {});
+      if (element.typeVersion > textView.typeVersion) return;
+      const model = textView.read(element.data, element.typeVersion, () => {});
       parts.push(plainText(model.text));
       context.progress((i + 1) / order.length);
     });
@@ -318,14 +288,11 @@ const outlineExporter: ExporterDefinition = {
   },
 };
 
-export const textExtension = defineExtension({
-  id: TEXT_EXTENSION,
-  version: "0.1.0",
-  api: API,
-  messages: [exampleMessages],
+export const textExtension = defineEditExtension({
+  view: textViewExtension,
   contributes: {
-    elementTypes: [textType],
-    commands: [insertText, setStyle, setDefault],
+    elementTypes: [textEditing],
+    commands: [insertText, setStyle, toggleBold, setDefault],
     tools: [
       {
         name: "text",

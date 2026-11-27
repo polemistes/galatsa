@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Small helpers shared by the example extensions: typed labels, and readers for
-// the plain values in element data. Each reader returns a default and reports
-// when the value does not fit, as an element type's `read` must.
+// the plain values in element data. Each reader returns the default for a
+// missing key without a report, and the default with a report for a value
+// that does not fit, as an element type's `read` must. Viewing parts use this
+// file, so it imports nothing at run time from the editing entry.
 
 import type { DataValue, ElementData, Json } from "@galatsa/core";
 import {
@@ -10,9 +12,9 @@ import {
   messageKey,
   type ApiVersion,
   type DataReport,
-  type FieldChange,
   type Label,
 } from "@galatsa/extension-api";
+import type { FieldChange } from "@galatsa/extension-api/editing";
 import type { BundleKey } from "@galatsa/i18n";
 import { exampleMessages } from "./messages/index.ts";
 
@@ -23,6 +25,7 @@ export function label(key: BundleKey<typeof exampleMessages>): Label {
   return messageKey(exampleMessages, key);
 }
 
+/** The value of a key, or undefined when the key is missing. */
 function own(data: ElementData, key: string): DataValue | undefined {
   return Object.hasOwn(data, key) ? data[key] : undefined;
 }
@@ -35,6 +38,7 @@ export function readNumber(
   range: { readonly min?: number; readonly max?: number } = {},
 ): number {
   const value = own(data, key);
+  if (value === undefined) return fallback;
   if (
     typeof value === "number" &&
     Number.isFinite(value) &&
@@ -56,6 +60,7 @@ export function readColor(
   allowNone = false,
 ): string | null {
   const value = own(data, key);
+  if (value === undefined) return fallback;
   if (typeof value === "string" && value.length > 0 && value.length <= 64) return value;
   if (value === null && allowNone) return null;
   report(key, "must be a colour");
@@ -70,6 +75,7 @@ export function readChoice<T extends string>(
   report: DataReport,
 ): T {
   const value = own(data, key);
+  if (value === undefined) return fallback;
   if (typeof value === "string" && (choices as readonly string[]).includes(value)) {
     return value as T;
   }

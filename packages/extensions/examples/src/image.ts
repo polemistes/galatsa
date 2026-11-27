@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Sketch of the image extension: an image element refers to an asset (the
-// bytes live in the asset store, the document holds the asset's description),
-// is drawn through the renderer's image levels, can be cropped, and comes in
-// through an importer for image files. A command that writes an asset
-// reference registers the asset's description in the same command.
+// Sketch of the image extension, editing part: inserting an image (a command
+// that writes an asset reference registers the asset's description in the same
+// command), cropping, opacity, and an importer for image files.
 
 import type { AssetId, AssetInfo, ElementId, Rect } from "@galatsa/core";
 import { ASSET_ID_PATTERN } from "@galatsa/core";
@@ -13,92 +11,32 @@ import {
   buildFragment,
   capabilitiesOf,
   defineCommand,
-  defineElementType,
-  defineExtension,
+  defineEditExtension,
+  defineElementEditing,
   elementFacts,
   insertElement,
   throwIfCancelled,
   updateElementData,
   type CommandContext,
-  type ImageState,
   type ImporterDefinition,
   type Notice,
-} from "@galatsa/extension-api";
-import { API, label, readFieldChange, readNumber } from "./common.ts";
-import { exampleMessages } from "./messages/index.ts";
+} from "@galatsa/extension-api/editing";
+import { label, readFieldChange } from "./common.ts";
+import {
+  IMAGE_EXTENSION,
+  IMAGE_TYPE,
+  imageView,
+  imageViewExtension,
+  isRect,
+} from "./image-view.ts";
 
-export const IMAGE_EXTENSION = "examples.image";
-export const IMAGE_TYPE = `${IMAGE_EXTENSION}/image`;
+export * from "./image-view.ts";
+
 export const IMAGE_INSERT = `${IMAGE_EXTENSION}/insert`;
 export const IMAGE_SET_STYLE = `${IMAGE_EXTENSION}/set-style`;
 export const IMAGE_SET_CROP = `${IMAGE_EXTENSION}/set-crop`;
 
-export interface ImageModel {
-  readonly asset: AssetId | null;
-  /** The part of the image shown, in the image's pixels; null for all of it. */
-  readonly crop: Rect | null;
-  readonly opacity: number;
-}
-
-function isRect(value: unknown): value is Rect {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const r = value as Record<string, unknown>;
-  return (
-    ["x", "y", "w", "h"].every(
-      (k) => typeof r[k] === "number" && Number.isFinite(r[k]),
-    ) &&
-    (r["w"] as number) > 0 &&
-    (r["h"] as number) > 0
-  );
-}
-
-export const imageType = defineElementType<ImageModel>({
-  name: "image",
-  label: label("image.name"),
-  typeVersion: 1,
-  read(data, _typeVersion, report) {
-    const asset = Object.hasOwn(data, "asset") ? data["asset"] : undefined;
-    const isAsset = typeof asset === "string" && ASSET_ID_PATTERN.test(asset);
-    if (!isAsset) report("asset", "must be an asset id, read as none");
-    const crop = Object.hasOwn(data, "crop") ? data["crop"] : null;
-    if (crop !== null && !isRect(crop))
-      report("crop", "must be a rectangle or null, read as null");
-    return {
-      asset: isAsset ? (asset as AssetId) : null,
-      crop: isRect(crop) ? { x: crop.x, y: crop.y, w: crop.w, h: crop.h } : null,
-      opacity: readNumber(data, "opacity", 1, report, { min: 0, max: 1 }),
-    };
-  },
-  assets: (model) => (model.asset === null ? [] : [model.asset]),
-  draw(model, ctx, box) {
-    const dest = { x: 0, y: 0, w: box.w, h: box.h };
-    // Assigned in the callback, so the type is given rather than narrowed.
-    let state = "missing" as ImageState;
-    ctx.withOpacity(model.opacity, () => {
-      if (model.asset !== null)
-        state = ctx.drawImage(model.asset, dest, model.crop ? { crop: model.crop } : {});
-    });
-    if (state === "drawn") return;
-    // Loading or missing: a grey box with a cross; missing also says so.
-    const frame = ctx.createPath();
-    frame.rect(0, 0, box.w, box.h);
-    ctx.fill(frame, "rgb(203 213 225)");
-    const cross = ctx.createPath();
-    cross.moveTo(0, 0);
-    cross.lineTo(box.w, box.h);
-    cross.moveTo(box.w, 0);
-    cross.lineTo(0, box.h);
-    ctx.stroke(cross, { color: "rgb(148 163 184)", width: 1 / ctx.scale });
-    if (state === "missing" && ctx.detail === "full") {
-      const fontSize = Math.min(14 / ctx.scale, box.h / 4);
-      const layout = ctx.layoutText(
-        ctx.t(label("image.missing")),
-        { fontFamily: "sans", fontSize, color: "rgb(71 85 105)", align: "center" },
-        box.w,
-      );
-      ctx.drawText(layout, 0, (box.h - layout.height) / 2);
-    }
-  },
+export const imageEditing = defineElementEditing(imageView, {
   properties: [
     {
       key: "opacity",
@@ -124,8 +62,7 @@ export interface InsertImageArgs {
 function initialSize(info: AssetInfo, ctx: CommandContext): { w: number; h: number } {
   const w = info.width ?? 400;
   const h = info.height ?? info.width ?? 400;
-  const view = ctx.viewport;
-  if (!view) return { w, h };
+  const view = ctx.services.camera.viewport();
   const fit = Math.min(1, view.w / 2 / w, view.h / 2 / h);
   return { w: w * fit, h: h * fit };
 }
@@ -145,12 +82,12 @@ const insertImage = defineCommand<InsertImageArgs, ElementId>({
       args.w !== undefined && args.h !== undefined
         ? { w: args.w, h: args.h }
         : initialSize(args.info, ctx);
-    const view = ctx.viewport;
+    const view = ctx.services.camera.viewport();
     return insertElement(ctx, {
       type: IMAGE_TYPE,
       parent: args.parent ?? null,
-      x: args.x ?? (view ? view.x + view.w / 2 - size.w / 2 : 0),
-      y: args.y ?? (view ? view.y + view.h / 2 - size.h / 2 : 0),
+      x: args.x ?? view.x + view.w / 2 - size.w / 2,
+      y: args.y ?? view.y + view.h / 2 - size.h / 2,
       size,
       name: args.info.name ?? "",
       data: { asset: args.asset, crop: null, opacity: 1 },
@@ -284,7 +221,7 @@ const imageFiles: ImporterDefinition = {
       [
         {
           type: IMAGE_TYPE,
-          definition: imageType,
+          view: imageView,
           x: 0,
           y: 0,
           w: size?.width ?? side,
@@ -299,13 +236,10 @@ const imageFiles: ImporterDefinition = {
   },
 };
 
-export const imageExtension = defineExtension({
-  id: IMAGE_EXTENSION,
-  version: "0.1.0",
-  api: API,
-  messages: [exampleMessages],
+export const imageExtension = defineEditExtension({
+  view: imageViewExtension,
   contributes: {
-    elementTypes: [imageType],
+    elementTypes: [imageEditing],
     commands: [insertImage, setStyle, setCrop],
     importers: [imageFiles],
   },

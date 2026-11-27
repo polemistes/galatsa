@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The extension manifest: who an extension is, what it needs, and what it
-// contributes. See docs/adr/0005-extension-interface.md, section 9.
+// The viewing part of an extension manifest: who the extension is, what it
+// needs, its texts, and what a viewer needs from it (element types and
+// transitions). The editing part, which refers to it, is in edit-extension.ts.
+// See docs/adr/0005-extension-interface.md, section 9.
 
 import type { MessageBundle } from "@galatsa/i18n";
-import type { CommandDefinition } from "./command.ts";
-import type { AnyElementType } from "./element-type.ts";
+import type { AnyElementView } from "./element-type.ts";
 import type { ApiVersion, ExtensionId } from "./ids.ts";
-import type { PanelDefinition } from "./panel.ts";
-import type { ToolDefinition } from "./tool.ts";
-import type { ExporterDefinition, ImporterDefinition } from "./transfer.ts";
 import type { AnyTransition } from "./transition.ts";
 
 export interface ExtensionDependency {
@@ -21,18 +19,6 @@ export interface ExtensionDependency {
   readonly optional?: boolean;
 }
 
-/** Everything an extension adds, declared up front so the host can check it before activation. */
-export interface Contributions {
-  readonly elementTypes?: readonly AnyElementType[];
-  readonly tools?: readonly ToolDefinition[];
-  /** Commands of any argument and result types (their methods are checked bivariantly). */
-  readonly commands?: readonly CommandDefinition[];
-  readonly importers?: readonly ImporterDefinition[];
-  readonly exporters?: readonly ExporterDefinition[];
-  readonly transitions?: readonly AnyTransition[];
-  readonly panels?: readonly PanelDefinition[];
-}
-
 export interface ActivationContext {
   readonly extension: ExtensionId;
   /** The interface version the host implements. */
@@ -41,7 +27,12 @@ export interface ActivationContext {
   isActive(id: ExtensionId): boolean;
 }
 
-export interface Extension {
+/**
+ * The viewing part of an extension: everything the player needs. It must not
+ * import editing code (commands, tools, the document's Yjs operations), so a
+ * viewer that loads it carries none of that.
+ */
+export interface ViewExtension {
   readonly id: ExtensionId;
   /** The extension's own version (semantic versioning), shown to users. */
   readonly version: string;
@@ -54,7 +45,8 @@ export interface Extension {
    * extensions shipped together can share one bundle.
    */
   readonly messages?: readonly MessageBundle[];
-  readonly contributes?: Contributions;
+  readonly elementTypes?: readonly AnyElementView[];
+  readonly transitions?: readonly AnyTransition[];
   /**
    * Called once, after its dependencies are active and before its
    * contributions are offered. Synchronous: an extension that needs to load
@@ -66,6 +58,6 @@ export interface Extension {
 }
 
 /** Identity function, for type checking a manifest where it is written. */
-export function defineExtension(extension: Extension): Extension {
+export function defineViewExtension(extension: ViewExtension): ViewExtension {
   return extension;
 }

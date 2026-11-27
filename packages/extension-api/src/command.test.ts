@@ -1,35 +1,51 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The command registry: undo steps, nesting, gestures, modes and shortcuts.
+// The command registry: undo steps, nesting, failures, history, gestures,
+// modes and shortcuts.
 
-import { FRAME_TYPE } from "@galatsa/core";
+import { FRAME_TYPE, purgeSnapshot, type ElementId } from "@galatsa/core";
 import {
   addElement,
   createUndoManager,
+  deleteElements,
+  edit,
+  forkDoc,
   initDocument,
   moveElement,
   setTitle,
+  syncDocs,
   toSnapshot,
 } from "@galatsa/core/ydoc";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { defineCommand, type CommandEnvironment } from "./command.ts";
-import { ExtensionHost } from "./host.ts";
+import { EditorHost } from "./editor-host.ts";
 import { EXTENSION_API_VERSION, normalizeShortcut, type Mode } from "./ids.ts";
+import { createTestServices } from "./testing-services.ts";
 
-function setup(mode: Mode = "advanced") {
+function makeDoc(mode: Mode = "advanced", count = 1) {
   const doc = new Y.Doc();
   initDocument(doc);
   const undo = createUndoManager(doc);
-  const host = new ExtensionHost();
-  const frame = addElement(doc, { type: FRAME_TYPE, x: 0, y: 0, size: { w: 10, h: 10 } });
+  const frames = Array.from({ length: count }, (_, i) =>
+    addElement(doc, { type: FRAME_TYPE, x: i, y: 0, size: { w: 10, h: 10 } }),
+  );
   undo.clear();
-  const env = (): CommandEnvironment => ({ doc, undo, mode, selection: [] });
+  const services = createTestServices(doc, { mode });
+  const env = (): CommandEnvironment => ({ doc, undo, services });
+  const title = () => toSnapshot(doc).title;
+  const x = (i = 0) => toSnapshot(doc).elements[frames[i]!]!.pos.x;
+  return { doc, undo, frames, services, env, title, x };
+}
+
+type TestDoc = ReturnType<typeof makeDoc>;
+
+function makeHost(docs: TestDoc[]) {
+  const framesOf = (doc: Y.Doc): ElementId[] => docs.find((d) => d.doc === doc)!.frames;
+  const host = new EditorHost();
   host.load([
     {
-      id: "t",
-      version: "1.0.0",
-      api: EXTENSION_API_VERSION,
+      view: { id: "t", version: "1.0.0", api: EXTENSION_API_VERSION },
       contributes: {
         commands: [
           defineCommand<string, void>({
@@ -43,7 +59,13 @@ function setup(mode: Mode = "advanced") {
             label: "common:a",
             quick: true,
             shortcuts: ["mod+t"],
-            execute: (ctx, a) => moveElement(ctx.doc, frame, a.x, 0),
+            // All frames, in one transaction.
+            execute: (ctx, a) =>
+              edit(ctx.doc, () =>
+                framesOf(ctx.doc).forEach((id, i) =>
+                  moveElement(ctx.doc, id, i + a.x, 0),
+                ),
+              ),
           }),
           defineCommand<undefined, string>({
             name: "both",
@@ -53,6 +75,15 @@ function setup(mode: Mode = "advanced") {
               ctx.run("t/title", "Both");
               ctx.run("t/move", { x: 5 });
               return "done";
+            },
+          }),
+          defineCommand<undefined, void>({
+            name: "half",
+            label: "common:a",
+            quick: true,
+            execute(ctx) {
+              setTitle(ctx.doc, "half");
+              throw new Error("fails after a change");
             },
           }),
           defineCommand<undefined, void>({
@@ -75,13 +106,31 @@ function setup(mode: Mode = "advanced") {
             undoable: false,
             execute: () => {},
           }),
+          defineCommand<undefined, void>({
+            name: "outer-view",
+            label: "common:a",
+            undoable: false,
+            execute(ctx) {
+              ctx.run("t/title", "x");
+              ctx.run("t/half");
+            },
+          }),
+          defineCommand<undefined, boolean>({
+            name: "undo",
+            label: "common:a",
+            undoable: false,
+            execute: (ctx) => ctx.history.undo(),
+          }),
         ],
       },
     },
   ]);
-  const title = () => toSnapshot(doc).title;
-  const x = () => toSnapshot(doc).elements[frame]!.pos.x;
-  return { doc, undo, host, env, title, x };
+  return host;
+}
+
+function setup(mode: Mode = "advanced") {
+  const d = makeDoc(mode);
+  return { ...d, host: makeHost([d]) };
 }
 
 describe("command registry", () => {
@@ -139,6 +188,33 @@ describe("command registry", () => {
     expect(t.undo.undoStack.length).toBe(0);
   });
 
+  it("takes back a failed command and keeps the redo stack", () => {
+    const t = setup();
+    t.host.commands.execute("t/title", t.env(), "x");
+    t.undo.undo();
+    expect(t.undo.redoStack.length).toBe(1);
+    expect(t.host.commands.execute("t/half", t.env())).toMatchObject({
+      ok: false,
+      reason: "failed",
+    });
+    expect(t.title()).toBe("");
+    expect(t.undo.undoStack.length).toBe(0);
+    expect(t.undo.redoStack.length).toBe(1);
+    t.undo.redo();
+    expect(t.title()).toBe("x");
+  });
+
+  it("makes each undoable command run by a non-undoable one a step, taken back if it fails", () => {
+    const t = setup();
+    const outcome = t.host.commands.execute("t/outer-view", t.env());
+    expect(outcome).toMatchObject({ ok: false, reason: "failed" });
+    // "title" was its own step; "half" changed the title and failed, and is gone.
+    expect(t.title()).toBe("x");
+    expect(t.undo.undoStack.length).toBe(1);
+    t.undo.undo();
+    expect(t.title()).toBe("");
+  });
+
   it("builds the keyboard map per mode and reports conflicts", () => {
     const t = setup();
     const advanced = t.host.commands.shortcuts("advanced");
@@ -146,7 +222,6 @@ describe("command registry", () => {
     expect(advanced.conflicts).toEqual([
       { shortcut: "Mod+t", kept: "t/title", ignored: "t/move" },
     ]);
-    // In quick mode the advanced command is absent, so there is no conflict.
     const quick = t.host.commands.shortcuts("quick");
     expect(quick.map.get("Mod+t")).toBe("t/move");
     expect(quick.conflicts).toEqual([]);
@@ -154,50 +229,101 @@ describe("command registry", () => {
 });
 
 describe("gestures", () => {
-  it("make one undo step of many commands, applied as they run", () => {
-    const t = setup();
-    const gesture = t.host.commands.beginGesture(t.env);
-    for (const x of [1, 2, 3, 4]) {
-      expect(gesture.run("t/move", { x }).ok).toBe(true);
-      expect(t.x()).toBe(x);
+  it("preview without writing, and commit once: one transaction, one undo step", () => {
+    const t = makeDoc("advanced", 50);
+    const host = makeHost([t]);
+    const before = Y.encodeStateAsUpdate(t.doc).length;
+    let updates = 0;
+    t.doc.on("update", () => updates++);
+    const gesture = host.commands.beginGesture(t.env());
+    for (let step = 1; step <= 120; step++) {
+      gesture.preview(Object.fromEntries(t.frames.map((id, i) => [id, { x: i + step }])));
     }
-    gesture.commit();
+    expect(updates).toBe(0);
+    expect(t.services.state.previews).toBe(120);
+    expect(t.services.state.preview).not.toBeNull();
+    expect(gesture.commit("t/move", { x: 120 }).ok).toBe(true);
+    expect(t.services.state.preview).toBeNull();
+    expect(gesture.active).toBe(false);
+    // The move itself, and the work tracker's follow-up transaction.
+    expect(updates).toBeLessThanOrEqual(2);
     expect(t.undo.undoStack.length).toBe(1);
-    expect(gesture.run("t/move", { x: 9 }).ok).toBe(false);
+    expect(t.x(49)).toBe(169);
+    expect(Y.encodeStateAsUpdate(t.doc).length - before).toBeLessThan(4000);
     t.undo.undo();
-    expect(t.x()).toBe(0);
-    // A command after the gesture is a step of its own.
-    t.host.commands.execute("t/move", t.env(), { x: 7 });
-    t.host.commands.execute("t/move", t.env(), { x: 8 });
-    expect(t.undo.undoStack.length).toBe(2);
+    expect(t.x(49)).toBe(49);
   });
 
-  it("take everything back when cancelled, without a redo step", () => {
+  it("cancel writes nothing, so a cancelled drag is not work", () => {
+    for (const withGesture of [false, true]) {
+      const t = setup();
+      const peer = forkDoc(t.doc);
+      deleteElements(peer, [t.frames[0]!]);
+      let updates = 0;
+      t.doc.on("update", () => updates++);
+      if (withGesture) {
+        const gesture = t.host.commands.beginGesture(t.env());
+        gesture.preview({ [t.frames[0]!]: { x: 5 } });
+        gesture.cancel();
+      }
+      expect(updates).toBe(0);
+      syncDocs(t.doc, peer);
+      // The concurrent delete applies either way.
+      expect(t.frames[0]! in purgeSnapshot(toSnapshot(t.doc)).elements).toBe(false);
+    }
+  });
+
+  it("are per document: commands on another document are their own steps", () => {
+    const a = makeDoc();
+    const b = makeDoc();
+    const host = makeHost([a, b]);
+    const gesture = host.commands.beginGesture(a.env());
+    gesture.preview({ [a.frames[0]!]: { x: 1 } });
+    host.commands.execute("t/title", b.env(), "one");
+    host.commands.execute("t/title", b.env(), "two");
+    expect(host.commands.execute("t/half", b.env()).ok).toBe(false);
+    expect(b.undo.undoStack.length).toBe(2);
+    expect(b.title()).toBe("two");
+    expect(host.commands.gestureActive(b.env())).toBe(false);
+    expect(host.commands.gestureActive(a.env())).toBe(true);
+    gesture.commit("t/move", { x: 1 });
+    expect(a.undo.undoStack.length).toBe(1);
+  });
+
+  it("let other commands on the same document run as their own steps, which a cancel keeps", () => {
     const t = setup();
-    t.host.commands.execute("t/title", t.env(), "Before");
-    const gesture = t.host.commands.beginGesture(t.env);
-    gesture.run("t/move", { x: 3 });
-    gesture.run("t/move", { x: 6 });
+    const gesture = t.host.commands.beginGesture(t.env());
+    gesture.preview({ [t.frames[0]!]: { x: 1 } });
+    t.host.commands.execute("t/title", t.env(), "panel change");
     gesture.cancel();
-    expect(t.x()).toBe(0);
-    expect(t.title()).toBe("Before");
+    expect(t.title()).toBe("panel change");
     expect(t.undo.undoStack.length).toBe(1);
-    expect(t.undo.redoStack.length).toBe(0);
   });
-});
 
-describe("gestures, continued", () => {
-  it("commit the running gesture when another starts", () => {
+  it("block undo and redo while they run", () => {
     const t = setup();
-    const first = t.host.commands.beginGesture(t.env);
-    first.run("t/move", { x: 1 });
-    const second = t.host.commands.beginGesture(t.env);
-    expect(first.run("t/move", { x: 2 }).ok).toBe(false);
-    second.run("t/move", { x: 3 });
-    second.commit();
-    expect(t.undo.undoStack.length).toBe(2);
-    // The capture timeout is back to normal: separate commands are separate steps.
-    expect(t.undo.captureTimeout).toBe(500);
+    t.host.commands.execute("t/title", t.env(), "x");
+    const gesture = t.host.commands.beginGesture(t.env());
+    expect(t.host.commands.history(t.env()).canUndo()).toBe(false);
+    expect(t.host.commands.execute("t/undo", t.env())).toEqual({
+      ok: true,
+      value: false,
+    });
+    expect(t.title()).toBe("x");
+    gesture.cancel();
+    expect(t.host.commands.execute("t/undo", t.env())).toEqual({ ok: true, value: true });
+    expect(t.title()).toBe("");
+  });
+
+  it("cancel the running gesture of a document when another starts there", () => {
+    const t = setup();
+    const first = t.host.commands.beginGesture(t.env());
+    const second = t.host.commands.beginGesture(t.env());
+    expect(first.active).toBe(false);
+    expect(first.commit("t/move", { x: 9 }).ok).toBe(false);
+    expect(second.commit("t/move", { x: 3 }).ok).toBe(true);
+    expect(t.x()).toBe(3);
+    expect(t.undo.undoStack.length).toBe(1);
   });
 });
 

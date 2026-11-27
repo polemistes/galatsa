@@ -4,10 +4,10 @@
 // goes through a command, and one command is one undo step. See
 // docs/adr/0005-extension-interface.md, section 4.
 
-import type { ElementId, Rect } from "@galatsa/core";
 import type { DocumentUndoManager } from "@galatsa/core/ydoc";
 import type * as Y from "yjs";
-import type { AnyElementType, ElementCapabilities } from "./element-type.ts";
+import type { ElementCapabilities, RegisteredElementType } from "./element-editing.ts";
+import type { ElementFacts } from "./host.ts";
 import {
   availableIn,
   normalizeShortcut,
@@ -18,38 +18,42 @@ import {
   type Mode,
   type Shortcut,
 } from "./ids.ts";
+import type { EditorServices, PreviewChanges } from "./services.ts";
 
 /**
- * The editor state a command runs against. The editor builds one for each
- * call; tests build their own.
+ * What a command runs against: one document, its undo manager, and the
+ * editor's services. The editor builds one for each call; tests build their own.
  */
 export interface CommandEnvironment {
   readonly doc: Y.Doc;
   /** The document's undo manager (createUndoManager in @galatsa/core/ydoc). */
   readonly undo: DocumentUndoManager;
-  readonly mode: Mode;
-  /** Selected elements, in selection order. */
-  readonly selection: readonly ElementId[];
-  /**
-   * The part of the canvas the user sees, in root space; where new elements go
-   * when the command is not told where.
-   */
-  readonly viewport?: Rect;
+  readonly services: EditorServices;
 }
 
 /** What commands, tools and panels may ask about the loaded extensions. */
 export interface ExtensionLookup {
-  /** The definition of an element type id, if its extension is loaded. */
-  elementType(type: string): AnyElementType | undefined;
+  /** Both parts of an element type id, if its extension is loaded. */
+  elementType(type: string): RegisteredElementType | undefined;
   /** What the user may do to an element of this type and layout version. */
-  capabilities(element: {
-    readonly type: string;
-    readonly typeVersion: number;
-  }): ElementCapabilities;
+  capabilities(element: ElementFacts): ElementCapabilities;
+}
+
+/** Undo and redo, as commands may use them. */
+export interface History {
+  /** False while a gesture or a command step is open on this document. */
+  canUndo(): boolean;
+  canRedo(): boolean;
+  /** Undoes the last step; false if it cannot now. */
+  undo(): boolean;
+  redo(): boolean;
 }
 
 export interface CommandContext extends CommandEnvironment {
   readonly extensions: ExtensionLookup;
+  /** The current mode (from the mode service). */
+  readonly mode: Mode;
+  readonly history: History;
   /**
    * Runs another command as part of this one: same undo step, and its failure
    * fails this command. Throws CommandError if it is unknown or disabled.
@@ -63,10 +67,10 @@ export interface CommandContext extends CommandEnvironment {
  * `execute` is synchronous. Asynchronous work (reading a file, hashing an
  * asset, decoding an image) happens before the command runs, and its result is
  * the argument. `execute` changes the document only through the operations of
- * @galatsa/core/ydoc (and `edit()` for in-place edits of shared text and
- * collections), never with `doc.transact`: operations that create records
- * refuse to run inside another transaction, and a transaction with another
- * origin would not be undoable.
+ * @galatsa/core/ydoc (and `edit()` for in-place edits and for batching writes
+ * that create nothing into one transaction), never with `doc.transact`:
+ * operations that create records refuse to run inside another transaction, and
+ * a transaction with another origin would not be undoable.
  */
 export interface CommandDefinition<A = unknown, R = unknown> {
   /** Command name; the command id is "<extension id>/<name>". */
@@ -79,9 +83,10 @@ export interface CommandDefinition<A = unknown, R = unknown> {
   /** Offered in quick mode too. Every command is offered in advanced mode. */
   readonly quick?: boolean;
   /**
-   * False for commands that do not change the document (camera, panels, mode,
-   * selection, and undo and redo themselves): they run without an undo step.
-   * Default true.
+   * False for commands that do not change the document themselves (camera,
+   * panels, mode, selection, undo and redo): they run without an undo step of
+   * their own. Commands they run that do change the document are each one undo
+   * step, taken back if they fail. Default true.
    */
   readonly undoable?: boolean;
   /** Whether the command can run now, with these arguments. Default: always. */
@@ -129,15 +134,20 @@ export class CommandError extends Error {
 }
 
 /**
- * Several commands, run over time (a drag), that become one undo step. Each
- * command changes the document when it runs. After commit or cancel, run does
- * nothing.
+ * A drag, or a continuous control (a slider, a colour being dragged), that
+ * ends in one command. While it runs, the editor draws a preview and the
+ * document is not changed; `commit` runs the command once, as one undo step;
+ * `cancel` changes nothing. Other commands may run meanwhile, each as its own
+ * step; undo and redo wait until the gesture ends.
  */
 export interface Gesture {
-  run<R = unknown>(command: ContributionId, args?: unknown): CommandOutcome<R>;
-  /** Ends the gesture; what it changed is one undo step. */
-  commit(): void;
-  /** Ends the gesture and takes back everything it changed, without a redo step. */
+  /** True until commit or cancel. */
+  readonly active: boolean;
+  /** Replaces the preview (positions, sizes, rotations, data values). */
+  preview(changes: PreviewChanges): void;
+  /** Ends the gesture by running `command` once, as one undo step. */
+  commit<R = unknown>(command: ContributionId, args?: unknown): CommandOutcome<R>;
+  /** Ends the gesture without changing anything. */
   cancel(): void;
 }
 
@@ -148,6 +158,15 @@ export interface ShortcutConflict {
   readonly ignored: ContributionId;
 }
 
+/** Restores the redo stack after a failed command was taken back. */
+function takeBack(
+  undo: DocumentUndoManager,
+  redo: DocumentUndoManager["redoStack"],
+): void {
+  undo.undo();
+  undo.redoStack = redo;
+}
+
 /**
  * The command registry. The extension host fills it from the extensions'
  * contributions; the editor builds menus, toolbars, the command search and the
@@ -156,10 +175,10 @@ export interface ShortcutConflict {
 export class CommandRegistry {
   readonly #commands = new Map<ContributionId, RegisteredCommand>();
   readonly #lookup: ExtensionLookup;
-  /** Nesting depth of execute and run: only the outermost makes an undo step. */
-  #depth = 0;
-  /** The running gesture, if any. */
-  #gesture: Gesture | null = null;
+  /** Undo managers whose document has a command step open (inside group()). */
+  readonly #open = new Set<DocumentUndoManager>();
+  /** The running gesture of each undo manager (each document). */
+  readonly #gestures = new WeakMap<DocumentUndoManager, Gesture>();
 
   constructor(lookup: ExtensionLookup) {
     this.#lookup = lookup;
@@ -211,22 +230,39 @@ export class CommandRegistry {
     return { map, conflicts };
   }
 
+  /** True while a gesture runs on the environment's document. */
+  gestureActive(env: CommandEnvironment): boolean {
+    return this.#gestures.get(env.undo)?.active === true;
+  }
+
+  #historyFree(undo: DocumentUndoManager): boolean {
+    return !this.#open.has(undo) && this.#gestures.get(undo)?.active !== true;
+  }
+
+  /** Undo and redo for a document, refused while a gesture or a command step is open. */
+  history(env: CommandEnvironment): History {
+    const undo = env.undo;
+    return {
+      canUndo: () => this.#historyFree(undo) && undo.canUndo(),
+      canRedo: () => this.#historyFree(undo) && undo.canRedo(),
+      undo: () => this.#historyFree(undo) && undo.undo() !== null,
+      redo: () => this.#historyFree(undo) && undo.redo() !== null,
+    };
+  }
+
   /** The context a command sees. */
   context(env: CommandEnvironment): CommandContext {
     return {
       ...env,
       extensions: this.#lookup,
+      mode: env.services.mode.get(),
+      history: this.history(env),
       run: <R>(command: ContributionId, args?: unknown): R => {
         const entry = this.#commands.get(command);
         if (!entry) throw new CommandError(command, "unknown");
-        const ctx = this.context(env);
-        if (!this.#allowed(entry, ctx, args)) throw new CommandError(command, "disabled");
-        this.#depth += 1;
-        try {
-          return entry.definition.execute(ctx, args) as R;
-        } finally {
-          this.#depth -= 1;
-        }
+        if (!this.#allowed(entry, this.context(env), args))
+          throw new CommandError(command, "disabled");
+        return this.#invoke<R>(entry, env, args);
       },
     };
   }
@@ -249,7 +285,8 @@ export class CommandRegistry {
   /** True if menus and toolbars should show the command now. */
   isVisible(id: ContributionId, env: CommandEnvironment): boolean {
     const entry = this.#commands.get(id);
-    if (!entry || !availableIn(entry.definition.quick, env.mode)) return false;
+    if (!entry || !availableIn(entry.definition.quick, env.services.mode.get()))
+      return false;
     try {
       return entry.definition.visible?.(this.context(env)) ?? true;
     } catch {
@@ -258,10 +295,34 @@ export class CommandRegistry {
   }
 
   /**
-   * Runs a command as one undo step (unless it is not undoable). A disabled or
+   * Runs a command. Throws what the command throws. An undoable command opens
+   * an undo step unless one is open on its document already (it is then part
+   * of the command that runs it); if it throws, what it changed is taken back
+   * and the redo stack is left as it was before.
+   */
+  #invoke<R>(entry: RegisteredCommand, env: CommandEnvironment, args: unknown): R {
+    const execute = (): R => entry.definition.execute(this.context(env), args) as R;
+    const undo = env.undo;
+    if (entry.definition.undoable === false || this.#open.has(undo)) return execute();
+    const before = undo.undoStack.length;
+    const redo = undo.redoStack.slice();
+    this.#open.add(undo);
+    try {
+      return undo.group(execute);
+    } catch (error) {
+      // group() closed the step; take back what the command did before it failed.
+      if (undo.undoStack.length > before) takeBack(undo, redo);
+      throw error;
+    } finally {
+      this.#open.delete(undo);
+    }
+  }
+
+  /**
+   * Runs a command as one undo step (none for commands that are not undoable;
+   * those that run inside another command join its step). A disabled or
    * unknown command does nothing. A command that throws leaves no trace: what
-   * it changed before it failed is undone, and the step is not offered for
-   * redo. Called from inside another command, it joins that command's step.
+   * it changed before it failed is undone, and the redo stack is kept.
    */
   execute<R = unknown>(
     id: ContributionId,
@@ -270,80 +331,46 @@ export class CommandRegistry {
   ): CommandOutcome<R> {
     const entry = this.#commands.get(id);
     if (!entry) return { ok: false, reason: "unknown" };
-    const ctx = this.context(env);
-    if (!this.#allowed(entry, ctx, args)) return { ok: false, reason: "disabled" };
-    const run = (): R => {
-      this.#depth += 1;
-      try {
-        return entry.definition.execute(ctx, args) as R;
-      } finally {
-        this.#depth -= 1;
-      }
-    };
-    if (this.#depth > 0 || entry.definition.undoable === false) {
-      try {
-        return { ok: true, value: run() };
-      } catch (error) {
-        if (this.#depth > 0) throw error;
-        return { ok: false, reason: "failed", error };
-      }
-    }
-    if (this.#gesture !== null) {
-      // Inside a gesture: the gesture's open step collects the change.
-      try {
-        return { ok: true, value: run() };
-      } catch (error) {
-        return { ok: false, reason: "failed", error };
-      }
-    }
-    const undo = env.undo;
-    const before = undo.undoStack.length;
+    if (!this.#allowed(entry, this.context(env), args))
+      return { ok: false, reason: "disabled" };
+    if (this.#open.has(env.undo))
+      return { ok: true, value: this.#invoke<R>(entry, env, args) };
     try {
-      return { ok: true, value: undo.group(run) };
+      return { ok: true, value: this.#invoke<R>(entry, env, args) };
     } catch (error) {
-      // group() closed the step; take back what the command did before it failed.
-      if (undo.undoStack.length > before) takeBack(undo);
       return { ok: false, reason: "failed", error };
     }
   }
 
   /**
-   * Starts a gesture (see Gesture). Only one gesture runs at a time; starting
-   * another commits the first.
+   * Starts a gesture on the environment's document (see Gesture). One gesture
+   * runs per document; starting another cancels the first.
    */
-  beginGesture(env: () => CommandEnvironment): Gesture {
-    this.#gesture?.commit();
-    const undo = env().undo;
-    const timeout = undo.captureTimeout;
-    undo.stopCapturing();
-    const before = undo.undoStack.length;
-    undo.captureTimeout = Number.POSITIVE_INFINITY;
-    const end = (): boolean => {
-      if (this.#gesture !== gesture) return false;
-      this.#gesture = null;
-      undo.captureTimeout = timeout;
-      undo.stopCapturing();
-      return true;
+  beginGesture(env: CommandEnvironment): Gesture {
+    const undo = env.undo;
+    this.#gestures.get(undo)?.cancel();
+    let active = true;
+    const end = (): void => {
+      if (!active) return;
+      active = false;
+      env.services.preview.clear();
+      if (this.#gestures.get(undo) === gesture) this.#gestures.delete(undo);
     };
     const gesture: Gesture = {
-      run: <R>(command: ContributionId, args?: unknown): CommandOutcome<R> =>
-        this.#gesture === gesture
-          ? this.execute<R>(command, env(), args)
-          : { ok: false, reason: "disabled" },
-      commit: () => {
+      get active() {
+        return active;
+      },
+      preview: (changes) => {
+        if (active) env.services.preview.show(changes);
+      },
+      commit: <R>(command: ContributionId, args?: unknown): CommandOutcome<R> => {
+        if (!active) return { ok: false, reason: "disabled" };
         end();
+        return this.execute<R>(command, env, args);
       },
-      cancel: () => {
-        if (end() && undo.undoStack.length > before) takeBack(undo);
-      },
+      cancel: end,
     };
-    this.#gesture = gesture;
+    this.#gestures.set(undo, gesture);
     return gesture;
   }
-}
-
-/** Undoes the newest step and drops it from the redo stack. */
-function takeBack(undo: DocumentUndoManager): void {
-  undo.undo();
-  undo.redoStack.pop();
 }

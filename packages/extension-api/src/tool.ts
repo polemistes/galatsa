@@ -51,18 +51,15 @@ export type Cursor =
 
 /** What the editor gives a tool while it is the current tool. */
 export interface ToolSession {
-  /** The current editor state. */
+  /** The current editor state: the document, its undo manager, and the editor's services. */
   environment(): CommandEnvironment;
   /** Runs a command (one undo step), like a menu or a shortcut would. */
   run<R = unknown>(command: ContributionId, args?: unknown): CommandOutcome<R>;
   /**
-   * Starts a gesture: commands run through it change the document at once (so
-   * the user, and later collaborators, see a drag live), and together make one
-   * undo step when it is committed. Cancelling takes them all back.
+   * Starts a gesture: a drag previews its result without changing the
+   * document, and ends in one command (one undo step) or in nothing.
    */
   gesture(): Gesture;
-  /** Topmost selectable element at a screen position. */
-  hitTest(screen: Point): ElementId | null;
   /** Device pixels per world unit at the current zoom. */
   scale(): number;
   /** Asks the renderer to draw the tool's overlay again. */

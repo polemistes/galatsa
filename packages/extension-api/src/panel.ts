@@ -22,10 +22,10 @@ export interface CustomPanelViews {}
 
 /** A custom view for one binding. */
 export type CustomPanelContent = {
-  readonly [B in keyof CustomPanelViews]: {
+  readonly [B in keyof CustomPanelViews]-?: {
     readonly kind: "custom";
     readonly binding: B;
-    readonly view: CustomPanelViews[B];
+    readonly view: NonNullable<CustomPanelViews[B]>;
   };
 }[keyof CustomPanelViews];
 

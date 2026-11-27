@@ -13,6 +13,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./editing": {
+      "@galatsa/source": "./src/editing.ts",
+      "types": "./dist/editing.d.ts",
+      "default": "./dist/editing.js"
+    },
     "./testing": {
       "@galatsa/source": "./src/testing.ts",
       "types": "./dist/testing.d.ts",

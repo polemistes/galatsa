@@ -4,7 +4,7 @@
 
 import type { CameraView, Json } from "@galatsa/core";
 import { describe, expect, it } from "vitest";
-import { ExtensionHost } from "./host.ts";
+import { ViewHost } from "./host.ts";
 import { EXTENSION_API_VERSION } from "./ids.ts";
 import {
   DEFAULT_COMFORT,
@@ -61,13 +61,13 @@ function frames(motion: {
 
 describe("transitions", () => {
   it("are found by the id a stop stores", () => {
-    const host = new ExtensionHost();
+    const host = new ViewHost();
     host.load([
       {
         id: "fx",
         version: "1.0.0",
         api: EXTENSION_API_VERSION,
-        contributes: { transitions: [careless] },
+        transitions: [careless],
       },
     ]);
     const value = readTransitionValue({

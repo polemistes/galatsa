@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The extension host: loads extensions in dependency order, checks them,
-// activates them, and offers their contributions to the editor, the renderer
-// and the player. See docs/adr/0005-extension-interface.md, section 9.
+// The viewing host: loads the viewing parts of extensions in dependency order,
+// checks them, activates them, and offers element types and transitions to the
+// renderer and the player. The editor's host (editor-host.ts) extends it with
+// the editing parts. Nothing here needs Yjs. See
+// docs/adr/0005-extension-interface.md, section 9.
 
 import {
   FRAME_TYPE,
@@ -12,11 +14,13 @@ import {
   type Size,
 } from "@galatsa/core";
 import type { MessageBundle, MessageValues } from "@galatsa/i18n";
-import { CommandRegistry, type ExtensionLookup } from "./command.ts";
 import type { DrawContext } from "./draw.ts";
-import type { AnyElementType, ElementCapabilities } from "./element-type.ts";
-import type { Extension } from "./extension.ts";
-import type { FieldDefinition } from "./fields.ts";
+import type { AnyElementView } from "./element-type.ts";
+import type {
+  ActivationContext,
+  ExtensionDependency,
+  ViewExtension,
+} from "./extension.ts";
 import {
   CONTRIBUTION_NAME_PATTERN,
   EXTENSION_API_VERSION,
@@ -31,10 +35,7 @@ import {
   type Mode,
 } from "./ids.ts";
 import { extensionMessages } from "./messages/index.ts";
-import type { PanelDefinition } from "./panel.ts";
 import { drawPlaceholder, type PlaceholderReason } from "./placeholder.ts";
-import type { ToolDefinition } from "./tool.ts";
-import type { ExporterDefinition, ImporterDefinition } from "./transfer.ts";
 import type { AnyTransition } from "./transition.ts";
 
 /** Why an extension was not loaded. */
@@ -76,7 +77,7 @@ export interface Registered<D> {
 
 /** What the host knows about an element's type. */
 export type ElementTypeResolution =
-  | { readonly status: "known"; readonly type: Registered<AnyElementType> }
+  | { readonly status: "known"; readonly type: Registered<AnyElementView> }
   | { readonly status: "core" }
   | {
       readonly status: "placeholder";
@@ -102,19 +103,34 @@ export interface HostOptions {
   readonly apiVersion?: ApiVersion;
 }
 
+/**
+ * One extension as the loader handles it: the viewing part, or the viewing and
+ * editing parts together. Hosts build these from manifests.
+ */
+export interface LoadUnit {
+  readonly id: ExtensionId;
+  readonly api: ApiVersion;
+  readonly dependencies: readonly ExtensionDependency[];
+  readonly messages: readonly MessageBundle[];
+  /** Contributions by kind, for the checks every kind shares. */
+  readonly lists: ReadonlyArray<
+    readonly [kind: string, items: readonly { readonly name: string }[]]
+  >;
+  /** Checks of its own; returns what is wrong. */
+  check(): string | undefined;
+  activate(context: ActivationContext): void;
+  deactivate(): void;
+  /** Offers the contributions; returns how to take each back. */
+  offer(): Array<() => void>;
+}
+
 interface Loaded {
-  readonly extension: Extension;
+  readonly unit: LoadUnit;
   readonly undo: Array<() => void>;
 }
 
-const CAPABILITIES_NONE: ElementCapabilities = {
-  resize: false,
-  rotate: false,
-  editContent: false,
-};
-
 /** True if `namespace` is `id` or a prefix of it made of whole words. */
-function ownsNamespace(id: ExtensionId, namespace: string): boolean {
+export function ownsNamespace(id: ExtensionId, namespace: string): boolean {
   return id === namespace || id.startsWith(`${namespace}.`);
 }
 
@@ -135,30 +151,51 @@ function labelsIn(value: unknown, out: string[], depth = 0): void {
   }
 }
 
+/** The load unit of a viewing part. */
+export function viewUnit(
+  extension: ViewExtension,
+  offer: () => Array<() => void>,
+): LoadUnit {
+  return {
+    id: extension.id,
+    api: extension.api,
+    dependencies: extension.dependencies ?? [],
+    messages: extension.messages ?? [],
+    lists: [
+      ["element type", extension.elementTypes ?? []],
+      ["transition", extension.transitions ?? []],
+    ],
+    check: () => {
+      for (const type of extension.elementTypes ?? []) {
+        if (!Number.isInteger(type.typeVersion) || type.typeVersion < 1)
+          return `element type ${type.name}: typeVersion must be an integer >= 1`;
+      }
+      return undefined;
+    },
+    activate: (context) => extension.activate?.(context),
+    deactivate: () => extension.deactivate?.(),
+    offer,
+  };
+}
+
 /**
- * Loads extensions and offers their contributions. Each extension is checked
- * as a whole; one that fails is reported and left out, with the extensions
- * that need it, and never stops the others.
+ * Loads extensions and offers their viewing contributions. Each extension is
+ * checked as a whole; one that fails is reported and left out, with the
+ * extensions that need it, and never stops the others.
  */
-export class ExtensionHost implements ExtensionLookup {
+export class ViewHost {
   readonly apiVersion: ApiVersion;
-  readonly commands: CommandRegistry;
   readonly #i18n: MessageRegistry | undefined;
   /** Active extensions, in activation order. */
   readonly #loaded = new Map<ExtensionId, Loaded>();
   readonly #problems: LoadProblem[] = [];
-  readonly #elementTypes = new Map<string, Registered<AnyElementType>>();
-  readonly #tools = new Map<ContributionId, Registered<ToolDefinition>>();
-  readonly #importers = new Map<ContributionId, Registered<ImporterDefinition>>();
-  readonly #exporters = new Map<ContributionId, Registered<ExporterDefinition>>();
+  readonly #elementTypes = new Map<string, Registered<AnyElementView>>();
   readonly #transitions = new Map<ContributionId, Registered<AnyTransition>>();
-  readonly #panels = new Map<ContributionId, Registered<PanelDefinition>>();
 
   constructor(options: HostOptions = {}) {
     this.apiVersion = options.apiVersion ?? EXTENSION_API_VERSION;
     this.#i18n = options.i18n;
     this.#i18n?.register(extensionMessages);
-    this.commands = new CommandRegistry(this);
   }
 
   /** Problems from every load so far. */
@@ -176,11 +213,34 @@ export class ExtensionHost implements ExtensionLookup {
   }
 
   /**
-   * Loads extensions: checks them, orders them by their dependencies (keeping
-   * the given order otherwise) and activates them. Extensions loaded earlier
-   * stay. Returns the problems of this load.
+   * Loads the viewing parts of extensions: checks them, orders them by their
+   * dependencies (keeping the given order otherwise) and activates them.
+   * Extensions loaded earlier stay. Returns the problems of this load.
    */
-  load(extensions: readonly Extension[]): LoadProblem[] {
+  load(extensions: readonly ViewExtension[]): LoadProblem[] {
+    return this.loadUnits(extensions.map((e) => viewUnit(e, () => this.offerView(e))));
+  }
+
+  /** Offers the viewing contributions of an extension; returns how to take them back. */
+  protected offerView(extension: ViewExtension): Array<() => void> {
+    const undo: Array<() => void> = [];
+    const offer = <D extends { readonly name: string }>(
+      map: Map<string, Registered<D>>,
+      list: readonly D[] | undefined,
+    ): void => {
+      for (const definition of list ?? []) {
+        const key = `${extension.id}/${definition.name}`;
+        map.set(key, { id: key, extension: extension.id, definition });
+        undo.push(() => map.delete(key));
+      }
+    };
+    offer(this.#elementTypes, extension.elementTypes);
+    offer(this.#transitions, extension.transitions);
+    return undo;
+  }
+
+  /** The shared loader: checks, orders and activates units. */
+  protected loadUnits(units: readonly LoadUnit[]): LoadProblem[] {
     const problems: LoadProblem[] = [];
     const report = (
       extension: ExtensionId,
@@ -195,41 +255,47 @@ export class ExtensionHost implements ExtensionLookup {
       );
     };
 
-    const pending = new Map<ExtensionId, Extension>();
-    for (const extension of extensions) {
-      const id = extension.id;
+    const pending = new Map<ExtensionId, LoadUnit>();
+    for (const unit of units) {
+      const id = unit.id;
       if (this.#loaded.has(id) || pending.has(id)) {
         report(id, "duplicate", "an extension with this id is loaded already");
         continue;
       }
-      if (!isApiCompatible(extension.api, this.apiVersion)) {
+      if (!isApiCompatible(unit.api, this.apiVersion)) {
         report(
           id,
           "api-version",
-          `written for interface ${extension.api.major}.${extension.api.minor}, host implements ${this.apiVersion.major}.${this.apiVersion.minor}`,
+          `written for interface ${unit.api.major}.${unit.api.minor}, host implements ${this.apiVersion.major}.${this.apiVersion.minor}`,
         );
         continue;
       }
-      const invalid = this.#check(extension);
+      const invalid = this.#check(unit);
       if (invalid !== undefined) {
         report(id, "invalid", invalid);
         continue;
       }
-      pending.set(id, extension);
+      pending.set(id, unit);
     }
 
     const failed = new Set<ExtensionId>(problems.map((p) => p.extension));
+    const settle = (id: ExtensionId, unit: LoadUnit): void => {
+      pending.delete(id);
+      const error = this.#activate(unit);
+      if (error !== undefined) {
+        report(id, "activate-failed", error);
+        failed.add(id);
+      }
+    };
     // Settle one extension at a time: the first, in the given order, whose
     // dependencies are settled. So the order only changes where a dependency
     // requires it.
-    let progress = true;
-    while (pending.size > 0 && progress) {
-      progress = false;
-      for (const [id, extension] of pending) {
-        const deps = extension.dependencies ?? [];
+    while (pending.size > 0) {
+      let progress = false;
+      for (const [id, unit] of pending) {
         let ready = true;
         let blocked: { dependency: ExtensionId; code: LoadProblemCode } | undefined;
-        for (const dep of deps) {
+        for (const dep of unit.dependencies) {
           if (this.#loaded.has(dep.id)) continue;
           if (pending.has(dep.id)) {
             ready = false;
@@ -250,18 +316,22 @@ export class ExtensionHost implements ExtensionLookup {
           break;
         }
         if (!ready) continue;
-        pending.delete(id);
+        settle(id, unit);
         progress = true;
-        const error = this.#activate(extension);
-        if (error !== undefined) {
-          report(id, "activate-failed", error);
-          failed.add(id);
-        }
-        // Start again from the first: an earlier extension may be ready now.
         break;
       }
+      if (progress) continue;
+      // Everything left waits for something pending. If one only waits for
+      // optional dependencies, those cannot come first: activate it without them.
+      const free = [...pending].find(([, unit]) =>
+        unit.dependencies.every(
+          (dep) => dep.optional === true || this.#loaded.has(dep.id),
+        ),
+      );
+      if (free === undefined) break;
+      settle(free[0], free[1]);
     }
-    // What is left waits for itself: a dependency cycle.
+    // What is left waits for itself: a cycle of required dependencies.
     for (const id of pending.keys()) {
       report(id, "cycle", "its dependencies form a cycle");
     }
@@ -270,17 +340,19 @@ export class ExtensionHost implements ExtensionLookup {
   }
 
   /**
-   * Unloads an extension, after the active extensions that need it (which are
-   * unloaded too). Elements of its types become placeholders; their data is
-   * untouched. Returns the ids unloaded, in order.
+   * Unloads an extension, after the active extensions that require it (which
+   * are unloaded too; those that only use it optionally stay). Elements of its
+   * types become placeholders; their data is untouched. Returns the ids
+   * unloaded, in order.
    */
   unload(id: ExtensionId): ExtensionId[] {
     if (!this.#loaded.has(id)) return [];
     const doomed = new Set<ExtensionId>([id]);
     const order = [...this.#loaded.keys()];
     for (const other of order) {
-      const deps = this.#loaded.get(other)?.extension.dependencies ?? [];
-      if (deps.some((dep) => doomed.has(dep.id))) doomed.add(other);
+      const deps = this.#loaded.get(other)?.unit.dependencies ?? [];
+      if (deps.some((dep) => dep.optional !== true && doomed.has(dep.id)))
+        doomed.add(other);
     }
     const unloaded: ExtensionId[] = [];
     for (const other of order.reverse()) {
@@ -289,7 +361,7 @@ export class ExtensionHost implements ExtensionLookup {
       this.#loaded.delete(other);
       for (const undo of loaded.undo.reverse()) undo();
       try {
-        loaded.extension.deactivate?.();
+        loaded.unit.deactivate();
       } catch {
         // Nothing to do: its contributions are gone already.
       }
@@ -298,39 +370,29 @@ export class ExtensionHost implements ExtensionLookup {
     return unloaded;
   }
 
-  /** Checks a manifest before anything of it is used; returns what is wrong. */
-  #check(extension: Extension): string | undefined {
-    const id = extension.id;
+  /** Checks a unit before anything of it is used; returns what is wrong. */
+  #check(unit: LoadUnit): string | undefined {
+    const id = unit.id;
     if (typeof id !== "string" || !EXTENSION_ID_PATTERN.test(id))
       return "invalid extension id";
     const namespaces = new Map<string, MessageBundle>();
-    for (const bundle of extension.messages ?? []) {
+    for (const bundle of unit.messages) {
       if (!ownsNamespace(id, bundle.namespace))
         return `message namespace ${bundle.namespace} is not the extension id or a prefix of it`;
       namespaces.set(bundle.namespace, bundle);
     }
-    for (const dep of extension.dependencies ?? []) {
+    for (const dep of unit.dependencies) {
       if (!EXTENSION_ID_PATTERN.test(dep.id)) return `invalid dependency id ${dep.id}`;
       if (dep.id === id) return "depends on itself";
     }
     const allowedNamespace = (namespace: string): boolean =>
       namespace === "common" ||
       namespaces.has(namespace) ||
-      (extension.dependencies ?? []).some((dep) => ownsNamespace(dep.id, namespace));
+      unit.dependencies.some((dep) => ownsNamespace(dep.id, namespace));
 
-    const c = extension.contributes ?? {};
-    const lists: Array<[string, readonly { readonly name: string }[] | undefined]> = [
-      ["element type", c.elementTypes],
-      ["tool", c.tools],
-      ["command", c.commands],
-      ["importer", c.importers],
-      ["exporter", c.exporters],
-      ["transition", c.transitions],
-      ["panel", c.panels],
-    ];
-    for (const [kind, list] of lists) {
+    for (const [kind, list] of unit.lists) {
       const names = new Set<string>();
-      for (const item of list ?? []) {
+      for (const item of list) {
         if (!CONTRIBUTION_NAME_PATTERN.test(item.name))
           return `invalid ${kind} name ${item.name}`;
         if (names.has(item.name)) return `two of its ${kind}s are named ${item.name}`;
@@ -348,82 +410,53 @@ export class ExtensionHost implements ExtensionLookup {
         }
       }
     }
-    for (const type of c.elementTypes ?? []) {
-      if (!Number.isInteger(type.typeVersion) || type.typeVersion < 1)
-        return `element type ${type.name}: typeVersion must be an integer >= 1`;
-      if (type.typeVersion > 1 && type.upgrade === undefined)
-        return `element type ${type.name}: typeVersion ${type.typeVersion} needs an upgrade function`;
-      const fields = new Set<string>();
-      for (const field of type.properties ?? []) {
-        if (fields.has(field.key))
-          return `element type ${type.name}: two fields have key ${field.key}`;
-        fields.add(field.key);
-      }
-    }
-    return undefined;
+    return unit.check();
   }
 
-  /** Activates one extension and offers its contributions; returns an error, if any. */
-  #activate(extension: Extension): string | undefined {
-    const id = extension.id;
+  /** Activates one unit and offers its contributions; returns an error, if any. */
+  #activate(unit: LoadUnit): string | undefined {
+    const id = unit.id;
     const undo: Array<() => void> = [];
     try {
-      for (const bundle of extension.messages ?? []) {
+      for (const bundle of unit.messages) {
         if (this.#i18n) {
           this.#i18n.register(bundle);
           // A namespace shared by several extensions stays until the last goes.
           undo.push(() => {
             if (
               ![...this.#loaded.values()].some((l) =>
-                l.extension.messages?.some((b) => b.namespace === bundle.namespace),
+                l.unit.messages.some((b) => b.namespace === bundle.namespace),
               )
             )
               this.#i18n?.unregister(bundle.namespace);
           });
         }
       }
-      extension.activate?.({
+      unit.activate({
         extension: id,
         apiVersion: this.apiVersion,
         isActive: (other) => this.#loaded.has(other),
       });
-      const c = extension.contributes ?? {};
-      const offer = <D extends { readonly name: string }>(
-        map: Map<string, Registered<D>>,
-        list: readonly D[] | undefined,
-      ): void => {
-        for (const definition of list ?? []) {
-          const key = `${id}/${definition.name}`;
-          map.set(key, { id: key, extension: id, definition });
-          undo.push(() => map.delete(key));
-        }
-      };
-      offer(this.#elementTypes, c.elementTypes);
-      offer(this.#tools, c.tools);
-      offer(this.#importers, c.importers);
-      offer(this.#exporters, c.exporters);
-      offer(this.#transitions, c.transitions);
-      offer(this.#panels, c.panels);
-      for (const command of c.commands ?? [])
-        undo.push(this.commands.register(id, command));
+      undo.push(...unit.offer());
     } catch (error) {
       for (const step of undo.reverse()) step();
       return error instanceof Error ? error.message : String(error);
     }
-    this.#loaded.set(id, { extension, undo });
+    this.#loaded.set(id, { unit, undo });
     return undefined;
   }
 
   // -------------------------------------------------------------------------
-  // Element types
+  // Element types and transitions
   // -------------------------------------------------------------------------
 
-  elementType(type: string): AnyElementType | undefined {
+  /** The viewing part of an element type id, if its extension is loaded. */
+  elementView(type: string): AnyElementView | undefined {
     return this.#elementTypes.get(type)?.definition;
   }
 
   /** Every element type, in activation order. */
-  elementTypes(): Registered<AnyElementType>[] {
+  elementViews(): Registered<AnyElementView>[] {
     return [...this.#elementTypes.values()];
   }
 
@@ -440,25 +473,6 @@ export class ExtensionHost implements ExtensionLookup {
     if (element.typeVersion > type.definition.typeVersion)
       return { status: "placeholder", reason: "newer" };
     return { status: "known", type };
-  }
-
-  /**
-   * What the user may do to an element besides moving, stacking, grouping,
-   * locking, deleting and duplicating it, which every element allows.
-   */
-  capabilities(element: ElementFacts): ElementCapabilities {
-    const resolved = this.resolve(element);
-    if (resolved.status === "core") {
-      // Frames have a size; groups take theirs from their members. Neither rotates.
-      return { resize: element.type === FRAME_TYPE, rotate: false, editContent: true };
-    }
-    if (resolved.status === "placeholder") return CAPABILITIES_NONE;
-    const limits = resolved.type.definition.capabilities ?? {};
-    return {
-      resize: limits.resize ?? true,
-      rotate: limits.rotate ?? true,
-      editContent: true,
-    };
   }
 
   /**
@@ -511,64 +525,14 @@ export class ExtensionHost implements ExtensionLookup {
     }
   }
 
-  /** The properties an element type offers in a mode. */
-  properties(type: string, mode: Mode): readonly FieldDefinition<unknown>[] {
-    return (this.elementType(type)?.properties ?? []).filter((f) =>
-      availableIn(f.quick, mode),
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Other contributions
-  // -------------------------------------------------------------------------
-
-  #inMode<D extends { readonly quick?: boolean }>(
-    map: Map<ContributionId, Registered<D>>,
-    mode: Mode | undefined,
-  ): Registered<D>[] {
-    const all = [...map.values()];
+  transitions(mode?: Mode): Registered<AnyTransition>[] {
+    const all = [...this.#transitions.values()];
     return mode === undefined
       ? all
       : all.filter((r) => availableIn(r.definition.quick, mode));
   }
 
-  tools(mode?: Mode): Registered<ToolDefinition>[] {
-    return this.#inMode(this.#tools, mode);
-  }
-
-  importers(mode?: Mode): Registered<ImporterDefinition>[] {
-    return this.#inMode(this.#importers, mode);
-  }
-
-  /** Importers that take a file, by media type or name extension, in activation order. */
-  importersFor(
-    file: { readonly name: string; readonly mediaType?: string | undefined },
-    mode?: Mode,
-  ): Registered<ImporterDefinition>[] {
-    const dot = file.name.lastIndexOf(".");
-    const suffix = dot < 0 ? "" : file.name.slice(dot + 1).toLowerCase();
-    return this.importers(mode).filter((r) =>
-      r.definition.fileTypes.some(
-        (t) =>
-          (file.mediaType !== undefined && t.mediaTypes.includes(file.mediaType)) ||
-          (suffix !== "" && t.extensions.includes(suffix)),
-      ),
-    );
-  }
-
-  exporters(mode?: Mode): Registered<ExporterDefinition>[] {
-    return this.#inMode(this.#exporters, mode);
-  }
-
-  transitions(mode?: Mode): Registered<AnyTransition>[] {
-    return this.#inMode(this.#transitions, mode);
-  }
-
   transition(id: ContributionId): AnyTransition | undefined {
     return this.#transitions.get(id)?.definition;
-  }
-
-  panels(mode?: Mode): Registered<PanelDefinition>[] {
-    return this.#inMode(this.#panels, mode);
   }
 }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The three example extensions against the real document model: registration,
-// one command = one undo step, tools, import and export, data upgrades, and
-// elements whose extension is missing.
+// The example extensions against the real document model: registration, one
+// command = one undo step, tools, import and export, data upgrades, elements
+// whose extension is missing, and the editing services.
 
 import {
   Resolver,
@@ -12,21 +12,28 @@ import {
   type ExtensionElement,
   type Point,
 } from "@galatsa/core";
+import { GROUP_TYPE } from "@galatsa/core";
 import {
   addElement,
   createUndoManager,
+  dataMap,
+  edit,
+  group,
   deleteElements,
+  forkDoc,
   initDocument,
   moveElement,
   resizeElement,
+  syncDocs,
   toSnapshot,
   yLookup,
 } from "@galatsa/core/ydoc";
+import { ViewHost } from "@galatsa/extension-api";
 import {
-  ExtensionHost,
+  EditorHost,
   capabilitiesOf,
   defineCommand,
-  defineExtension,
+  defineEditExtension,
   pasteImport,
   prepareExport,
   type AssetStore,
@@ -35,8 +42,11 @@ import {
   type Mode,
   type ToolPointerEvent,
   type ToolSession,
-} from "@galatsa/extension-api";
-import { createRecordingDrawContext } from "@galatsa/extension-api/testing";
+} from "@galatsa/extension-api/editing";
+import {
+  createRecordingDrawContext,
+  createTestServices,
+} from "@galatsa/extension-api/testing";
 import { createI18n, memoryLocaleStorage } from "@galatsa/i18n";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -49,19 +59,21 @@ import {
   SHAPE_TYPE,
   TEXT_INSERT,
   TEXT_SET_DEFAULT,
+  SELECT_ALL,
+  SELECT_SCALE,
   TEXT_SET_STYLE,
+  TEXT_TOGGLE_BOLD,
   TEXT_TYPE,
   exampleExtensions,
-  shapeType,
+  shapeView,
 } from "./index.ts";
+import { exampleViewExtensions } from "./view.ts";
 
 // A small stand-in for the editor's own commands (move, resize, paste an
 // import), which the editor will provide; the examples do not define them.
 const EDITOR = "test.editor";
-const editorExtension = defineExtension({
-  id: EDITOR,
-  version: "0.0.0",
-  api: { major: 1, minor: 0 },
+const editorExtension = defineEditExtension({
+  view: { id: EDITOR, version: "0.0.0", api: { major: 1, minor: 0 } },
   contributes: {
     commands: [
       defineCommand<{ id: ElementId; x: number; y: number }, void>({
@@ -96,37 +108,27 @@ const editorExtension = defineExtension({
   },
 });
 
-function setup(mode: Mode = "quick") {
-  const doc = new Y.Doc();
-  initDocument(doc);
-  const undo = createUndoManager(doc);
+/** The origin of the editor's text binding in these tests. */
+const BINDING = "test:text-binding";
+
+function setup(mode: Mode = "quick", doc: Y.Doc = new Y.Doc()) {
+  if (roots0(doc)) initDocument(doc);
+  const undo = createUndoManager(doc, { origins: [BINDING] });
   const i18n = createI18n({ dev: false, locale: "en", storage: memoryLocaleStorage() });
-  const host = new ExtensionHost({ i18n });
+  const host = new EditorHost({ i18n });
   const problems = host.load([...exampleExtensions, editorExtension]);
-  let selection: ElementId[] = [];
-  const env = (): CommandEnvironment => ({
-    doc,
-    undo,
-    mode,
-    selection,
-    viewport: { x: 0, y: 0, w: 1000, h: 800 },
-  });
+  const services = createTestServices(doc, { mode });
+  const env = (): CommandEnvironment => ({ doc, undo, services });
   const run = <R = unknown>(id: string, args?: unknown) =>
     host.commands.execute<R>(id, env(), args);
   const gone = (id: ElementId) => new Resolver(yLookup(doc)).isGone(id);
   const element = (id: ElementId) => toSnapshot(doc).elements[id] as ExtensionElement;
-  return {
-    doc,
-    undo,
-    i18n,
-    host,
-    problems,
-    env,
-    run,
-    gone,
-    element,
-    select: (ids: ElementId[]) => (selection = ids),
-  };
+  return { doc, undo, i18n, host, problems, services, env, run, gone, element };
+}
+
+/** True if the document has not been initialized yet. */
+function roots0(doc: Y.Doc): boolean {
+  return doc.getMap("meta").size === 0;
 }
 
 function created<R>(outcome: { ok: boolean; value?: R; error?: unknown }): R {
@@ -152,8 +154,7 @@ function session(t: ReturnType<typeof setup>) {
   const s: ToolSession = {
     environment: t.env,
     run: (id, args) => t.host.commands.execute(id, t.env(), args),
-    gesture: () => t.host.commands.beginGesture(t.env),
-    hitTest: () => null,
+    gesture: () => t.host.commands.beginGesture(t.env()),
     scale: () => 1,
     requestOverlay: () => (log.overlays += 1),
     editText: (id) => log.edited.push(id),
@@ -199,9 +200,10 @@ describe("registration", () => {
       "examples.text",
       "examples.shape",
       "examples.image",
+      "examples.select",
       EDITOR,
     ]);
-    expect(t.host.elementTypes().map((r) => r.id)).toEqual([
+    expect(t.host.elementViews().map((r) => r.id)).toEqual([
       TEXT_TYPE,
       SHAPE_TYPE,
       IMAGE_TYPE,
@@ -211,6 +213,7 @@ describe("registration", () => {
       "examples.shape/rect",
       "examples.shape/ellipse",
       "examples.shape/triangle",
+      "examples.select/select",
     ]);
     expect(t.host.importersFor({ name: "photo.PNG" }).map((r) => r.id)).toEqual([
       "examples.image/files",
@@ -320,7 +323,7 @@ describe("one command is one undo step", () => {
 });
 
 describe("text", () => {
-  it("reads version 1 data, and upgrades it to version 2 in the same step as an edit", () => {
+  it("reads version 1 data, and upgrades it before an edit, keeping the upgrade on undo", () => {
     const t = setup();
     // An element written by version 1 of the extension.
     const id = addElement(t.doc, {
@@ -345,18 +348,54 @@ describe("text", () => {
     expect(t.undo.undoStack.length).toBe(steps + 1);
     const after = t.element(id);
     expect(after.typeVersion).toBe(2);
-    expect(after.data).toEqual({
-      text: { $y: "text", delta: [{ insert: "Old" }] },
-      fontSize: 32,
-      color: "#000",
-      fontFamily: "sans",
-      align: "left",
-    });
+    // Version 2's new keys are not written: their defaults mean what version 1 implied.
+    expect(after.data).toEqual({ ...before.data, fontSize: 32 });
 
+    // Undo takes back the edit, not the upgrade, which changed no meaning.
     t.undo.undo();
     const undone = t.element(id);
-    expect(undone.typeVersion).toBe(1);
+    expect(undone.typeVersion).toBe(2);
     expect(undone.data).toEqual(before.data);
+    expect(t.host.read(undone)!.model).toEqual(read.model);
+  });
+
+  it("keeps a peer's concurrent edit when both upgrade, whichever client wins, and after an undo", () => {
+    for (const [ca, cb] of [
+      [1000, 2000],
+      [2000, 1000],
+    ] as const) {
+      const base = new Y.Doc();
+      initDocument(base);
+      const id = addElement(base, {
+        type: TEXT_TYPE,
+        typeVersion: 1,
+        x: 0,
+        y: 0,
+        size: { w: 200, h: 30 },
+        data: {
+          text: { $y: "text", delta: [{ insert: "Old" }] },
+          fontSize: 18,
+          color: "#000",
+        },
+      });
+      const a = setup("advanced", forkDoc(base, ca));
+      const b = setup("advanced", forkDoc(base, cb));
+      created(a.run(TEXT_SET_STYLE, { ids: [id], key: "color", value: "#f00" }));
+      created(b.run(TEXT_SET_STYLE, { ids: [id], key: "align", value: "center" }));
+      syncDocs(a.doc, b.doc);
+      expect(b.host.read(b.element(id))!.model).toMatchObject({
+        align: "center",
+        color: "#f00",
+      });
+      a.undo.undo();
+      syncDocs(a.doc, b.doc);
+      const element = b.element(id);
+      expect(element.typeVersion).toBe(2);
+      expect(b.host.read(element)!.model).toMatchObject({
+        align: "center",
+        color: "#000",
+      });
+    }
   });
 
   it("draws through the renderer's text layout and offers in-place editing", () => {
@@ -368,7 +407,7 @@ describe("text", () => {
       expect.objectContaining({ op: "text", text: "Hi", x: 0, y: 0 }),
     ]);
     const { model } = t.host.read(t.element(id))!;
-    const target = t.host.elementType(TEXT_TYPE)!.textEditing!(model, {
+    const target = t.host.elementType(TEXT_TYPE)!.editing!.textEditing!(model, {
       id,
       w: 100,
       h: 30,
@@ -487,11 +526,11 @@ describe("shape", () => {
   });
 
   it("hit-tests its outline and reports bounds that include the stroke", () => {
-    const model = shapeType.read({ kind: "ellipse", strokeWidth: 4 }, 1, () => {});
+    const model = shapeView.read({ kind: "ellipse", strokeWidth: 4 }, 1, () => {});
     const box = { id: "e", w: 100, h: 50 };
-    expect(shapeType.hitTest!(model, { x: 50, y: 25 }, box, 0)).toBe(true);
-    expect(shapeType.hitTest!(model, { x: 2, y: 2 }, box, 0)).toBe(false);
-    expect(shapeType.bounds!(model, box)).toEqual({ x: -2, y: -2, w: 104, h: 54 });
+    expect(shapeView.hitTest!(model, { x: 50, y: 25 }, box, 0)).toBe(true);
+    expect(shapeView.hitTest!(model, { x: 2, y: 2 }, box, 0)).toBe(false);
+    expect(shapeView.bounds!(model, box)).toEqual({ x: -2, y: -2, w: 104, h: 54 });
   });
 });
 
@@ -687,5 +726,234 @@ describe("elements whose extension is missing", () => {
     // Loading it again brings the type back.
     expect(t.host.load([exampleExtensions[1]!])).toEqual([]);
     expect(t.host.resolve(t.element(id)).status).toBe("known");
+  });
+});
+
+describe("viewing parts alone", () => {
+  it("load in the viewing host and draw, without the editing parts", () => {
+    const t = setup();
+    const id = created(
+      t.run<ElementId>(SHAPE_INSERT, { kind: "rect", x: 0, y: 0, w: 10, h: 10 }),
+    );
+    const viewer = new ViewHost();
+    expect(viewer.load(exampleViewExtensions)).toEqual([]);
+    const ctx = createRecordingDrawContext();
+    viewer.drawElement(ctx, t.element(id), id);
+    expect(ctx.calls.map((c) => c.op)).toEqual([
+      "begin-opacity",
+      "fill",
+      "stroke",
+      "end-opacity",
+    ]);
+  });
+});
+
+describe("text editing", () => {
+  function typing(
+    t: ReturnType<typeof setup>,
+    id: ElementId,
+    at: number,
+    text: string,
+  ): void {
+    const shared = dataMap(t.doc, id).get("text") as Y.Text;
+    edit(t.doc, () => shared.insert(at, text), { origin: BINDING });
+  }
+
+  it("makes typing and the box growing with it one undo step, and a command a step of its own", () => {
+    const t = setup();
+    const id = created(t.run<ElementId>(TEXT_INSERT, { text: "", x: 0, y: 0, w: 100 }));
+    const steps = t.undo.undoStack.length;
+    const height = t.element(id).size.h;
+    // What the editor does on each keystroke: the binding's transaction, then,
+    // when the laid-out height changed, the resize with the binding's origin.
+    typing(t, id, 0, "Hello");
+    typing(t, id, 5, "\nworld");
+    resizeElement(t.doc, id, 100, height * 2, { origin: BINDING });
+    expect(t.undo.undoStack.length).toBe(steps + 1);
+
+    // Bold for the selected word, through the text service: its own step.
+    t.services.state.text = { id, key: "text", index: 6, length: 5 };
+    created(t.run(TEXT_TOGGLE_BOLD));
+    expect(t.undo.undoStack.length).toBe(steps + 2);
+    expect(t.element(id).data["text"]).toEqual({
+      $y: "text",
+      delta: [{ insert: "Hello\n" }, { insert: "world", attributes: { bold: true } }],
+    });
+    // Again: everything selected is bold, so bold comes off.
+    created(t.run(TEXT_TOGGLE_BOLD));
+    expect(t.element(id).data["text"]).toEqual({
+      $y: "text",
+      delta: [{ insert: "Hello\nworld" }],
+    });
+
+    t.undo.undo();
+    t.undo.undo();
+    t.undo.undo();
+    expect(t.element(id).data["text"]).toEqual({ $y: "text", delta: [] });
+    expect(t.element(id).size.h).toBe(height);
+  });
+
+  it("offers bold only while text is selected in a text box", () => {
+    const t = setup();
+    const id = created(t.run<ElementId>(TEXT_INSERT, { text: "Hi" }));
+    expect(t.host.commands.isEnabled(TEXT_TOGGLE_BOLD, t.env())).toBe(false);
+    t.services.state.text = { id, key: "text", index: 0, length: 0 };
+    expect(t.host.commands.isEnabled(TEXT_TOGGLE_BOLD, t.env())).toBe(false);
+    t.services.state.text = { id, key: "text", index: 0, length: 2 };
+    expect(t.host.commands.isEnabled(TEXT_TOGGLE_BOLD, t.env())).toBe(true);
+  });
+});
+
+describe("continuous field controls", () => {
+  it("preview while dragging and write one step at the end", () => {
+    const t = setup("advanced");
+    const id = created(
+      t.run<ElementId>(SHAPE_INSERT, { kind: "rect", x: 0, y: 0, w: 10, h: 10 }),
+    );
+    const field = t.host
+      .properties(SHAPE_TYPE, "advanced")
+      .find((f) => f.key === "opacity")!;
+    const steps = t.undo.undoStack.length;
+    let updates = 0;
+    t.doc.on("update", () => updates++);
+    const gesture = t.host.commands.beginGesture(t.env());
+    for (const value of [0.9, 0.7, 0.5, 0.3])
+      gesture.preview({ [id]: { data: { opacity: value } } });
+    expect(updates).toBe(0);
+    expect(t.services.state.preview).toEqual({ [id]: { data: { opacity: 0.3 } } });
+    created(gesture.commit(field.command, { ids: [id], key: field.key, value: 0.3 }));
+    expect(t.undo.undoStack.length).toBe(steps + 1);
+    expect(t.element(id).data["opacity"]).toBe(0.3);
+  });
+});
+
+describe("selection tool, written against the editor services", () => {
+  function shapes(t: ReturnType<typeof setup>) {
+    const a = created(
+      t.run<ElementId>(SHAPE_INSERT, { kind: "rect", x: 0, y: 0, w: 50, h: 50 }),
+    );
+    const b = created(
+      t.run<ElementId>(SHAPE_INSERT, { kind: "rect", x: 200, y: 100, w: 50, h: 50 }),
+    );
+    return { a, b };
+  }
+  const tool = (t: ReturnType<typeof setup>) => {
+    const { s } = session(t);
+    return t.host
+      .tools()
+      .find((r) => r.id === "examples.select/select")!
+      .definition.start(s);
+  };
+
+  it("selects by clicking, with Shift to add, and with a rubber band", () => {
+    const t = setup();
+    const { a, b } = shapes(t);
+    const handler = tool(t);
+    handler.pointerDown!(pointer({ x: 10, y: 10 }));
+    handler.pointerUp!(pointer({ x: 10, y: 10 }));
+    expect(t.services.state.selection).toEqual([a]);
+    const shift = { ...pointer({ x: 0, y: 0 }).modifiers, shift: true };
+    handler.pointerDown!(pointer({ x: 210, y: 110 }, { modifiers: shift }));
+    handler.pointerUp!(pointer({ x: 210, y: 110 }, { modifiers: shift }));
+    expect(t.services.state.selection).toEqual([a, b]);
+    // A rubber band from empty canvas.
+    handler.pointerDown!(pointer({ x: 190, y: 90 }));
+    expect(t.services.state.selection).toEqual([]);
+    handler.pointerMove!(pointer({ x: 300, y: 300 }));
+    handler.pointerUp!(pointer({ x: 300, y: 300 }));
+    expect(t.services.state.selection).toEqual([b]);
+    expect(t.undo.undoStack.length).toBe(2);
+  });
+
+  it("moves the selection with a preview, snapping to another element, in one step and one transaction", () => {
+    const t = setup();
+    const { a, b } = shapes(t);
+    const handler = tool(t);
+    const steps = t.undo.undoStack.length;
+    let updates = 0;
+    t.doc.on("update", () => updates++);
+    handler.pointerDown!(pointer({ x: 10, y: 10 }));
+    for (let i = 1; i <= 30; i++)
+      handler.pointerMove!(pointer({ x: 10 + i * 6, y: 10 + i }));
+    // 196 is 4 world units from b's left edge (200): it snaps there.
+    handler.pointerMove!(pointer({ x: 206, y: 40 }));
+    expect(updates).toBe(0);
+    expect(t.services.state.preview).toEqual({ [a]: { x: 200, y: 30 } });
+    handler.pointerUp!(pointer({ x: 206, y: 40 }));
+    expect(t.services.state.preview).toBeNull();
+    expect(updates).toBeLessThanOrEqual(2);
+    expect(t.undo.undoStack.length).toBe(steps + 1);
+    expect(t.element(a).pos).toMatchObject({ x: 200, y: 30 });
+    expect(t.element(b).pos).toMatchObject({ x: 200, y: 100 });
+    t.undo.undo();
+    expect(t.element(a).pos).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it("cancels a move with Escape, writing nothing", () => {
+    const t = setup();
+    const { a } = shapes(t);
+    const handler = tool(t);
+    let updates = 0;
+    t.doc.on("update", () => updates++);
+    handler.pointerDown!(pointer({ x: 10, y: 10 }));
+    handler.pointerMove!(pointer({ x: 80, y: 80 }));
+    expect(
+      handler.keyDown!({
+        key: "Escape",
+        modifiers: pointer({ x: 0, y: 0 }).modifiers,
+        repeat: false,
+      }),
+    ).toBe(true);
+    handler.pointerUp!(pointer({ x: 80, y: 80 }));
+    expect(updates).toBe(0);
+    expect(t.element(a).pos).toMatchObject({ x: 0, y: 0 });
+    expect(t.services.state.preview).toBeNull();
+  });
+
+  it("selects all through the selection service, without an undo step", () => {
+    const t = setup();
+    const { a, b } = shapes(t);
+    const steps = t.undo.undoStack.length;
+    created(t.run(SELECT_ALL));
+    expect(t.services.state.selection).toEqual([a, b]);
+    expect(t.undo.undoStack.length).toBe(steps);
+  });
+});
+
+describe("scaling groups and selections", () => {
+  it("keeps proportions, and moves elements of a missing extension without resizing them", () => {
+    const t = setup();
+    const shape = created(
+      t.run<ElementId>(SHAPE_INSERT, { kind: "rect", x: 10, y: 10, w: 20, h: 20 }),
+    );
+    const chart = addElement(t.doc, {
+      type: "examples.chart/chart",
+      x: 50,
+      y: 10,
+      size: { w: 40, h: 20 },
+      data: { kind: "bar" },
+    });
+    const g = group(t.doc, [shape, chart]);
+    const loose = created(
+      t.run<ElementId>(SHAPE_INSERT, { kind: "ellipse", x: 100, y: 0, w: 10, h: 10 }),
+    );
+    expect(t.host.capabilities({ type: GROUP_TYPE, typeVersion: 1 }).resize).toBe(true);
+
+    const steps = t.undo.undoStack.length;
+    created(t.run(SELECT_SCALE, { ids: [g, loose], anchor: { x: 0, y: 0 }, factor: 2 }));
+    expect(t.undo.undoStack.length).toBe(steps + 1);
+    const r = new Resolver(yLookup(t.doc));
+    const world = (id: ElementId) => r.worldOrigin(id);
+    expect(world(shape)).toEqual({ x: 20, y: 20 });
+    expect(t.element(shape).size).toEqual({ w: 40, h: 40 });
+    // The chart's centre (70, 20) goes to (140, 40); its size stays 40 x 20.
+    expect(t.element(chart).size).toEqual({ w: 40, h: 20 });
+    expect(world(chart)).toEqual({ x: 120, y: 30 });
+    expect(world(loose)).toEqual({ x: 200, y: 0 });
+    expect(t.element(loose).size).toEqual({ w: 20, h: 20 });
+
+    t.undo.undo();
+    expect(new Resolver(yLookup(t.doc)).worldOrigin(chart)).toEqual({ x: 50, y: 10 });
+    expect(t.element(shape).size).toEqual({ w: 20, h: 20 });
   });
 });
