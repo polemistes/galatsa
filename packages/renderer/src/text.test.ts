@@ -22,7 +22,8 @@ const STYLE = { fontFamily: "sans", fontSize: 10, color: "#000", align: "left" }
 
 describe("layout", () => {
   it("breaks lines at spaces and long words between characters", () => {
-    // The estimate: 5.5 units per character at size 10.
+    // The estimate: 5.5 units per character at size 10. Lines keep their
+    // trailing spaces, as the browser's do.
     const layout = layoutText(
       estimateMeasurer,
       DEFAULT_FAMILIES,
@@ -31,9 +32,9 @@ describe("layout", () => {
       40,
     );
     expect(layout.lines.map((l) => l.text)).toEqual([
-      "aaa bbb",
+      "aaa bbb ",
       "ccccccc",
-      "cccccc",
+      "cccccc ",
       "d",
     ]);
     expect(layout.height).toBeCloseTo(4 * 12, 9);

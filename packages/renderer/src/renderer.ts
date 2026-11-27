@@ -14,6 +14,12 @@ import { RecordedPath, paintPath } from "./path.ts";
 import type { SceneAssets, SceneSource } from "./scene.ts";
 import { SceneTree, type Container, type SceneNode } from "./scene-tree.ts";
 import {
+  bundledFaces,
+  documentFontWaiter,
+  NO_WAIT,
+  type FontWaiter,
+} from "./fonts.ts";
+import {
   canvasMeasurer,
   DEFAULT_FAMILIES,
   estimateMeasurer,
@@ -22,6 +28,12 @@ import {
   type FontFamilies,
   type TextMeasurer,
 } from "./text.ts";
+import { DomTextEngine } from "./text-dom.ts";
+import {
+  DomTextEditSession,
+  type TextEditOptions,
+  type TextEditSession,
+} from "./text-edit.ts";
 import {
   apply,
   elementMatrix,
@@ -67,12 +79,6 @@ export interface RegionImage {
   readonly mediaType: "image/png" | "image/jpeg" | "image/webp";
 }
 
-/** Placeholder for in-place text editing, which is not built yet. */
-export interface TextEditSession {
-  readonly id: ElementId;
-  end(): void;
-}
-
 export interface RendererOptions {
   /** The extension host whose element types draw the elements. */
   readonly host: ViewHost;
@@ -86,8 +92,19 @@ export interface RendererOptions {
   /** CSS colour behind everything; null leaves the canvas transparent. Default white. */
   readonly background?: string | null;
   readonly families?: FontFamilies;
-  /** Text measurement; default the canvas, or an estimate where there is none. */
+  /**
+   * Text measurement for the simple layout; default the canvas, or an
+   * estimate where there is none.
+   */
   readonly measurer?: TextMeasurer;
+  /**
+   * How text is laid out: "browser" (the default where there is a document)
+   * lays it out in a hidden element and reads the lines back; "simple" breaks
+   * lines itself from measured widths (docs/adr/0011-text.md).
+   */
+  readonly textLayout?: "browser" | "simple";
+  /** Whether fonts are loaded; default the document's fonts, where there are any. */
+  readonly fonts?: FontWaiter;
   /** Called when something changed outside render(), so the host draws again. */
   readonly onInvalidate?: () => void;
 }
@@ -120,6 +137,8 @@ interface Target {
   readonly camera: CameraView;
   /** Drawn above the document (frames on screen only, never in renderRegion). */
   readonly overlay?: OverlayDraw | null;
+  /** A frame on screen (not renderRegion): the editing element follows it. */
+  readonly screen?: boolean;
 }
 
 const DEFAULT_CAMERA: CameraView = { space: null, cx: 0, cy: 0, zoom: 1 };
@@ -139,6 +158,9 @@ export class CanvasRenderer {
   #state: CanvasState | null = null;
   #unmount: (() => void) | null = null;
   #overlay: OverlayDraw | null = null;
+  #fonts: FontWaiter | null = null;
+  #textEngine: DomTextEngine | null | undefined = undefined;
+  #edit: DomTextEditSession | null = null;
   readonly stats: RenderStats = {
     frames: 0,
     lastFrameMs: 0,
@@ -188,6 +210,7 @@ export class CanvasRenderer {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("No 2D canvas context");
     this.#canvas = canvas;
+    this.#preloadFonts();
     this.attach(ctx, {
       width: container.clientWidth,
       height: container.clientHeight,
@@ -315,6 +338,7 @@ export class CanvasRenderer {
         viewport: this.#viewport,
         camera: this.#camera,
         overlay: this.#overlay,
+        screen: true,
       },
       this.stats,
     );
@@ -380,6 +404,7 @@ export class CanvasRenderer {
         measurer: this.#measurer,
         families: this.#options.families ?? DEFAULT_FAMILIES,
         layouts: this.#layouts,
+        textEngine: this.#engine(),
         t: (label, values) => this.#options.t?.(label, values) ?? label,
       },
       counters,
@@ -394,6 +419,8 @@ export class CanvasRenderer {
       return map;
     };
     const host = this.#host;
+    const edit = this.#edit !== null && !this.#edit.ended ? this.#edit : null;
+    const editing = target.screen === true && edit !== null ? edit.id : null;
     const visit = (container: Container, map: SpaceMap, clip?: Rect): void => {
       stats.containersVisited++;
       const s = map.scale;
@@ -403,7 +430,7 @@ export class CanvasRenderer {
       for (const node of tree.visibleChildren(container, rect, 0.5 / s)) {
         if (node.kind === "element") {
           const m = elementMatrix(map, node.x, node.y, node.w, node.h, node.rot);
-          dc.begin(m, s, detailFor(Math.max(node.w, node.h) * s));
+          dc.begin(m, s, detailFor(Math.max(node.w, node.h) * s), node.id === editing);
           host.drawElement(dc, node.record, node.id as ElementId);
           stats.elementsDrawn++;
           continue;
@@ -435,6 +462,7 @@ export class CanvasRenderer {
       }
     };
     visit(tree.root, mapFor(null));
+    if (editing !== null) this.#placeEdit();
     if (target.overlay) {
       // Screen space: CSS pixels, so one unit is devicePixelRatio device pixels.
       const ratio = viewport.devicePixelRatio;
@@ -634,9 +662,89 @@ export class CanvasRenderer {
     return out;
   }
 
-  /** In-place text editing; not built yet (the interface keeps its place). */
-  beginTextEdit(id: ElementId): TextEditSession {
-    throw new Error(`In-place text editing is not available yet (element ${id})`);
+  // -------------------------------------------------------------------------
+  // Text
+  // -------------------------------------------------------------------------
+
+  /** Whether fonts are ready (the document's font set, where there is one). */
+  #fontWaiter(): FontWaiter {
+    if (this.#fonts !== null) return this.#fonts;
+    const fonts = (globalThis as { document?: Document }).document?.fonts;
+    this.#fonts =
+      this.#options.fonts ??
+      (fonts ? documentFontWaiter(fonts, () => this.#options.onInvalidate?.()) : NO_WAIT);
+    return this.#fonts;
+  }
+
+  /** The browser's text layout, where there is a document and it is wanted. */
+  #engine(): DomTextEngine | null {
+    if (this.#textEngine !== undefined) return this.#textEngine;
+    const doc = (globalThis as { document?: Document }).document;
+    this.#textEngine =
+      this.#options.textLayout !== "simple" && doc?.body
+        ? new DomTextEngine(
+            doc,
+            this.#options.families ?? DEFAULT_FAMILIES,
+            this.#fontWaiter(),
+          )
+        : null;
+    return this.#textEngine;
+  }
+
+  /**
+   * Starts editing an element's text in place: an editable element over the
+   * text area (`options.box`, in the element's local box), laid out like the
+   * drawn text and following the camera, while the canvas leaves the
+   * element's text out. Needs a mounted canvas and the browser's text
+   * layout. Ends any other session.
+   */
+  beginTextEdit(id: ElementId, options: TextEditOptions): TextEditSession {
+    const container = this.#canvas?.parentElement;
+    if (!container || !this.#engine())
+      throw new Error(`In-place text editing needs a mounted canvas (element ${id})`);
+    this.#edit?.end();
+    const session = new DomTextEditSession(
+      id,
+      container,
+      this.#options.families ?? DEFAULT_FAMILIES,
+      options,
+    );
+    this.#edit = session;
+    this.#placeEdit();
+    this.#options.onInvalidate?.();
+    return session;
+  }
+
+  /** The open editing session, if any. */
+  get textEdit(): TextEditSession | null {
+    return this.#edit !== null && !this.#edit.ended ? this.#edit : null;
+  }
+
+  /** Puts the editing element over its element, as the camera shows it now. */
+  #placeEdit(): void {
+    const edit = this.#edit;
+    if (edit === null || edit.ended) return;
+    const node = this.#tree?.nodes.get(edit.id as ElementId);
+    const map = node && node.kind === "element" && !node.gone ? this.#map(node.parent) : null;
+    if (!node || !map) {
+      edit.place(null, this.#viewport.devicePixelRatio);
+      return;
+    }
+    edit.place(
+      elementMatrix(map, node.x, node.y, node.w, node.h, node.rot),
+      this.#viewport.devicePixelRatio,
+    );
+  }
+
+  /** Starts loading the bundled fonts, so the first text need not wait for them. */
+  #preloadFonts(): void {
+    const fonts = (globalThis as { document?: Document }).document?.fonts;
+    if (!fonts || this.#options.textLayout === "simple") return;
+    for (const face of bundledFaces(this.#options.families ?? DEFAULT_FAMILIES))
+      fonts.load(face, "Aa").then(
+        () => this.#options.onInvalidate?.(),
+        () => {},
+      );
   }
 
   // -------------------------------------------------------------------------
@@ -687,6 +795,10 @@ export class CanvasRenderer {
   }
 
   dispose(): void {
+    this.#edit?.end();
+    this.#edit = null;
+    this.#textEngine?.dispose();
+    this.#textEngine = null;
     this.#unmount?.();
     this.#unmount = null;
     this.#canvas = null;

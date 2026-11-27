@@ -12,17 +12,24 @@
       "@galatsa/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./fonts.css": "./src/fonts.css"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "**/*.css"
+  ],
   "files": [
-    "dist"
+    "dist",
+    "src/fonts.css"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@fontsource/noto-sans": "5.3.0",
+    "@fontsource/noto-sans-mono": "5.3.0",
+    "@fontsource/noto-serif": "5.3.0",
     "@galatsa/core": "workspace:*",
     "@galatsa/extension-api": "workspace:*",
     "@galatsa/i18n": "workspace:*"

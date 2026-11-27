@@ -203,6 +203,19 @@ describe("findViolations", () => {
     // The flag marks it as production, so the stricter policy applies.
     expect(findViolations([pkg("both@1.0.0", "CC-BY-3.0", true)])).toHaveLength(1);
   });
+
+  it("accepts OFL-1.1 in production only for the listed font packages", () => {
+    expect(
+      findViolations([
+        pkg("@fontsource/noto-sans@5.3.0", "OFL-1.1", true),
+        pkg("@fontsource/noto-serif@5.3.0", "(OFL-1.1 OR MIT)", true),
+      ]),
+    ).toEqual([]);
+    expect(findViolations([pkg("some-code@1.0.0", "OFL-1.1", true)])).toHaveLength(1);
+    expect(
+      findViolations([pkg("@fontsource/noto-sans@5.3.0", "GPL-2.0-only", true)]),
+    ).toHaveLength(1);
+  });
 });
 
 describe("report helpers", () => {
