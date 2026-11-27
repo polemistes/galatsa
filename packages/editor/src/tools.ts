@@ -28,6 +28,8 @@ export interface ToolHost {
   environment(): CommandEnvironment;
   /** Runs a command the way the editor runs user actions (Editor.run). */
   run<R>(command: ContributionId, args?: unknown): CommandOutcome<R>;
+  /** Whether `run` would accept the command now (Editor.isEnabled). */
+  isEnabled(command: ContributionId, args?: unknown): boolean;
   mode(): Mode;
   /** Device pixels per world unit. */
   scale(): number;
@@ -141,6 +143,8 @@ export class ToolController {
       environment: () => editor.environment(),
       run: <R>(command: ContributionId, args?: unknown): CommandOutcome<R> =>
         live() ? editor.run<R>(command, args) : { ok: false, reason: "disabled" },
+      isEnabled: (command, args) => live() && editor.isEnabled(command, args),
+      extensions: editor.host,
       gesture: (): Gesture => editor.host.commands.beginGesture(editor.environment()),
       scale: () => editor.scale(),
       requestOverlay: () => {

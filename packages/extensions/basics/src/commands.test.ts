@@ -275,6 +275,34 @@ describe("rotate", () => {
     expect(t.element(a).rot).toBe(1);
   });
 
+  it("turns elements together about a point, in one transaction and one step", () => {
+    const t = setupBasics();
+    const f = t.frame(100, 0, 200, 200);
+    const a = t.shape(0, 0, 10, 10); // centre (5, 5)
+    const b = t.shape(30, 0, 10, 20, f); // centre (135, 10) in root space
+    const before = steps(t);
+    const n = updates(t, () =>
+      t.must(BASICS.rotate, { ids: [a, b], by: Math.PI / 2, about: { x: 70, y: 5 } }),
+    );
+    expect(n).toBeLessThanOrEqual(2); // the change and the work tracker's
+    expect(steps(t)).toBe(before + 1);
+    // A quarter turn clockwise about (70, 5): (5, 5) goes to (70, -60), (135, 10) to (65, 70).
+    const wa = world(t, a);
+    expect(wa.x + 5).toBeCloseTo(70, 9);
+    expect(wa.y + 5).toBeCloseTo(-60, 9);
+    const wb = world(t, b);
+    expect(wb.x + 5).toBeCloseTo(65, 9);
+    expect(wb.y + 10).toBeCloseTo(70, 9);
+    expect(t.element(a).rot).toBeCloseTo(Math.PI / 2);
+    // b stays in its frame, at a position in the frame's space.
+    expect(t.resolver().parentOf(b)).toBe(f);
+    t.must(BASICS.undo);
+    expect(world(t, a)).toEqual({ x: 0, y: 0 });
+    expect(world(t, b)).toEqual({ x: 130, y: 0 });
+    refused(t, BASICS.rotate, { ids: [a], rot: 1, about: { x: 0, y: 0 } });
+    refused(t, BASICS.rotate, { ids: [a], by: 1, about: { x: Number.NaN, y: 0 } });
+  });
+
   it("refuses frames, groups, elements of a missing extension, rigid types and locked elements", () => {
     const t = setupBasics();
     const f = t.frame(0, 0);

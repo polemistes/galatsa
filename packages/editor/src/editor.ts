@@ -227,6 +227,7 @@ export class Editor {
         host: this.host,
         environment: () => this.environment(),
         run: <R>(command: ContributionId, args?: unknown) => this.run<R>(command, args),
+        isEnabled: (command, args) => this.isEnabled(command, args),
         mode: () => this.#state.mode,
         scale: () => this.#state.camera.zoom * this.renderer.viewport.devicePixelRatio,
         invalidate: () => this.invalidate(),
@@ -294,6 +295,16 @@ export class Editor {
         return { ok: false, reason: "disabled" };
     }
     return this.host.commands.execute<R>(command, env, args);
+  }
+
+  /** Whether `run` would accept the command now, with these arguments (a menu's check). */
+  isEnabled(command: ContributionId, args?: unknown): boolean {
+    const env = this.environment();
+    if (this.host.commands.gestureActive(env)) {
+      const entry = this.host.commands.get(command);
+      if (entry !== undefined && entry.definition.undoable !== false) return false;
+    }
+    return this.host.commands.isEnabled(command, env, args);
   }
 
   /** Calls `listener` when the selection, camera, mode, panels, tool or cursor change. */
