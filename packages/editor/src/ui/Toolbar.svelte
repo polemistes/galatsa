@@ -183,27 +183,29 @@
 </div>
 
 {#if asking}
-  <Dialog heading={t("editor:open.heading")}>
-    {#if info.status.unsavedToFile}
-      <p>{t("editor:open.detail")}</p>
-      {#if info.status.downloadedAt !== null}
-        <p>{t("editor:open.downloaded", { when: info.status.downloadedAt })}</p>
+  <div class="modal">
+    <Dialog heading={t("editor:open.heading")}>
+      {#if info.status.unsavedToFile}
+        <p>{t("editor:open.detail")}</p>
+        {#if info.status.downloadedAt !== null}
+          <p>{t("editor:open.downloaded", { when: info.status.downloadedAt })}</p>
+        {/if}
       {/if}
-    {/if}
-    <div class="buttons">
-      <button type="button" disabled={busy} onclick={() => void doc.saveAsFile()}>
-        {t("editor:toolbar.save")}
-      </button>
-      <button type="button" disabled={busy} onclick={() => void chooseAndOpen()}>
-        {info.status.unsavedToFile
-          ? t("editor:open.withoutSaving")
-          : t("editor:open.choose")}
-      </button>
-      <button type="button" onclick={() => (asking = false)}>
-        {t("editor:open.cancel")}
-      </button>
-    </div>
-  </Dialog>
+      <div class="buttons">
+        <button type="button" disabled={busy} onclick={() => void doc.saveAsFile()}>
+          {t("editor:toolbar.save")}
+        </button>
+        <button type="button" disabled={busy} onclick={() => void chooseAndOpen()}>
+          {info.status.unsavedToFile
+            ? t("editor:open.withoutSaving")
+            : t("editor:open.choose")}
+        </button>
+        <button type="button" onclick={() => (asking = false)}>
+          {t("editor:open.cancel")}
+        </button>
+      </div>
+    </Dialog>
+  </div>
 {/if}
 
 <style>
@@ -212,12 +214,12 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
-    padding: 4px;
-    background: rgba(255, 255, 255, 0.96);
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-    pointer-events: auto;
+  }
+  /* Over the whole window: the toolbar's bar would hold it otherwise. */
+  .modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
   }
   .group {
     display: flex;

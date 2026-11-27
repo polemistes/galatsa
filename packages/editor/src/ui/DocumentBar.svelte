@@ -76,7 +76,7 @@
 <style>
   .bar {
     position: absolute;
-    left: 8px;
+    left: calc(var(--galatsa-stage-left, 0px) + 8px);
     bottom: 8px;
     max-width: calc(100% - 16px);
     display: flex;
@@ -91,7 +91,7 @@
   }
   .notices {
     position: absolute;
-    left: 50%;
+    left: calc(50% + var(--galatsa-stage-left, 0px) / 2);
     bottom: 56px;
     transform: translateX(-50%);
     max-width: min(36rem, calc(100% - 16px));

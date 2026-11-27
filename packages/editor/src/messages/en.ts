@@ -90,4 +90,5 @@ export default {
   "properties.count": "{count} selected",
   "properties.mixed": "Mixed",
   "properties.none": "None",
+  "properties.hint": "Select something on the canvas to see and change its properties.",
 };

@@ -48,7 +48,7 @@
   aside {
     position: absolute;
     right: 8px;
-    top: 56px;
+    top: calc(var(--galatsa-stage-top, 0px) + 8px);
     bottom: 56px;
     width: min(20rem, calc(100% - 16px));
     overflow: auto;

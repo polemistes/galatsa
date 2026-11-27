@@ -103,122 +103,112 @@
   }
 </script>
 
-{#if sections.length > 0}
-  <aside class="galatsa-properties" aria-label={t("editor:properties.label")}>
-    {#each sections as section (section.type)}
-      <section>
-        <h2>
-          {t(section.label)}
-          {#if section.ids.length > 1}
-            <span class="count"
-              >{t("editor:properties.count", { count: section.ids.length })}</span
-            >
-          {/if}
-        </h2>
-        {#each section.fields as field (field.key)}
-          {@const id = fieldId(section.type, field)}
-          {@const control = field.control}
-          <div class="field" data-key={field.key}>
-            <label for={id}>{t(field.label)}</label>
-            <div class="control">
-              {#if control.kind === "number"}
-                <input
-                  {id}
-                  type="number"
-                  min={control.min}
-                  max={control.max}
-                  step={control.step ?? "any"}
-                  value={field.mixed || typeof field.value !== "number"
-                    ? ""
-                    : field.value}
-                  placeholder={field.mixed ? t("editor:properties.mixed") : ""}
-                  onchange={(event) => setNumber(field, event)}
-                />
-                {#if control.unit !== undefined}
-                  <span class="unit">{t(control.unit)}</span>
-                {/if}
-              {:else if control.kind === "color"}
-                <input
-                  {id}
-                  type="color"
-                  value={hex(field.value)}
-                  disabled={field.value === null && !field.mixed}
-                  oninput={(event) => previewColor(id, field, event)}
-                  onchange={(event) => commitColor(id, field, event)}
-                />
-                {#if control.allowNone}
-                  <label class="none">
-                    <input
-                      type="checkbox"
-                      checked={field.value === null && !field.mixed}
-                      onchange={(event) => setNone(field, event)}
-                    />
-                    {t("editor:properties.none")}
-                  </label>
-                {/if}
-                {#if field.mixed}
-                  <span class="mixed">{t("editor:properties.mixed")}</span>
-                {/if}
-              {:else if control.kind === "select"}
-                <select
-                  {id}
-                  value={chosenIndex(field)}
-                  onchange={(event) => setChoice(field, event)}
-                >
-                  {#if chosenIndex(field) === ""}
-                    <option value="" disabled>{t("editor:properties.mixed")}</option>
-                  {/if}
-                  {#each control.options as option, index (index)}
-                    <option value={String(index)}>{t(option.label)}</option>
-                  {/each}
-                </select>
-              {:else if control.kind === "toggle"}
-                <input
-                  {id}
-                  type="checkbox"
-                  checked={field.value === true && !field.mixed}
-                  indeterminate={field.mixed}
-                  onchange={(event) => setToggle(field, event)}
-                />
-              {:else if control.multiline}
-                <textarea
-                  {id}
-                  value={field.mixed || typeof field.value !== "string"
-                    ? ""
-                    : field.value}
-                  placeholder={field.mixed ? t("editor:properties.mixed") : ""}
-                  onchange={(event) => setText(field, event)}></textarea>
-              {:else}
-                <input
-                  {id}
-                  type="text"
-                  value={field.mixed || typeof field.value !== "string"
-                    ? ""
-                    : field.value}
-                  placeholder={field.mixed ? t("editor:properties.mixed") : ""}
-                  onchange={(event) => setText(field, event)}
-                />
+<aside class="galatsa-properties" aria-label={t("editor:properties.label")}>
+  {#if sections.length === 0}
+    <p class="hint">{t("editor:properties.hint")}</p>
+  {/if}
+  {#each sections as section (section.type)}
+    <section>
+      <h2>
+        {t(section.label)}
+        {#if section.ids.length > 1}
+          <span class="count"
+            >{t("editor:properties.count", { count: section.ids.length })}</span
+          >
+        {/if}
+      </h2>
+      {#each section.fields as field (field.key)}
+        {@const id = fieldId(section.type, field)}
+        {@const control = field.control}
+        <div class="field" data-key={field.key}>
+          <label for={id}>{t(field.label)}</label>
+          <div class="control">
+            {#if control.kind === "number"}
+              <input
+                {id}
+                type="number"
+                min={control.min}
+                max={control.max}
+                step={control.step ?? "any"}
+                value={field.mixed || typeof field.value !== "number" ? "" : field.value}
+                placeholder={field.mixed ? t("editor:properties.mixed") : ""}
+                onchange={(event) => setNumber(field, event)}
+              />
+              {#if control.unit !== undefined}
+                <span class="unit">{t(control.unit)}</span>
               {/if}
-            </div>
+            {:else if control.kind === "color"}
+              <input
+                {id}
+                type="color"
+                value={hex(field.value)}
+                disabled={field.value === null && !field.mixed}
+                oninput={(event) => previewColor(id, field, event)}
+                onchange={(event) => commitColor(id, field, event)}
+              />
+              {#if control.allowNone}
+                <label class="none">
+                  <input
+                    type="checkbox"
+                    checked={field.value === null && !field.mixed}
+                    onchange={(event) => setNone(field, event)}
+                  />
+                  {t("editor:properties.none")}
+                </label>
+              {/if}
+              {#if field.mixed}
+                <span class="mixed">{t("editor:properties.mixed")}</span>
+              {/if}
+            {:else if control.kind === "select"}
+              <select
+                {id}
+                value={chosenIndex(field)}
+                onchange={(event) => setChoice(field, event)}
+              >
+                {#if chosenIndex(field) === ""}
+                  <option value="" disabled>{t("editor:properties.mixed")}</option>
+                {/if}
+                {#each control.options as option, index (index)}
+                  <option value={String(index)}>{t(option.label)}</option>
+                {/each}
+              </select>
+            {:else if control.kind === "toggle"}
+              <input
+                {id}
+                type="checkbox"
+                checked={field.value === true && !field.mixed}
+                indeterminate={field.mixed}
+                onchange={(event) => setToggle(field, event)}
+              />
+            {:else if control.multiline}
+              <textarea
+                {id}
+                value={field.mixed || typeof field.value !== "string" ? "" : field.value}
+                placeholder={field.mixed ? t("editor:properties.mixed") : ""}
+                onchange={(event) => setText(field, event)}></textarea>
+            {:else}
+              <input
+                {id}
+                type="text"
+                value={field.mixed || typeof field.value !== "string" ? "" : field.value}
+                placeholder={field.mixed ? t("editor:properties.mixed") : ""}
+                onchange={(event) => setText(field, event)}
+              />
+            {/if}
           </div>
-        {/each}
-      </section>
-    {/each}
-  </aside>
-{/if}
+        </div>
+      {/each}
+    </section>
+  {/each}
+</aside>
 
 <style>
   aside {
-    width: min(16rem, calc(100vw - 32px));
-    min-height: 0;
-    overflow: auto;
     padding: 8px 12px;
-    background: rgba(255, 255, 255, 0.96);
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-    pointer-events: auto;
-    box-sizing: border-box;
+  }
+  .hint {
+    margin: 0;
+    color: #64748b;
   }
   section + section {
     margin-top: 8px;

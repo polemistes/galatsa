@@ -90,4 +90,5 @@ export default {
   "properties.count": "{count} valgt",
   "properties.mixed": "Ulike verdier",
   "properties.none": "Ingen",
+  "properties.hint": "Velg noe på lerretet for å se og endre egenskapene.",
 };

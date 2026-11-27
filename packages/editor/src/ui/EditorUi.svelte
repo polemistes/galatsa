@@ -23,43 +23,63 @@
   const i18n = $derived(app.i18n);
   const t = $derived(translator(i18n));
   const watched = $derived(new Watched(app, () => app.state));
-  const state = $derived(watched.current);
-  const offer = $derived(state.phase === "recovery" ? state.offers[0] : undefined);
+  const appState = $derived(watched.current);
+  const offer = $derived(appState.phase === "recovery" ? appState.offers[0] : undefined);
+  /** The toolbar and the properties are shown while a document is edited. */
+  const shell = $derived(
+    appState.phase === "editing" &&
+      appState.document !== null &&
+      appState.editor !== null,
+  );
+  let bandHeight = $state(0);
+  let sideWidth = $state(0);
+  const insets = $derived(
+    shell ? { top: bandHeight, left: sideWidth } : { top: 0, left: 0 },
+  );
+
+  // The canvas lies beside the bars, never under them.
+  $effect(() => app.setStageInsets(insets));
 </script>
 
-<div class="layer">
-  {#if state.noStorage}
+<div
+  class="layer"
+  style:--galatsa-stage-top="{insets.top}px"
+  style:--galatsa-stage-left="{insets.left}px"
+>
+  {#if appState.noStorage}
     <div role="alert" class="card corner">{t("editor:status.noStorage")}</div>
   {/if}
-  {#if state.phase === "starting" || state.phase === "opening"}
+  {#if appState.phase === "starting" || appState.phase === "opening"}
     <div role="status" class="card top">{t("editor:status.opening")}</div>
-  {:else if state.phase === "failed" && state.problem !== null}
-    <div role="alert" class="card top">{noticeText(i18n, state.problem)}</div>
-  {:else if state.phase === "closed"}
+  {:else if appState.phase === "failed" && appState.problem !== null}
+    <div role="alert" class="card top">{noticeText(i18n, appState.problem)}</div>
+  {:else if appState.phase === "closed"}
     <div role="status" class="card top">{t("editor:status.closed")}</div>
   {/if}
-  {#if state.phase === "editing" && state.document !== null}
-    <DocumentBar {i18n} doc={state.document} />
+  {#if appState.phase === "editing" && appState.document !== null}
+    <DocumentBar {i18n} doc={appState.document} />
   {/if}
-  {#if state.phase === "editing" && state.document !== null && state.editor !== null}
-    {#key state.editor}
-      <div class="side">
-        <Toolbar {app} editor={state.editor} doc={state.document} />
-        <Properties editor={state.editor} />
+  {#if shell && appState.document !== null && appState.editor !== null}
+    {#key appState.editor}
+      <div class="band" bind:offsetHeight={bandHeight}>
+        <Toolbar {app} editor={appState.editor} doc={appState.document} />
+      </div>
+      <div class="sidebar" bind:offsetWidth={sideWidth}>
+        <Properties editor={appState.editor} />
       </div>
     {/key}
   {/if}
-  {#if state.editor !== null}
-    <Panels editor={state.editor} />
-    <ContextMenu editor={state.editor} />
-    <EditorNotice editor={state.editor} />
+  {#if appState.editor !== null}
+    <Panels editor={appState.editor} />
+    <ContextMenu editor={appState.editor} />
+    <EditorNotice editor={appState.editor} />
   {/if}
   {#if offer !== undefined}
     {#key offer.slot}
-      <RecoveryDialog {i18n} {app} {offer} problem={state.problem} />
+      <RecoveryDialog {i18n} {app} {offer} problem={appState.problem} />
     {/key}
   {/if}
-  <Problems {i18n} problems={state.problems} conflicts={state.conflicts} />
+  <Problems {i18n} problems={appState.problems} conflicts={appState.conflicts} />
 </div>
 
 <style>
@@ -72,17 +92,26 @@
       sans-serif;
     color: #1e293b;
   }
-  .side {
+  .band {
     position: absolute;
-    left: 8px;
-    top: 8px;
-    bottom: 56px;
-    max-width: calc(100% - 16px);
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-    pointer-events: none;
+    left: 0;
+    right: 0;
+    top: 0;
+    padding: 4px 8px;
+    background: #f8fafc;
+    border-bottom: 1px solid #cbd5e1;
+    pointer-events: auto;
+  }
+  .sidebar {
+    position: absolute;
+    left: 0;
+    top: var(--galatsa-stage-top);
+    bottom: 0;
+    width: min(16rem, 40%);
+    overflow: auto;
+    background: #fff;
+    border-right: 1px solid #cbd5e1;
+    pointer-events: auto;
   }
   .card {
     position: absolute;

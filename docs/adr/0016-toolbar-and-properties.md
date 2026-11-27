@@ -2,7 +2,7 @@
 
 - Status: proposed
 - Date: 2026-11-27
-- Code: `toolbar`, `active`, `CommandRegistry.toolbar` and `CommandRegistry.isActive` in `packages/extension-api`; `Toolbar.svelte`, `toolbar.ts`, `Properties.svelte`, `properties.ts`, `Icon.svelte`, `icons.ts` and `editorChanges` in `packages/editor/src/ui`; `EditorApp.openFile` in `packages/editor`; `pickFileToOpen` in `packages/storage`; the toolbar button of the routes panel (`packages/extensions/routes`) and the crop tool's icon (`packages/extensions/image`); the first page and the base path of `apps/web`; `tests/e2e/shell.spec.ts`
+- Code: `toolbar`, `active`, `CommandRegistry.toolbar` and `CommandRegistry.isActive` in `packages/extension-api`; `Toolbar.svelte`, `toolbar.ts`, `Properties.svelte`, `properties.ts`, `Icon.svelte`, `icons.ts` and `editorChanges` in `packages/editor/src/ui`; `EditorApp.openFile` and `EditorApp.setStageInsets` in `packages/editor`; `pickFileToOpen` in `packages/storage`; the toolbar button of the routes panel (`packages/extensions/routes`) and the crop tool's icon (`packages/extensions/image`); the first page and the base path of `apps/web`; `tests/e2e/shell.spec.ts`
 
 ## Context
 
@@ -44,12 +44,12 @@ The icons are the program's own: one SVG path each on a 24 × 24 grid, drawn wit
 
 The properties panel (`Properties.svelte`, contents in `properties.ts`) shows the fields of [0005](0005-extension-interface.md) section 3.9 for the selection, or for the text being edited in place (which is outlined, not selected):
 
-- **One section per element type** among the selected elements, headed by the type's label and, for several elements, how many. Elements of a missing extension, frames and groups have no fields and add no section; with nothing to show, the panel is hidden.
+- **One section per element type** among the selected elements, headed by the type's label and, for several elements, how many. Elements of a missing extension, frames and groups have no fields and add no section; with nothing to show, the panel says how to get properties.
 - **Fields** come from `host.properties(type, mode)`, so quick mode shows fewer than advanced mode; a field is shown only when its `applies` holds for every selected element of the type (the shape type's fill only for closed outlines, corner rounding only for kinds with corners).
 - **Mixed values.** When the elements' values differ, the control shows it: an empty number or text box with "Mixed" as its placeholder, an extra "Mixed" entry in a choice, an indeterminate checkbox, and "Mixed" beside a colour, which shows the first element's colour.
 - **Controls:** a number box (the value is kept within the field's range; the unit follows it), a colour input (with a "None" checkbox where the colour may be none), a choice, a checkbox, a text box.
 - **Every change runs the field's command** with a `FieldChange` (`{ ids, key, value }`), as one undo step. A colour being dragged in the browser's colour picker is previewed through a gesture (0005 section 4.7: the document is not changed) and committed once when the picker reports the final value, so a drag is one undo step. A number is committed when the box reports a change (Enter, leaving the box, the arrows).
-- More than 500 selected elements are not read (select all on a large canvas); the panel is then hidden.
+- More than 500 selected elements are not read (select all on a large canvas); the panel then shows its hint.
 
 ### Opening and saving files
 
@@ -64,7 +64,7 @@ The web page opens a new, empty presentation. The sample scene (the benchmark sc
 
 ### Layout
 
-The toolbar stands at the top left over the canvas, the properties panel under it, the custom panels (routes) at the right, the save status at the bottom left, the storage layer's notices at the bottom centre and the editor's notices at the top centre, under the toolbar. The status bar has lost its buttons: saving is in the toolbar, and a presentation in a browser is closed with its tab (the warning before an unsaved tab closes stays).
+The toolbar is a bar across the top of the window and the properties panel a column at the left, under it; the canvas fills the rest (`EditorApp.setStageInsets`), so neither ever covers what the user works on. A first version laid both over the canvas, and the properties panel, which appeared with the selection, covered the elements the user had just made at the top left (the end-to-end tests of selection and text clicked on it). With nothing selected, the column says how to get properties. The custom panels (routes) still lie over the canvas at its right, the save status at its bottom left, the storage layer's notices at its bottom centre and the editor's notices at its top centre; the context menu opens where the canvas was clicked. The status bar has lost its buttons: saving is in the toolbar, and a presentation in a browser is closed with its tab (the warning before an unsaved tab closes stays).
 
 ### The page from a folder
 
@@ -77,7 +77,7 @@ These were decided by Claude, not by the users, and can be changed when the user
 - Where things stand (above), one row of icon buttons with tooltips, no text on the buttons.
 - The tool groups' order is the extensions' order: selection, text, shapes, crop.
 - The language is a choice in the toolbar, with the languages' own names.
-- The properties panel appears only when something with fields is selected, and has no button to hide it.
+- The properties panel is always there, 16 rem wide (at most 40 % of the window), and has no button to hide it.
 - Opening a file asks first only when the presentation has changes not saved to a file.
 - The first visit opens an empty presentation, not a start page.
 - The status bar's "Close the presentation" button is gone.
@@ -90,7 +90,7 @@ These were decided by Claude, not by the users, and can be changed when the user
 - Every opened file and every first visit makes a new stored presentation, and nothing removes the empty ones or lists the others (0006 section 11, item 4).
 - A number is committed per change, not scrubbed with the mouse; how often a colour picker reports a value while it is dragged depends on the browser.
 - The toolbar is reached with Tab, button by button; arrow keys do not move within it.
-- The toolbar wraps on a narrow window and then covers more of the canvas; the properties panel shrinks and scrolls.
+- The toolbar wraps on a narrow window, and the canvas gets smaller; the properties column scrolls. The column takes room from the canvas also when nothing is selected.
 
 ## Tests
 

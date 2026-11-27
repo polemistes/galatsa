@@ -191,6 +191,16 @@ export class EditorApp {
     }
   }
 
+  /**
+   * Leaves room around the canvas for the interface's bars (the toolbar above
+   * it, the properties at its side), in CSS pixels, so that they never cover
+   * what the user works on (docs/adr/0016).
+   */
+  setStageInsets(insets: { readonly top: number; readonly left: number }): void {
+    this.#stage.style.top = `${Math.max(0, insets.top)}px`;
+    this.#stage.style.left = `${Math.max(0, insets.left)}px`;
+  }
+
   /** Opens what the program opens when no recovered work is restored. */
   async openDefault(): Promise<void> {
     this.#set({ phase: "opening", offers: [] });
