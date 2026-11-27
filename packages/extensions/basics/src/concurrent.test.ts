@@ -335,6 +335,22 @@ function placeKeysOf(
   return out;
 }
 
+/**
+ * Puts an element's place keys back to their values before a step. False
+ * where a key had none (only a rebase may be missing; the element was then
+ * made by the step, and has no place before it).
+ */
+function restorePlace(
+  element: Record<string, unknown>,
+  keys: ReadonlyMap<string, string | undefined>,
+): boolean {
+  for (const [key, old] of keys) {
+    if (old === undefined && key !== "rebase") return false;
+    element[key] = old === undefined ? null : JSON.parse(old);
+  }
+  return true;
+}
+
 /** Runs undo or redo for `me`, checking rules 1 to 4 against `other`. */
 function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): boolean {
   const mine = me.doc.clientID;
@@ -384,8 +400,7 @@ function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): b
     const element = snap1.elements[id];
     if (element === undefined) continue;
     const restored = { ...element } as Record<string, unknown>;
-    for (const [key, old] of keys)
-      restored[key] = old === undefined ? null : JSON.parse(old);
+    if (!restorePlace(restored, keys)) continue;
     const expected = new Resolver(
       lookupFromRecord({
         ...snap1.elements,
@@ -425,8 +440,7 @@ function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): b
     const element = snap0.elements[id];
     if (element === undefined) continue;
     const restored = { ...element } as Record<string, unknown>;
-    for (const [key, old] of keys)
-      restored[key] = old === undefined ? null : JSON.parse(old);
+    if (!restorePlace(restored, keys)) continue;
     const hypothetical = new Resolver(
       lookupFromRecord({
         ...snap0.elements,
