@@ -20,4 +20,6 @@ export default {
   "kind.rect": "Rektangel",
   "kind.ellipse": "Ellipse",
   "kind.line": "Linje",
+  "kind.triangle": "Trekant",
+  "param.apexX": "Toppunkt",
 };
