@@ -12,6 +12,7 @@
   import type { ElementId, RouteEntryId, StopId } from "@galatsa/core";
   import { roots } from "@galatsa/core/ydoc";
   import { translator, type PanelProps } from "@galatsa/editor";
+  import { untrack } from "svelte";
   import { ROUTES, ROUTES_PANEL, routesCommandEnabled } from "./commands.ts";
   import {
     firstPlaces,
@@ -38,7 +39,13 @@
       version++;
     };
     watched.on("update", bump);
-    const stop = watchChoice(watched, bump);
+    // The services are the editor's, the same in every context it passes.
+    const overlays = untrack(() => context.services.overlays);
+    const stop = watchChoice(watched, () => {
+      bump();
+      // The route line shows the chosen route and step.
+      overlays.invalidate();
+    });
     return () => {
       watched.off("update", bump);
       stop();
