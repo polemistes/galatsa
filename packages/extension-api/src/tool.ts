@@ -52,7 +52,12 @@ export type Cursor =
   | "grab"
   | "grabbing"
   | "pointer"
-  | "not-allowed";
+  | "not-allowed"
+  /** Resizing along a diagonal, an axis (since 1.2). */
+  | "nwse-resize"
+  | "nesw-resize"
+  | "ns-resize"
+  | "ew-resize";
 
 /** What the editor gives a tool while it is the current tool. */
 export interface ToolSession {

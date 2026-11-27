@@ -5,7 +5,13 @@
 // helpers. Not part of the program (nothing in index.ts exports it).
 
 import { initDocument } from "@galatsa/core/ydoc";
-import { exampleExtensions } from "@galatsa/extension-examples";
+import {
+  imageExtension,
+  shapeExtension,
+  textExtension,
+} from "@galatsa/extension-examples";
+import { fixturesExtension } from "@galatsa/extension-basics/testing";
+import { SELECT_TOOL } from "@galatsa/extension-select";
 import { createI18n, memoryLocaleStorage, type I18n } from "@galatsa/i18n";
 import type { Canvas2D } from "@galatsa/renderer";
 import * as Y from "yjs";
@@ -43,7 +49,15 @@ export function testEditor(options: Partial<EditorOptions> = {}): {
   const i18n = options.i18n ?? testI18n();
   const doc = options.doc ?? new Y.Doc();
   if (!options.doc) initDocument(doc);
-  const loaded = loadExtensions(i18n, exampleExtensions);
+  // The element sketches and the basics' test fixtures (an element type of a
+  // missing extension, a type that may be neither resized nor rotated); the
+  // selection sketch is left out, the editor's own selection tool is used.
+  const loaded = loadExtensions(i18n, [
+    textExtension,
+    shapeExtension,
+    imageExtension,
+    fixturesExtension,
+  ]);
   if (loaded.problems.length > 0)
     throw new Error(loaded.problems.map((p) => p.detail).join("; "));
   const frames: Array<() => void> = [];
@@ -56,7 +70,7 @@ export function testEditor(options: Partial<EditorOptions> = {}): {
       frames.push(frame);
       return () => {};
     },
-    defaultTool: "examples.select/select",
+    defaultTool: SELECT_TOOL,
     ...options,
   });
   editor.attach(nullContext(), VIEW);

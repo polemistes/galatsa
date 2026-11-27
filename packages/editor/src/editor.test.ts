@@ -69,7 +69,7 @@ describe("editor core", () => {
     });
     // The shape tool is done after one shape: back to the default tool.
     return Promise.resolve().then(() => {
-      expect(editor.tools.current).toBe("examples.select/select");
+      expect(editor.tools.current).toBe("galatsa.select/select");
 
       const undo = editor.keyDown(key("z", { ctrlKey: true }));
       expect(undo).toMatchObject({ kind: "command", command: BASICS.undo });
