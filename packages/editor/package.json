@@ -39,7 +39,6 @@
   },
   "devDependencies": {
     "@galatsa/extension-examples": "workspace:*",
-    "@galatsa/extension-routes": "workspace:*",
     "@galatsa/extension-shape": "workspace:*",
     "@galatsa/extension-text": "workspace:*",
     "svelte-check": "4.7.8",

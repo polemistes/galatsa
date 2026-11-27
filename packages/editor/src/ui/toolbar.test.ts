@@ -2,11 +2,12 @@
 
 // The toolbar's model (docs/adr/0016): tools by group with the current one
 // pressed, undo and redo following the history, commands with a `toolbar`
-// group (the routes panel's toggle, pressed while the panel is open), and
+// group (a panel's toggle, pressed while the panel is open), and
 // shortcuts as the keys are marked.
 
 import { BASICS } from "@galatsa/extension-basics";
-import { routesExtension, ROUTES_PANEL } from "@galatsa/extension-routes";
+import { EXTENSION_API_VERSION } from "@galatsa/extension-api";
+import { defineCommand, type EditExtension } from "@galatsa/extension-api/editing";
 import { SHAPE_INSERT, shapeExtension } from "@galatsa/extension-shape";
 import { textExtension } from "@galatsa/extension-text";
 import { createI18n, memoryLocaleStorage } from "@galatsa/i18n";
@@ -20,9 +21,33 @@ import {
   type ToolbarButton,
 } from "./toolbar.ts";
 
+const PANEL = "test.toggle/panel";
+
+/** A command with a toolbar button that opens and closes a panel (as the routes panel's does). */
+const toggleExtension: EditExtension = {
+  view: { id: "test.toggle", version: "0.0.0", api: EXTENSION_API_VERSION },
+  contributes: {
+    commands: [
+      defineCommand<undefined, void>({
+        name: "toggle",
+        label: "common:action.ok",
+        shortcuts: ["Shift+P"],
+        quick: true,
+        undoable: false,
+        toolbar: "panels",
+        active: (ctx) => ctx.services.panels.isOpen(PANEL),
+        execute(ctx) {
+          if (ctx.services.panels.isOpen(PANEL)) ctx.services.panels.close(PANEL);
+          else ctx.services.panels.open(PANEL);
+        },
+      }),
+    ],
+  },
+};
+
 function setup() {
   const i18n = testI18n();
-  const loaded = loadExtensions(i18n, [textExtension, shapeExtension, routesExtension]);
+  const loaded = loadExtensions(i18n, [textExtension, shapeExtension, toggleExtension]);
   expect(loaded.problems).toEqual([]);
   return testEditor({ i18n, host: loaded.host }).editor;
 }
@@ -71,16 +96,18 @@ describe("the toolbar", () => {
     const toggle = () =>
       toolbarModel(editor)
         .commands.flatMap((g) => g.buttons)
-        .find((b) => b.id === "galatsa.routes/toggle-panel")!;
+        .find((b) => b.id === "test.toggle/toggle")!;
     expect(toolbarModel(editor).commands.map((g) => g.key)).toContain("commands:panels");
     expect(toggle()).toMatchObject({
       pressed: false,
       enabled: true,
-      shortcut: "Shift+r",
+      shortcut: "Shift+p",
     });
     pressButton(editor, toggle());
-    expect(editor.services.panels.isOpen(ROUTES_PANEL)).toBe(true);
+    expect(editor.services.panels.isOpen(PANEL)).toBe(true);
     expect(toggle().pressed).toBe(true);
+    pressButton(editor, toggle());
+    expect(toggle().pressed).toBe(false);
   });
 });
 
