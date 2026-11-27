@@ -29,9 +29,10 @@
 
 import * as Y from "yjs";
 import { revisionDigest } from "../model/digest.ts";
-import { jsonEquals } from "../model/grammar.ts";
+import { Problems, envelopeField, jsonEquals } from "../model/grammar.ts";
 import { defaultRandomBytes, newId, type RandomBytes } from "../model/ids.ts";
-import { Resolver, withoutMarks } from "../model/resolve.ts";
+import { Resolver, withoutMarks, type ElementLookup } from "../model/resolve.ts";
+import { jsonFromY } from "./encode.ts";
 import { INTERNAL_ORIGINS, ORIGIN, roots } from "./schema.ts";
 import { marksOf, revisionOf, yLookup } from "./snapshot.ts";
 
@@ -230,6 +231,9 @@ function afterTransaction(doc: Y.Doc, tracker: Tracker, tr: Y.Transaction): void
     }
     work(located);
   }
+  // An undo or redo is finished before its work is judged (section 10).
+  if (tr.origin instanceof DocumentUndoManager && tr.origin.currStackItem !== null)
+    settleStep(doc, tr, tr.origin.currStackItem.deletions, ignoredElements);
   for (const [record, force] of tracker.noted) work(locateRecord(doc, record), force);
   tracker.noted.clear();
   if (worked.size === 0 && written.size === 0) return;
@@ -367,6 +371,138 @@ function fillHoles(doc: Y.Doc, deletions: unknown): void {
           (parent as Y.Map<unknown>).set(struct.parentSub, values[0]);
       },
     );
+  }, ORIGIN.track);
+}
+
+/** Envelope keys that place an element: its container, stacking slot and position. */
+const PLACE_KEYS = ["parent", "rebase", "order", "pos"] as const;
+type PlaceKey = (typeof PLACE_KEYS)[number];
+/** Raw values a transaction replaced: undefined where the key had none. */
+type OldPlace = Partial<Record<PlaceKey, unknown>>;
+
+const QUIET = new Problems(0);
+
+/** A lookup that sees some elements placed as they were before a transaction. */
+function placedAsBefore(
+  lookup: ElementLookup,
+  before: ReadonlyMap<string, OldPlace>,
+): ElementLookup {
+  return {
+    ids: () => lookup.ids(),
+    get(id) {
+      const element = lookup.get(id);
+      const old = before.get(id);
+      if (!element || !old) return element;
+      const raw = (key: PlaceKey, now: unknown) =>
+        Object.hasOwn(old, key) ? jsonFromY(old[key]) : now;
+      return {
+        type: element.type,
+        parent: Object.hasOwn(old, "parent")
+          ? envelopeField.parent(jsonFromY(old.parent), QUIET)
+          : element.parent,
+        order: Object.hasOwn(old, "order")
+          ? envelopeField.order(jsonFromY(old.order), QUIET)
+          : element.order,
+        pos: envelopeField.pos(raw("pos", element.pos), QUIET),
+        rebase: envelopeField.rebase(raw("rebase", element.rebase ?? null), QUIET),
+        locked: element.locked,
+        rev: element.rev ?? {},
+        deleted: element.deleted ?? {},
+        dissolved: element.dissolved === true,
+        purged: element.purged === true,
+        size: element.size,
+        rot: element.rot,
+      };
+    },
+  };
+}
+
+function samePoint(a: { x: number; y: number }, b: { x: number; y: number }): boolean {
+  const close = (u: number, v: number) =>
+    Math.abs(u - v) <= 1e-9 * Math.max(1, Math.abs(u), Math.abs(v));
+  return close(a.x, b.x) && close(a.y, b.y);
+}
+
+/**
+ * Finishes an undo or redo transaction before the tracker judges its work, in
+ * a transaction of its own that undo does not track (section 10):
+ *
+ * 1. Holes are filled (see fillHoles). Judging first would see an element whose
+ *    parent has no value at the root, outside a delete that hides it, and its
+ *    new revision would bring it back for good.
+ * 2. A change of container is kept back where it would take an element out of
+ *    a delete that hides it: an undo or redo made after receiving a delete
+ *    leaves what it hides deleted, as an undo of a move of the element itself
+ *    does. And where it would move the element on the canvas while the step
+ *    moves neither it nor anything it is in: an undo takes back the user's own
+ *    container changes, never the moves another user made since (undoing a
+ *    grouping after someone moved the group leaves the members where that move
+ *    put them, as an ungrouping would). The element then stays in its container
+ *    as before the undo, where a redo would put it anyway.
+ */
+function settleStep(
+  doc: Y.Doc,
+  tr: Y.Transaction,
+  deletions: unknown,
+  ignoredElements: ReadonlySet<string>,
+): void {
+  fillHoles(doc, deletions);
+  const elements = roots(doc).elements;
+  const before = new Map<string, OldPlace>();
+  for (const [type, keys] of tr.changed) {
+    const item = type._item;
+    if (!(type instanceof Y.Map) || item === null || item.parent !== elements) continue;
+    if (item.parentSub === null) continue;
+    const changes = new Y.YMapEvent(type as Y.Map<unknown>, tr, keys as Set<string>)
+      .changes.keys;
+    const old: OldPlace = {};
+    for (const key of PLACE_KEYS) {
+      const change = changes.get(key);
+      if (change) old[key] = change.action === "add" ? undefined : change.oldValue;
+    }
+    if (Object.keys(old).length > 0) before.set(item.parentSub, old);
+  }
+  const moved = [...before].filter(
+    ([, old]) => Object.hasOwn(old, "parent") || Object.hasOwn(old, "rebase"),
+  );
+  if (moved.length === 0) return;
+  const lookup = withoutMarks(yLookup(doc), ignoredElements);
+  const then = new Resolver(placedAsBefore(lookup, before));
+  const now = new Resolver(lookup);
+  // Whether the element, or something shown inside it whose own position the
+  // step leaves alone, lands elsewhere on the canvas.
+  const shifts = (id: string): boolean =>
+    [id, ...then.descendants(id)].some(
+      (at) =>
+        (at === id || !then.isGone(at)) &&
+        !Object.hasOwn(before.get(at) ?? {}, "pos") &&
+        now.get(at) !== undefined &&
+        !samePoint(then.worldOrigin(at), now.worldOrigin(at)),
+    );
+  // Whether the element, or something inside it, would come out of a delete.
+  const revives = (id: string): boolean =>
+    [id, ...then.descendants(id)].some(
+      (at) => then.isDeleted(at) && now.get(at) !== undefined && !now.isDeleted(at),
+    );
+  const keep: Array<[string, readonly PlaceKey[]]> = [];
+  for (const [id, old] of moved) {
+    if (!then.get(id) || !now.get(id)) continue;
+    if (revives(id)) keep.push([id, PLACE_KEYS]);
+    else if (!Object.hasOwn(old, "pos") && shifts(id))
+      keep.push([id, ["parent", "rebase", "order"]]);
+  }
+  if (keep.length === 0) return;
+  doc.transact(() => {
+    for (const [id, keys] of keep) {
+      const map = elements.get(id) as Y.Map<unknown>;
+      const old = before.get(id)!;
+      for (const key of keys) {
+        if (!Object.hasOwn(old, key)) continue;
+        const value = old[key];
+        if (value === undefined) map.delete(key);
+        else map.set(key, value);
+      }
+    }
   }, ORIGIN.track);
 }
 

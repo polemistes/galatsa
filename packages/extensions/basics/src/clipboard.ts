@@ -9,6 +9,8 @@
 
 import {
   ASSET_ID_PATTERN,
+  FRAME_TYPE,
+  GROUP_TYPE,
   ID_PATTERN,
   Problems,
   copyFragment,
@@ -84,6 +86,27 @@ function readRecords<T>(
 }
 
 /**
+ * What is wrong with the data of a frame or a group: a frame's data has `clip`
+ * (a boolean), `fill` and `stroke` (CSS colours or null) and nothing else
+ * (FrameData in @galatsa/core); a group has no data.
+ */
+function containerDataProblems(element: Element): string[] {
+  if (element.type === GROUP_TYPE)
+    return Object.keys(element.data).map((key) => `${key}: groups have no data`);
+  if (element.type !== FRAME_TYPE) return [];
+  const problems: string[] = [];
+  for (const [key, value] of Object.entries(element.data)) {
+    if (key === "clip") {
+      if (typeof value !== "boolean") problems.push("clip: must be a boolean");
+    } else if (key === "fill" || key === "stroke") {
+      const colour = typeof value === "string" && value.length > 0 && value.length <= 64;
+      if (value !== null && !colour) problems.push(`${key}: must be a colour or null`);
+    } else problems.push(`${key}: not a key of a frame`);
+  }
+  return problems;
+}
+
+/**
  * Reads a fragment, for example one pasted from the clipboard. Every record
  * must read cleanly with the document's grammar, the roots must be top-level
  * elements of the fragment, and every other element must lie inside a root.
@@ -122,20 +145,41 @@ export function readFragment(raw: unknown): ReadFragmentResult {
       roots.push(id);
     }
   });
-  // Every element lies inside a root; otherwise pasting it could not be undone.
+  // Every element lies inside a root in the effective tree: each parent on the
+  // way up is a frame or group of the fragment (any other parent counts as the
+  // root, docs/adr/0001 section 5.1). An element outside every root would be
+  // pasted without the delete mark that lets undo remove it.
   const rootSet = new Set(roots);
   p.at("elements", () => {
     for (const id of Object.keys(elements)) {
       const seen = new Set<ElementId>();
-      let at: ElementId | null = id;
-      while (at !== null && !rootSet.has(at) && !seen.has(at)) {
+      let at: ElementId = id;
+      let inside = false;
+      while (!seen.has(at)) {
+        if (rootSet.has(at)) {
+          inside = true;
+          break;
+        }
         seen.add(at);
-        at = Object.hasOwn(elements, at) ? elements[at]!.parent : null;
+        const parent: ElementId | null = elements[at]!.parent;
+        if (parent === null || !Object.hasOwn(elements, parent)) break;
+        const type = elements[parent]!.type;
+        if (type !== FRAME_TYPE && type !== GROUP_TYPE) break;
+        at = parent;
       }
-      if (at === null || !rootSet.has(at))
-        p.at(id, () => p.add("is not inside one of the roots"));
+      if (!inside) p.at(id, () => p.add("is not inside one of the roots"));
     }
   });
+  // Frames and groups are core's: their data is checked here, as an element
+  // type's reader checks its own.
+  for (const id of Object.keys(elements))
+    p.at("elements", () =>
+      p.at(id, () =>
+        p.at("data", () => {
+          for (const problem of containerDataProblems(elements[id]!)) p.add(problem);
+        }),
+      ),
+    );
   if (p.count > 0) return { fragment: null, problems: p.list };
   return {
     fragment: {
@@ -268,10 +312,17 @@ export const paste = defineCommand<PasteArgs, PasteOutcome>({
 
 export interface DuplicateArgs {
   readonly ids: readonly ElementId[];
-  /** Offset of the copies from the originals; default none. */
+  /**
+   * Offset of the copies from the originals, in world units. Default: down and
+   * to the right by DUPLICATE_OFFSET screen pixels at the camera's zoom, so the
+   * copies can be told apart and clicked.
+   */
   readonly dx?: number;
   readonly dy?: number;
 }
+
+/** How far, in screen pixels, duplicates are offset when no offset is given. */
+export const DUPLICATE_OFFSET = 16;
 
 interface DuplicatePlan {
   readonly ids: ElementId[];
@@ -291,14 +342,17 @@ function planDuplicate(ctx: CommandContext, args: unknown): DuplicatePlan | unde
   const first = backToFront(r, outermost(r, ids))[0]!;
   const parent = r.logicalParentOf(first);
   if (!isOpenContainer(r, parent)) return undefined;
-  return { ids, parent, dx: dx ?? 0, dy: dy ?? 0 };
+  const zoom = ctx.services.camera.get().zoom;
+  const step = DUPLICATE_OFFSET / (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
+  return { ids, parent, dx: dx ?? step, dy: dy ?? step };
 }
 
 /**
  * Duplicates elements, with everything visible inside them, into the container
  * the first of them is seen in, in front of what is there; selects the copies.
- * Locked elements can be duplicated (the copies are locked too), but not into
- * a locked container.
+ * Locked elements can be duplicated, but not into a locked container; the
+ * copies are not locked, so they can be clicked (decided by the users). What
+ * is locked inside a duplicated frame or group stays locked in the copy.
  */
 export const duplicate = defineCommand<DuplicateArgs, PasteOutcome>({
   name: "duplicate",
@@ -310,6 +364,8 @@ export const duplicate = defineCommand<DuplicateArgs, PasteOutcome>({
   execute(ctx, args) {
     const plan = planDuplicate(ctx, args) ?? refuse("duplicate");
     const fragment = copyFragment(toSnapshot(ctx.doc), plan.ids);
+    // The copies start unlocked, so that they can be clicked and moved.
+    for (const root of fragment.roots) fragment.elements[root]!.locked = false;
     return pasteInto(ctx, fragment, plan);
   },
 });

@@ -183,11 +183,25 @@ export interface ScaleStep {
   readonly h?: number;
 }
 
+/** Thrown when a change would reach a locked element (docs/adr/0001, section 5.6). */
+export class LockedError extends Error {
+  readonly id: ElementId;
+
+  constructor(id: ElementId) {
+    super(`Element ${id} is locked`);
+    this.name = "LockedError";
+    this.id = id;
+  }
+}
+
 /**
  * How scaling elements by `factor` about `anchor` (root space) changes them,
  * keeping proportions: every element inside a scaled group or frame is scaled
- * with it. An element whose size may not change (a placeholder) keeps its size
- * and moves so that its centre lands where a scaled centre would.
+ * with it, also what is still shown inside a dissolved group or a deleted frame
+ * in it. An element whose size may not change (a placeholder) keeps its size
+ * and moves so that its centre lands where a scaled centre would. Throws
+ * LockedError if any element it would change is locked, or inside a locked
+ * container.
  */
 export function planScale(
   ctx: CommandContext,
@@ -208,6 +222,16 @@ export function planScale(
   const visit = (id: ElementId, a: Point): void => {
     const envelope = r.get(id)!;
     const local = r.localPosition(id);
+    if (r.isGone(id)) {
+      // A gone container (a dissolved group, a deleted frame) is not changed,
+      // but what is still shown inside it scales with the rest, about the
+      // anchor as seen in the container's space.
+      if (r.isContainer(id))
+        for (const child of r.children(id))
+          visit(child, { x: a.x - local.x, y: a.y - local.y });
+      return;
+    }
+    if (r.isLocked(id)) throw new LockedError(id);
     const size = envelope.size;
     const resizable = ctx.extensions.capabilities(elementFacts(ctx, id)).resize;
     if (size === undefined) {
@@ -238,8 +262,7 @@ export function planScale(
     // Containers have translation-only spaces: inside a scaled container the
     // anchor is its own origin.
     if (r.isContainer(id))
-      for (const child of r.children(id))
-        if (!r.isGone(child)) visit(child, { x: 0, y: 0 });
+      for (const child of r.children(id)) visit(child, { x: 0, y: 0 });
   };
   for (const id of chosen) {
     if (inside(id)) continue;

@@ -157,6 +157,10 @@ describe("loading", () => {
       ext("common.user", { commands: [command("common:action.ok")] }),
       ext("twice", { commands: [command("common:a"), command("common:b")] }),
       ext("orphan", { editing: [{ name: "nothing" }] }),
+      ext("good.step", {
+        messages: [messages],
+        commands: [{ ...command("good:name"), undoLabel: "good:typo" }],
+      }),
     ]);
     expect(problems.map((p) => [p.extension, p.code])).toEqual([
       ["Bad_Id", "invalid"],
@@ -165,6 +169,7 @@ describe("loading", () => {
       ["borrow", "invalid"],
       ["twice", "invalid"],
       ["orphan", "invalid"],
+      ["good.step", "invalid"],
     ]);
     expect(problems.find((p) => p.extension === "good.two")!.detail).toContain(
       "good:typo",

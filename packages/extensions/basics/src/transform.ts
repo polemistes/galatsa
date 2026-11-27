@@ -10,6 +10,7 @@ import {
   capabilitiesOf,
   defineCommand,
   planScale,
+  LockedError,
   type CommandContext,
 } from "@galatsa/extension-api/editing";
 import {
@@ -65,12 +66,25 @@ export interface ResizeArgs {
   readonly id: ElementId;
   readonly w: number;
   readonly h: number;
-  /** New top-left corner in the parent's space (resizing from a left or top handle). */
+  /**
+   * New top-left corner (resizing from a left or top handle), in the space of
+   * the container the user sees the element in: the nearest container that is
+   * not gone, or the root. (An element of a dissolved group is stored in the
+   * group's space; the command converts.)
+   */
   readonly x?: number;
   readonly y?: number;
 }
 
-function readResize(ctx: CommandContext, args: unknown): ResizeArgs | undefined {
+interface ResizePlan {
+  readonly id: ElementId;
+  readonly w: number;
+  readonly h: number;
+  /** The new corner in the element's own (effective) parent space. */
+  readonly at?: Point;
+}
+
+function readResize(ctx: CommandContext, args: unknown): ResizePlan | undefined {
   if (args === null || typeof args !== "object") return undefined;
   const { id, w, h, x, y } = args as Partial<ResizeArgs>;
   if (!isId(id) || !isFiniteNumber(w) || !isFiniteNumber(h) || w < 0 || h < 0)
@@ -81,7 +95,9 @@ function readResize(ctx: CommandContext, args: unknown): ResizeArgs | undefined 
   // Groups have no size of their own; they are scaled.
   if (r.get(id)?.type === GROUP_TYPE) return undefined;
   if (!canTarget(ctx, r, id, { resize: true })) return undefined;
-  return { id, w, h, ...(x !== undefined && y !== undefined ? { x, y } : {}) };
+  if (x === undefined || y === undefined) return { id, w, h };
+  const d = r.offset(r.logicalParentOf(id), r.parentOf(id));
+  return { id, w, h, at: { x: x + d.x, y: y + d.y } };
 }
 
 /**
@@ -98,7 +114,7 @@ export const resize = defineCommand<ResizeArgs, void>({
   execute(ctx, args) {
     const a = readResize(ctx, args) ?? refuse("resize");
     edit(ctx.doc, () => {
-      if (a.x !== undefined && a.y !== undefined) moveElement(ctx.doc, a.id, a.x, a.y);
+      if (a.at !== undefined) moveElement(ctx.doc, a.id, a.at.x, a.at.y);
       resizeElement(ctx.doc, a.id, a.w, a.h);
     });
   },
@@ -122,13 +138,22 @@ function readScale(ctx: CommandContext, args: unknown): ScaleArgs | undefined {
   if (!canTargetAll(ctx, r, ids)) return undefined;
   // Something must be resizable: scaling only placeholders would just move them.
   if (!outermost(r, ids).some((id) => capabilitiesOf(ctx, id).resize)) return undefined;
-  return { ids, anchor: { x: anchor.x, y: anchor.y }, factor };
+  const plan = { ids, anchor: { x: anchor.x, y: anchor.y }, factor };
+  try {
+    // Refused if it would change a locked element inside a group or frame.
+    planScale(ctx, ids, plan.anchor, factor);
+  } catch (error) {
+    if (error instanceof LockedError) return undefined;
+    throw error;
+  }
+  return plan;
 }
 
 /**
  * Scales elements about a point, keeping proportions, with everything inside
  * groups and frames. Elements that may not be resized (from a missing
  * extension) move with the others and keep their size (docs/adr/0005, 3.7).
+ * Refused if anything it would change is locked.
  */
 export const scale = defineCommand<ScaleArgs, void>({
   name: "scale",

@@ -5,9 +5,9 @@
 // elements of a missing extension, types that forbid it, bad arguments).
 
 import { GROUP_TYPE, type ElementId, type Fragment } from "@galatsa/core";
-import { setLocked } from "@galatsa/core/ydoc";
+import { forkDoc, setLocked, syncDocs } from "@galatsa/core/ydoc";
 import { describe, expect, it } from "vitest";
-import { BASICS, readFragment, type PasteOutcome } from "./index.ts";
+import { BASICS, DUPLICATE_OFFSET, readFragment, type PasteOutcome } from "./index.ts";
 import {
   MISSING_TYPE,
   SHAPE_TYPE,
@@ -183,6 +183,19 @@ describe("resize", () => {
     refused(t, BASICS.resize, { id: a, w: -1, h: 5 });
     refused(t, BASICS.resize, { id: a, w: 5, h: 5, x: 1 });
   });
+
+  it("takes the corner in the space of the container the user sees, also for a former group member", () => {
+    const t = setupBasics();
+    const x = t.shape(100, 100, 10, 10);
+    const y = t.shape(200, 100, 10, 10);
+    const g = t.must<ElementId>(BASICS.group, { ids: [x, y] });
+    t.must(BASICS.ungroup, { ids: [g] });
+    // X is stored in the dissolved group's space, and seen at the root.
+    expect(t.resolver().parentOf(x)).toBe(g);
+    t.must(BASICS.resize, { id: x, w: 20, h: 20, x: 90, y: 95 });
+    expect(world(t, x)).toEqual({ x: 90, y: 95 });
+    expect(t.element(x).size).toEqual({ w: 20, h: 20 });
+  });
 });
 
 describe("scale", () => {
@@ -210,6 +223,42 @@ describe("scale", () => {
     refused(t, BASICS.scale, { ids: [a], factor: 2 });
     setLocked(t.doc, a, true);
     refused(t, BASICS.scale, { ids: [a], anchor: { x: 0, y: 0 }, factor: 2 });
+  });
+
+  it("refuses scaling a group with a locked member", () => {
+    const t = setupBasics();
+    const x = t.shape(0, 0, 10, 10);
+    const y = t.shape(20, 0, 10, 10);
+    const g = t.must<ElementId>(BASICS.group, { ids: [x, y] });
+    t.must(BASICS.lock, { ids: [x] });
+    refused(t, BASICS.scale, { ids: [g], anchor: { x: 0, y: 0 }, factor: 2 });
+    expect(t.element(x).size).toEqual({ w: 10, h: 10 });
+  });
+
+  it("scales what is still shown inside a dissolved group or a deleted frame in a scaled group", () => {
+    const t = setupBasics();
+    const x = t.shape(0, 0, 10, 10);
+    const inner = t.must<ElementId>(BASICS.group, { ids: [x] });
+    const f = t.frame(100, 0, 50, 50);
+    const z = t.shape(110, 10, 10, 10, f);
+    const y = t.shape(200, 0, 10, 10);
+    const g = t.must<ElementId>(BASICS.group, { ids: [inner, f, y] });
+    t.must(BASICS.ungroup, { ids: [inner] });
+    // Another user deletes F while this one, not knowing, moves Z: Z survives.
+    const other = setupBasics({ doc: forkDoc(t.doc) });
+    other.must(BASICS.delete, { ids: [f] });
+    t.must(BASICS.move, { ids: [z], dx: 1, dy: 0 });
+    syncDocs(t.doc, other.doc);
+    const r0 = t.resolver();
+    expect([r0.isGone(f), r0.isGone(z), r0.logicalParentOf(x)]).toEqual([true, false, g]);
+    t.must(BASICS.scale, { ids: [g], anchor: { x: 0, y: 0 }, factor: 2 });
+    const r = t.resolver();
+    expect(t.element(x).size).toEqual({ w: 20, h: 20 });
+    expect(r.worldOrigin(x)).toEqual({ x: 0, y: 0 });
+    expect(t.element(y).size).toEqual({ w: 20, h: 20 });
+    expect(r.worldOrigin(y)).toEqual({ x: 400, y: 0 });
+    expect(t.element(z).size).toEqual({ w: 20, h: 20 });
+    expect(r.worldOrigin(z)).toEqual({ x: 422, y: 20 });
   });
 });
 
@@ -425,6 +474,17 @@ describe("delete", () => {
     expect(order(t, f)).toEqual([inner]);
     refused(t, BASICS.delete, { ids: ["nothing"] });
   });
+
+  it("deletes a group with a locked member, member included (decided by the users)", () => {
+    const t = setupBasics();
+    const x = t.shape(0, 0);
+    const y = t.shape(20, 0);
+    const g = t.must<ElementId>(BASICS.group, { ids: [x, y] });
+    t.must(BASICS.lock, { ids: [x] });
+    refused(t, BASICS.delete, { ids: [x] });
+    t.must(BASICS.delete, { ids: [g] });
+    expect(t.resolver().isGone(x)).toBe(true);
+  });
 });
 
 describe("duplicate", () => {
@@ -448,13 +508,23 @@ describe("duplicate", () => {
     expect(order(t)).toEqual([f, a]);
   });
 
-  it("duplicates locked elements and elements of a missing extension, but not into a locked frame", () => {
+  it("offsets the copies by a few screen pixels when no offset is given", () => {
+    const t = setupBasics();
+    const a = t.shape(0, 0);
+    t.services.state.camera = { ...t.services.state.camera, zoom: 4 };
+    const { ids } = t.must<PasteOutcome>(BASICS.duplicate, { ids: [a] });
+    const step = DUPLICATE_OFFSET / 4;
+    expect(world(t, ids[0]!)).toEqual({ x: step, y: step });
+  });
+
+  it("duplicates locked elements into unlocked copies, and elements of a missing extension, but not into a locked frame", () => {
     const t = setupBasics();
     const a = t.shape(0, 0);
     setLocked(t.doc, a, true);
     const m = t.missing(20, 0);
     const { ids } = t.must<PasteOutcome>(BASICS.duplicate, { ids: [a, m] });
-    expect(t.element(ids[0]!).locked).toBe(true);
+    expect(t.element(a).locked).toBe(true);
+    expect(t.element(ids[0]!).locked).toBe(false);
     expect(t.element(ids[1]!).data).toEqual(t.element(m).data);
     const f = t.frame(100, 0);
     const inner = t.shape(110, 10, 10, 10, f);
@@ -522,6 +592,55 @@ describe("copy and paste", () => {
     setLocked(t.doc, f, true);
     refused(t, BASICS.paste, { fragment, parent: f });
     t.must(BASICS.paste, { fragment });
+  });
+
+  it("refuses elements whose parent in the fragment is not a frame or group, so a paste can always be undone", () => {
+    const t = setupBasics();
+    const s = t.shape(0, 0);
+    const c = t.shape(30, 0);
+    const m = t.missing(60, 0);
+    const fragment = t.must<Fragment>(BASICS.copy, { ids: [s, c, m] });
+    const [first, second, third] = fragment.roots as [string, string, string];
+    const under = (child: string, parent: string): unknown => ({
+      ...fragment,
+      roots: fragment.roots.filter((id) => id !== child),
+      elements: {
+        ...fragment.elements,
+        [child]: {
+          ...fragment.elements[child]!,
+          parent,
+          pos: { ...fragment.elements[child]!.pos, space: parent },
+        },
+      },
+    });
+    // Under a shape, and under an element of a missing extension.
+    for (const variant of [under(second, first), under(second, third)]) {
+      refused(t, BASICS.paste, { fragment: variant });
+      expect(readFragment(variant).problems).toEqual([
+        `elements.${second}: is not inside one of the roots`,
+      ]);
+    }
+  });
+
+  it("refuses frame and group data that is not theirs", () => {
+    const t = setupBasics();
+    const f = t.frame(0, 0);
+    const fragment = t.must<Fragment>(BASICS.copy, { ids: [f] });
+    const id = fragment.roots[0]!;
+    const withData = (data: unknown): unknown => ({
+      ...fragment,
+      elements: { [id]: { ...fragment.elements[id]!, data } },
+    });
+    const junk = withData({ clip: "yes", fill: 5, junk: { a: 1 } });
+    refused(t, BASICS.paste, { fragment: junk });
+    expect(readFragment(junk).problems).toEqual([
+      `elements.${id}.data: clip: must be a boolean`,
+      `elements.${id}.data: fill: must be a colour or null`,
+      `elements.${id}.data: junk: not a key of a frame`,
+    ]);
+    t.must(BASICS.paste, {
+      fragment: withData({ clip: true, fill: "#fff", stroke: null }),
+    });
   });
 });
 

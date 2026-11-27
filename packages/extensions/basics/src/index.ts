@@ -34,7 +34,12 @@ import { move, resize, rotate, scale } from "./transform.ts";
 
 export { BASICS_EXTENSION } from "./common.ts";
 export { basicsMessages } from "./messages/index.ts";
-export { readFragment, type ReadFragmentResult, type PasteOutcome } from "./clipboard.ts";
+export {
+  DUPLICATE_OFFSET,
+  readFragment,
+  type ReadFragmentResult,
+  type PasteOutcome,
+} from "./clipboard.ts";
 export type { DuplicateArgs, PasteArgs } from "./clipboard.ts";
 export type { IdsArgs, ReparentArgs } from "./structure.ts";
 export type { MoveArgs, ResizeArgs, RotateArgs, ScaleArgs } from "./transform.ts";

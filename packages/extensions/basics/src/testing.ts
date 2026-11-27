@@ -224,19 +224,36 @@ const WEIGHTS: ReadonlyArray<readonly [string, number]> = [
   [BASICS.delete, 5],
   [BASICS.duplicate, 4],
   ["copy-paste", 4],
+  ["paste-again", 2],
+  ["reparent-at", 2],
+  ["lock-container", 1],
+  ["group-all", 1],
+  ["into-descendant", 1],
   [BASICS.undo, 7],
   [BASICS.redo, 4],
   [BASICS.selectAll, 1],
 ];
 const TOTAL = WEIGHTS.reduce((sum, [, w]) => sum + w, 0);
 
+/** What a random scenario remembers between commands: the last fragment copied. */
+export interface RandomMemory {
+  fragment?: unknown;
+}
+
 /**
  * A random command for the document as it is now, with arguments drawn from
  * what the user sees: valid ones mostly, but locked elements, elements of a
  * missing extension and rigid types are drawn too, so commands are refused as
- * well. "copy-paste" is two commands; the second gets the first's result.
+ * well. "copy-paste" is two commands; the paste gets the copy's result. Also:
+ * pasting an older fragment again (its source may be gone or changed by now),
+ * moving into a container at a stacking index, locking a container, grouping
+ * everything in a container, and moving a container into its own descendant.
  */
-export function randomCommands(t: BasicsSetup, random: RandomSource): RandomCommand[] {
+export function randomCommands(
+  t: BasicsSetup,
+  random: RandomSource,
+  memory: RandomMemory = {},
+): RandomCommand[] {
   const r = t.resolver();
   const visible = r.drawOrder();
   const containers = visible.filter((id) => r.isContainer(id));
@@ -322,6 +339,42 @@ export function randomCommands(t: BasicsSetup, random: RandomSource): RandomComm
         { id: BASICS.copy, args: { ids: ids() } },
         { id: BASICS.paste, args: { parent: anyContainer(), dx: 15, dy: -5 } },
       ];
+    case "paste-again":
+      return [
+        {
+          id: BASICS.paste,
+          args: { fragment: memory.fragment, parent: anyContainer(), dx: 3, dy: 3 },
+        },
+      ];
+    case "reparent-at":
+      return [
+        {
+          id: BASICS.reparent,
+          args: { ids: ids(), target: anyContainer(), index: Math.floor(random() * 4) },
+        },
+      ];
+    case "lock-container":
+      return [{ id: BASICS.lock, args: { ids: some(random, containers, 1) } }];
+    case "group-all": {
+      const first = pick(random, visible);
+      const all = first === undefined ? [] : r.logicalChildren(r.logicalParentOf(first));
+      return [{ id: BASICS.group, args: { ids: all } }];
+    }
+    case "into-descendant": {
+      const outer = pick(random, containers);
+      const inside = containers.filter(
+        (id) => outer !== undefined && id !== outer && r.isWithin(id, outer),
+      );
+      return [
+        {
+          id: BASICS.reparent,
+          args: {
+            ids: outer === undefined ? [] : [outer],
+            target: pick(random, inside) ?? null,
+          },
+        },
+      ];
+    }
     case BASICS.undo:
     case BASICS.redo:
     case BASICS.selectAll:
@@ -333,21 +386,23 @@ export function randomCommands(t: BasicsSetup, random: RandomSource): RandomComm
 
 /**
  * Runs the commands of `randomCommands` through the registry. Returns the
- * outcomes; a paste gets the fragment the copy before it returned.
+ * outcomes. A copy's fragment is remembered; a paste without a fragment of its
+ * own gets the one remembered.
  */
 export function runRandom(
   t: BasicsSetup,
   commands: readonly RandomCommand[],
+  memory: RandomMemory = {},
 ): CommandOutcome[] {
   const outcomes: CommandOutcome[] = [];
-  let fragment: unknown;
   for (const command of commands) {
+    const given = command.args as { fragment?: unknown } | undefined;
     const args =
-      command.id === BASICS.paste
-        ? { ...(command.args as object), fragment }
+      command.id === BASICS.paste && !Object.hasOwn(given ?? {}, "fragment")
+        ? { ...given, fragment: memory.fragment }
         : command.args;
     const outcome = t.run(command.id, args);
-    if (command.id === BASICS.copy && outcome.ok) fragment = outcome.value;
+    if (command.id === BASICS.copy && outcome.ok) memory.fragment = outcome.value;
     outcomes.push(outcome);
   }
   return outcomes;
