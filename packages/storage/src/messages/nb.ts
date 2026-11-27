@@ -67,7 +67,7 @@ export default {
     "«{title}» blir liggende i Galatsas liste over presentasjoner med arbeidet som er hentet tilbake, og du blir ikke spurt om den igjen.",
   "recovery.discardChanges": "Forkast endringene",
   "recovery.discardChanges.detail":
-    "Endringene som er gjort etter at «{name}» sist ble lagret, går tapt. Selve fila blir som den er.",
+    "Endringene som er gjort etter at «{name}» sist ble lagret, {when, date, medium} klokka {when, time, short}, går tapt. Galatsa åpner fila slik den var da. Nedlastinger etter det regnes ikke som lagring.",
   "recovery.delete": "Slett presentasjonen",
   "recovery.delete.detail":
     "«{title}» er aldri lagret som fil. Å slette den fjerner hele presentasjonen fra Galatsa, ikke bare de siste endringene. Dette kan ikke angres.",

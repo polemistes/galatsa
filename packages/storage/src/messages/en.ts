@@ -67,7 +67,7 @@ export default {
     "“{title}” stays in Galatsa’s list of presentations with the restored work, and you will not be asked about it again.",
   "recovery.discardChanges": "Discard the changes",
   "recovery.discardChanges.detail":
-    "The changes made after “{name}” was last saved will be lost. The file itself stays as it is.",
+    "The changes made after “{name}” was last saved, {when, date, medium} at {when, time, short}, will be lost. Galatsa opens the file as it was then. Downloads made since do not count as saves.",
   "recovery.delete": "Delete the presentation",
   "recovery.delete.detail":
     "“{title}” has never been saved as a file. Deleting it removes the whole presentation from Galatsa, not only the latest changes. This cannot be undone.",
