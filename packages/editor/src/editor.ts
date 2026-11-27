@@ -49,8 +49,11 @@ import {
 import type * as Y from "yjs";
 import {
   fragmentBounds,
+  withinLimits,
   writeFragment,
   type ClipboardContent,
+  type ClipboardOrigin,
+  type ClipboardProblem,
   type ClipboardTarget,
 } from "./clipboard.ts";
 import { ContextMenu } from "./context-menu.ts";
@@ -109,7 +112,19 @@ export interface PointerInput {
   readonly metaKey: boolean;
 }
 
-export type EditorChange = StateChange | "tool" | "cursor";
+export type EditorChange = StateChange | "tool" | "cursor" | "notice";
+
+/** A message the interface shows (a message key of the editor's bundle). */
+export interface EditorNotice {
+  readonly message: string;
+}
+
+/** The notice for each reason a paste is refused. */
+const PASTE_PROBLEMS: { readonly [problem in ClipboardProblem]: string } = {
+  "too-large": "editor:paste.tooLarge",
+  "other-version": "editor:paste.otherVersion",
+  damaged: "editor:paste.damaged",
+};
 
 /** What a key press did, for whoever wants to know (tests, a status line). */
 export type KeyResult =
@@ -165,7 +180,9 @@ export class Editor {
   #cancelFrame: (() => void) | null = null;
   #cursor: Cursor = "default";
   #keymap: { mode: Mode; map: Map<Shortcut, ShortcutTarget> } | null = null;
-  #clipboard: Fragment | null = null;
+  #clipboard: { readonly fragment: Fragment; readonly origin: ClipboardOrigin } | null =
+    null;
+  #notice: EditorNotice | null = null;
   /** The context menu (right click), drawn by the interface. */
   readonly contextMenu = new ContextMenu();
   #disposed = false;
@@ -283,7 +300,7 @@ export class Editor {
    * browser does not let the page read the clipboard.
    */
   get clipboard(): Fragment | null {
-    return this.#clipboard;
+    return this.#clipboard?.fragment ?? null;
   }
 
   /** What commands run against: this document, its undo manager and the services. */
@@ -595,14 +612,15 @@ export class Editor {
 
   /**
    * The browser's copy event: copies the selection, onto `target` (the
-   * event's clipboard data) and into the editor's memory. True if something
-   * was copied.
+   * event's clipboard data) and into the editor's memory, with where it was
+   * copied from. True if something was copied.
    */
   clipboardCopy(target?: ClipboardTarget): boolean {
     if (!this.#inputEnabled || this.#state.selection.length === 0) return false;
     const outcome = this.runFromShortcut(BASICS.copy);
-    if (!outcome.ok) return false;
-    if (target !== undefined) writeFragment(target, outcome.value as Fragment);
+    if (!outcome.ok || this.#clipboard === null) return false;
+    if (target !== undefined)
+      writeFragment(target, this.#clipboard.fragment, this.#clipboard.origin);
     return true;
   }
 
@@ -616,34 +634,114 @@ export class Editor {
    * The browser's paste event, with what the clipboard holds (`readClipboard`
    * of its data): pastes a fragment of the program. Text and files from other
    * programs are not pasted yet (false, so the browser's default goes on).
-   * Without `content`, pastes what the last copy in this editor gave.
+   * What the program does not paste (too large, another version, damaged) is
+   * told in a notice. Without `content`, pastes what the last copy in this
+   * editor gave. True if something was pasted.
    */
   clipboardPaste(content?: ClipboardContent): boolean {
     if (!this.#inputEnabled) return false;
-    const fragment = content === undefined ? this.#clipboard : content.fragment;
-    if (fragment === null || fragment === undefined) return false;
-    return this.run(BASICS.paste, { fragment, ...this.#pasteOffset(fragment) }).ok;
+    if (content === undefined) {
+      if (this.#clipboard === null) return false;
+      return this.#paste(this.#clipboard.fragment, this.#clipboard.origin).ok;
+    }
+    if (content.problem !== null) {
+      this.#notify(PASTE_PROBLEMS[content.problem]);
+      return false;
+    }
+    if (content.fragment === undefined) return false;
+    return this.#paste(content.fragment, content.origin).ok;
+  }
+
+  /** Pastes a fragment (still unchecked) where it was copied from, within the limits. */
+  #paste(fragment: unknown, origin: ClipboardOrigin | null): CommandOutcome {
+    if (!withinLimits(fragment)) {
+      this.#notify(PASTE_PROBLEMS["too-large"]);
+      return { ok: false, reason: "disabled" };
+    }
+    const outcome = this.run(BASICS.paste, {
+      fragment,
+      ...this.#pasteTarget(fragment, origin),
+    });
+    if (outcome.ok) this.dismissNotice();
+    else if (!this.host.commands.gestureActive(this.environment()))
+      this.#notify(PASTE_PROBLEMS.damaged);
+    return outcome;
+  }
+
+  /** A container the user can paste into: there, seen, not locked. */
+  #openContainer(id: ElementId): boolean {
+    const live = this.live;
+    return (
+      live.get(id) !== undefined &&
+      live.isContainer(id) &&
+      !live.isGone(id) &&
+      !live.isLocked(id)
+    );
   }
 
   /**
-   * Where a paste lands: where the fragment was copied from if any of that is
-   * in view, otherwise in the middle of the view.
+   * Where a paste lands: into the container it was copied from while that is
+   * there (an element copied from a frame goes back into the frame), else on
+   * the canvas at the same place in root space; and if none of that is in
+   * view, with its centre in the middle of the view.
    */
-  #pasteOffset(raw: unknown): { dx: number; dy: number } {
+  #pasteTarget(
+    raw: unknown,
+    origin: ClipboardOrigin | null,
+  ): { parent: ElementId | null; dx: number; dy: number } {
+    let parent: ElementId | null = null;
+    // What the fragment's positions need to be in the target's space.
+    let shift: Point = { x: 0, y: 0 };
+    if (origin !== null) {
+      if (origin.container !== null && this.#openContainer(origin.container))
+        parent = origin.container;
+      else shift = origin.at;
+    }
     const { fragment } = readFragment(raw);
     const bounds = fragment === null ? null : fragmentBounds(fragment);
-    if (bounds === null || this.screen.width === 0) return { dx: 0, dy: 0 };
+    if (bounds === null || this.screen.width === 0)
+      return { parent, dx: shift.x, dy: shift.y };
+    const toRoot = parent === null ? shift : this.live.offset(parent, null);
+    const x = bounds.x + toRoot.x;
+    const y = bounds.y + toRoot.y;
     const view = this.services.camera.viewport();
     const seen =
-      bounds.x <= view.x + view.w &&
-      view.x <= bounds.x + bounds.w &&
-      bounds.y <= view.y + view.h &&
-      view.y <= bounds.y + bounds.h;
-    if (seen) return { dx: 0, dy: 0 };
+      x <= view.x + view.w &&
+      view.x <= x + bounds.w &&
+      y <= view.y + view.h &&
+      view.y <= y + bounds.h;
+    if (seen) return { parent, dx: shift.x, dy: shift.y };
     return {
-      dx: view.x + view.w / 2 - (bounds.x + bounds.w / 2),
-      dy: view.y + view.h / 2 - (bounds.y + bounds.h / 2),
+      parent,
+      dx: shift.x + view.x + view.w / 2 - (x + bounds.w / 2),
+      dy: shift.y + view.y + view.h / 2 - (y + bounds.h / 2),
     };
+  }
+
+  /** Where a fragment copied now comes from: its roots' container, and that container's origin. */
+  #originOf(fragment: Fragment): ClipboardOrigin {
+    const first = fragment.roots[0];
+    const container =
+      first === undefined || this.live.get(first) === undefined
+        ? null
+        : this.live.logicalParentOf(first);
+    return { container, at: this.live.offset(container, null) };
+  }
+
+  /** A message for the user (a paste refused, say), until dismissed or replaced. */
+  get notice(): EditorNotice | null {
+    return this.#notice;
+  }
+
+  dismissNotice(): void {
+    if (this.#notice === null) return;
+    this.#notice = null;
+    this.#emit("notice");
+  }
+
+  #notify(message: string): void {
+    this.#notice = { message };
+    this.#emit("notice");
   }
 
   /**
@@ -655,14 +753,13 @@ export class Editor {
     const ids = this.#state.selection;
     if (command === BASICS.paste) {
       if (this.#clipboard === null) return { ok: false, reason: "disabled" };
-      return this.run(command, {
-        fragment: this.#clipboard,
-        ...this.#pasteOffset(this.#clipboard),
-      });
+      return this.#paste(this.#clipboard.fragment, this.#clipboard.origin);
     }
     const outcome = this.run(command, ids.length > 0 ? { ids: [...ids] } : undefined);
-    if (command === BASICS.copy && outcome.ok)
-      this.#clipboard = outcome.value as Fragment;
+    if (command === BASICS.copy && outcome.ok) {
+      const fragment = outcome.value as Fragment;
+      this.#clipboard = { fragment, origin: this.#originOf(fragment) };
+    }
     return outcome;
   }
 

@@ -18,7 +18,7 @@
 
 import type { I18n } from "@galatsa/i18n";
 import type { Editor, PointerInput } from "./editor.ts";
-import { decodeFragment, readClipboard } from "./clipboard.ts";
+import { readClipboard, readClipboardText } from "./clipboard.ts";
 import { openContextMenu, type MenuClipboard } from "./context-menu.ts";
 import { keyInput } from "./keymap.ts";
 import { PointerTracker, type PointerAction, type PointerFacts } from "./pointers.ts";
@@ -208,11 +208,7 @@ export function mountEditor(
         return;
       }
       read().then(
-        (text) => {
-          const fragment = decodeFragment(text);
-          if (fragment !== undefined)
-            editor.clipboardPaste({ fragment, text: null, files: [] });
-        },
+        (text) => editor.clipboardPaste(readClipboardText(text)),
         () => editor.clipboardPaste(),
       );
     },
