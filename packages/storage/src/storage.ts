@@ -89,6 +89,8 @@ export interface StoredDocument {
   fileName: string | null;
   /** When it was last saved to that file (a download does not count). */
   savedToFileAt: number | null;
+  /** When it was last handed to the browser as a download. */
+  downloadedAt: number | null;
   /** A running session has it open (in this or another tab), or it cannot be told. */
   open: boolean;
   /** A session stored changes that are not saved to its file. */
@@ -112,12 +114,16 @@ export type OpenResult =
 
 /** What `discardChanges` did. */
 export type DiscardResult =
-  /** The stored copy and its changes are gone; the file is as it was last saved. */
-  | "discarded"
-  /** Nothing: the document was never saved to a file, so discarding would delete it. */
-  | "no-file"
-  /** Nothing: a running session has it open (or that cannot be told). */
-  | "open";
+  /** The file is open (`session`), and the stored copy with its changes is gone. */
+  | { ok: true; session: StorageSession; notices: Notice[] }
+  /**
+   * Nothing was discarded: the document was never saved to a file ("no-file",
+   * discarding would delete it), or a running session has it open, or that
+   * cannot be told ("open").
+   */
+  | { ok: false; reason: "no-file" | "open" }
+  /** Nothing was discarded: the file could not be opened (`problem` says why). */
+  | { ok: false; reason: "file-failed"; problem: Notice };
 
 interface Loaded {
   doc: Y.Doc;
@@ -306,21 +312,42 @@ export class DocumentStorage {
    */
   async dismiss(slot: string): Promise<void> {
     const stopped = await this.#stoppedSessions(slot);
+    // The records are the only place that may say the document has changes not
+    // in its file (when it stopped before its first checkpoint): keep that in
+    // its description, so it does not open as saved.
+    const changedAt = Math.max(
+      0,
+      ...stopped.map((s) => (s.record?.unsaved ? (s.record.changedAt ?? 0) : 0)),
+    );
+    const info = decodeInfo(await this.backend.read(keys.info(slot)));
+    if (changedAt > info.changedAt) {
+      await this.backend.write(keys.info(slot), encodeJson({ ...info, changedAt }));
+    }
     await this.backend.remove(stopped.map((s) => keys.session(slot, s.id)));
   }
 
   /**
-   * Drops the changes a document has that are not in its file: the stored copy
-   * goes, and the program opens the file again. Only for a document that has a
-   * file (`fileName`); for one that was never saved to a file this would delete
-   * the whole presentation, so it does nothing and says "no-file"
+   * Drops the changes a document has that are not in its file: opens the file
+   * (`file`, the one the document was last saved to) as a new stored document,
+   * and only if that worked removes the old stored copy. Only for a document
+   * that has been saved to a file (`savedToFileAt`); for one that never was this
+   * would delete the whole presentation, so it does nothing and says "no-file"
    * (`deleteDocument` is the way, after the user has been told). Does nothing
    * while a running session has the document open.
    */
-  async discardChanges(slot: string): Promise<DiscardResult> {
+  async discardChanges(slot: string, file: FileSource): Promise<DiscardResult> {
     const info = decodeInfo(await this.backend.read(keys.info(slot)));
-    if (info.fileName === null || info.savedToFileAt === null) return "no-file";
-    return (await this.#removeSlot(slot)) ? "discarded" : "open";
+    if (info.fileName === null || info.savedToFileAt === null) {
+      return { ok: false, reason: "no-file" };
+    }
+    if (await this.#isOpen(slot)) return { ok: false, reason: "open" };
+    // The file first: the stored copies go only once it has opened.
+    const reopened = await this.openFile(file);
+    if (!reopened.ok)
+      return { ok: false, reason: "file-failed", problem: reopened.problem };
+    // If a session opened the old copy meanwhile, it stays (nothing is lost).
+    await this.#removeSlot(slot).catch(() => false);
+    return { ok: true, session: reopened.session, notices: reopened.notices };
   }
 
   /**
@@ -378,6 +405,7 @@ export class DocumentStorage {
       changedAt: now,
       fileName,
       savedToFileAt: fileName === null ? null : now,
+      downloadedAt: null,
     };
     let problem: Notice | null = null;
     const unstored = new Set<AssetId>();
@@ -575,6 +603,7 @@ export class DocumentStorage {
           changedAt,
           fileName: info.fileName,
           savedToFileAt: info.savedToFileAt,
+          downloadedAt: info.downloadedAt,
           open: sessions.some((s) => s.alive),
           unsaved: sessions.some((s) => s.record?.unsaved === true),
         },
@@ -590,6 +619,12 @@ export class DocumentStorage {
     const ids =
       groupKeys(await this.backend.list(keys.sessions(slot))).get(slot)?.sessions ?? [];
     return (await this.#sessionsOf(slot, ids)).filter((s) => !s.alive);
+  }
+
+  async #isOpen(slot: string): Promise<boolean> {
+    const ids =
+      groupKeys(await this.backend.list(keys.sessions(slot))).get(slot)?.sessions ?? [];
+    return (await this.#sessionsOf(slot, ids)).some((s) => s.alive);
   }
 
   /** Removes a slot, unless a session has it open or that cannot be told. */

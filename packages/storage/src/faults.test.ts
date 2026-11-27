@@ -574,7 +574,12 @@ describe("discarding", () => {
     const p3 = program(m);
     const [offer] = await p3.storage.recoverable();
     expect(offer?.fileName).toBeNull();
-    expect(await p3.storage.discardChanges(offer!.slot)).toBe("no-file");
+    expect(await p3.storage.discardChanges(offer!.slot, memoryFile("x.galatsa"))).toEqual(
+      {
+        ok: false,
+        reason: "no-file",
+      },
+    );
     expect((await p3.storage.list()).map((d) => d.slot)).toContain(session.slot);
   });
 });

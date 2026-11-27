@@ -71,6 +71,13 @@ export interface AutosaveTiming {
    * this thread instead (and the encoder is not used again in this session).
    */
   checkpointTimeout: number;
+  /**
+   * How long saving to a file waits for the store (to flush, to bring in other
+   * tabs' work, to read assets) before it goes on with what is in memory.
+   */
+  storeWait: number;
+  /** How long `close()` waits for its last checkpoint and flush. */
+  closeWait: number;
   /** First wait before trying a failed write again (doubles up to a minute). */
   retryDelay: number;
   /** How often a running session writes a sign of life into its record. */
@@ -89,6 +96,8 @@ export const DEFAULT_TIMING: AutosaveTiming = {
   checkpointBytes: 4 * 1024 * 1024,
   checkpointMaxDelay: 300_000,
   checkpointTimeout: 60_000,
+  storeWait: 5000,
+  closeWait: 90_000,
   retryDelay: 2000,
   heartbeatInterval: 30_000,
   staleAfter: 120_000,
@@ -116,6 +125,16 @@ export interface SessionStatus {
 }
 
 export type SaveResult = { ok: true; notices: Notice[] } | { ok: false; problem: Notice };
+
+/**
+ * What `close()` did. `ok: false` means changes are not in the store; unless
+ * `evenIfUnstored` was passed, the session then stays open (`closed` is false)
+ * and goes on trying, so the program can offer to save as a file first.
+ */
+export type CloseResult =
+  { ok: true; closed: true } | { ok: false; closed: boolean; problem: Notice };
+
+const TIMED_OUT = Symbol("timed out");
 
 /** What a session gets from the storage that opened it. */
 export interface SessionContext {
@@ -311,7 +330,7 @@ export class StorageSession {
       lastStoredAt: null,
       unsavedToFile: start.unsavedToFile,
       fileName: start.info.fileName,
-      downloadedAt: null,
+      downloadedAt: start.info.downloadedAt,
       problem: null,
     };
     const onUpdate = (update: Uint8Array, origin: unknown) =>
@@ -439,9 +458,15 @@ export class StorageSession {
     options: { thumbnail?: Uint8Array } = {},
   ): Promise<SaveResult> {
     const run = async (): Promise<SaveResult> => {
-      await this.flush();
+      // The store gets a while to take the latest changes and to give what other
+      // tabs stored; a store that fails or hangs does not stop the save.
+      const wait = this.#ctx.timing.storeWait;
       try {
-        await this.#onCheckpoints(() => this.#mergeStored());
+        await this.#within(this.flush(), wait);
+        await this.#within(
+          this.#onCheckpoints(() => this.#mergeStored()),
+          wait,
+        );
       } catch {
         // The store cannot be read: save what this session has.
       }
@@ -452,8 +477,12 @@ export class StorageSession {
       try {
         const assets = new Map<AssetId, Uint8Array>();
         for (const id of assetsToWrite(toSnapshot(this.doc))) {
-          const asset = await this.getAsset(id);
-          if (asset) assets.set(id, asset);
+          const asset = await this.#within(this.getAsset(id), wait).catch(
+            () => undefined,
+          );
+          const bytes =
+            asset === TIMED_OUT || asset === undefined ? this.#assets.get(id) : asset;
+          if (bytes) assets.set(id, bytes);
         }
         const writeOptions: { generator: string; thumbnail?: Uint8Array } = {
           generator: this.#ctx.generator,
@@ -469,8 +498,11 @@ export class StorageSession {
       if (download) {
         // Nothing confirms that the file exists: still unsaved.
         const now = this.#ctx.scheduler.now();
-        this.#info = { ...this.#info, fileName: target.name };
-        await this.#onJournal(() => this.#writeInfo(false));
+        this.#info = { ...this.#info, fileName: target.name, downloadedAt: now };
+        await this.#within(
+          this.#onJournal(() => this.#writeInfo(false)),
+          wait,
+        );
         this.#setStatus({ fileName: target.name, downloadedAt: now });
         return {
           ok: true,
@@ -491,13 +523,14 @@ export class StorageSession {
       }
       const now = this.#ctx.scheduler.now();
       this.#info = { ...this.#info, fileName: target.name, savedToFileAt: now };
-      await this.#onJournal(async () => {
-        await this.#writeInfo(false);
-        if (this.#changes === changes) {
-          this.#record = { ...this.#record, unsaved: false };
+      if (this.#changes === changes) this.#record = { ...this.#record, unsaved: false };
+      await this.#within(
+        this.#onJournal(async () => {
+          await this.#writeInfo(false);
           await this.#writeRecord();
-        }
-      });
+        }),
+        wait,
+      );
       this.#setStatus({
         fileName: target.name,
         unsavedToFile: this.#changes !== changes,
@@ -510,37 +543,70 @@ export class StorageSession {
   }
 
   /**
-   * Stores everything, writes a last checkpoint and ends the session. If that
-   * fails, the session record stays, so the next start offers the document.
+   * Stores everything, writes a last checkpoint and ends the session.
+   *
+   * If changes could not be stored (the store is full, gone or does not answer
+   * within `closeWait`), it says so and the session stays open and goes on
+   * trying: the program should offer to save as a file, and may then close with
+   * `evenIfUnstored`, which ends the session anyway. The session record then
+   * stays, so the next start offers what reached the store.
    */
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    let clean = false;
+  async close(options: { evenIfUnstored?: boolean } = {}): Promise<CloseResult> {
+    if (this.#closed) return { ok: true, closed: true };
+    let problem: Notice | null = null;
     try {
-      await this.checkpoint();
-      // Changes made while the checkpoint was written.
-      if (this.#pending.length > 0) await this.flush();
-      clean = this.#pending.length === 0;
-    } catch {
-      // Not clean: the record stays.
-    } finally {
-      this.#closed = true;
-      for (const detach of this.#detach) detach();
-      this.#detach = [];
-      for (const timer of [
-        this.#flushTimer,
-        this.#checkpointTimer,
-        this.#retryTimer,
-        this.#heartbeatTimer,
-      ]) {
-        if (timer !== null) this.#ctx.scheduler.clearTimeout(timer);
+      const done = await this.#within(
+        (async () => {
+          try {
+            await this.checkpoint();
+          } catch {
+            // What matters is that every change is in the journal.
+          }
+          return this.flush();
+        })(),
+        this.#ctx.timing.closeWait,
+      );
+      if (done !== true || this.#pending.length > 0) {
+        problem =
+          this.#status.problem ?? notice("autosave-failed", undefined, "close timed out");
       }
-      this.#open?.channel.close();
+    } catch (error) {
+      problem = autosaveProblem(error);
     }
-    if (clean) {
-      await this.#ctx.backend.remove([keys.session(this.slot, this.id)]).catch(() => {});
+    if (problem && !options.evenIfUnstored) return { ok: false, closed: false, problem };
+    this.#closed = true;
+    for (const detach of this.#detach) detach();
+    this.#detach = [];
+    for (const timer of [
+      this.#flushTimer,
+      this.#checkpointTimer,
+      this.#retryTimer,
+      this.#heartbeatTimer,
+    ]) {
+      if (timer !== null) this.#ctx.scheduler.clearTimeout(timer);
+    }
+    this.#open?.channel.close();
+    if (!problem) {
+      await this.#within(
+        this.#ctx.backend.remove([keys.session(this.slot, this.id)]),
+        this.#ctx.timing.storeWait,
+      ).catch(() => {});
     }
     this.#release();
+    return problem ? { ok: false, closed: true, problem } : { ok: true, closed: true };
+  }
+
+  /** The work's result, or TIMED_OUT after `ms` (by the session's clock). */
+  async #within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+    let timer: unknown = null;
+    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = this.#ctx.scheduler.setTimeout(() => resolve(TIMED_OUT), ms);
+    });
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      if (timer !== null) this.#ctx.scheduler.clearTimeout(timer);
+    }
   }
 
   // --- Changes --------------------------------------------------------------

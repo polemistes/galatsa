@@ -68,6 +68,7 @@ export {
   STORAGE_ORIGIN,
   StorageSession,
   type AutosaveTiming,
+  type CloseResult,
   type SaveResult,
   type SessionStatus,
 } from "./session.ts";

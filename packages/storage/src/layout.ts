@@ -85,6 +85,8 @@ export interface SlotInfo {
   fileName: string | null;
   /** When it was last saved to that file. */
   savedToFileAt: number | null;
+  /** When it was last handed to the browser as a download (not a save). */
+  downloadedAt: number | null;
 }
 
 /** A session's record: what a later start needs to know if the session dies. */
@@ -133,6 +135,7 @@ export function decodeInfo(bytes: Uint8Array | undefined): SlotInfo {
     changedAt: num(raw["changedAt"], 0),
     fileName: typeof raw["fileName"] === "string" ? raw["fileName"] : null,
     savedToFileAt: numOrNull(raw["savedToFileAt"]),
+    downloadedAt: numOrNull(raw["downloadedAt"]),
   };
 }
 

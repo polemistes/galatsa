@@ -524,14 +524,19 @@ describe("dismissing and discarding", () => {
     const exported = await p2.storage.exportFile(session.slot);
     expect((await readGalatsaFile(exported!)).snapshot).toEqual(toSnapshot(session.doc));
     // Never saved to a file: discarding the changes would delete it all.
-    expect(await p2.storage.discardChanges(session.slot)).toBe("no-file");
+    expect(
+      await p2.storage.discardChanges(session.slot, memoryFile("x.galatsa")),
+    ).toEqual({
+      ok: false,
+      reason: "no-file",
+    });
     expect(await p2.storage.list()).toHaveLength(1);
     expect(await p2.storage.deleteDocument(session.slot)).toBe(true);
     expect(await p2.storage.list()).toEqual([]);
     expect(m.store.data.size).toBe(0);
   });
 
-  it("discards the changes of a document that has a file, and the file stays", async () => {
+  it("discards the changes of a document that has a file, only once the file has opened", async () => {
     const m = machine();
     const p1 = program(m);
     const session = await p1.storage.create();
@@ -539,15 +544,29 @@ describe("dismissing and discarding", () => {
     const file = memoryFile("talk.galatsa");
     expect((await session.saveToFile(file)).ok).toBe(true);
     const saved = file.bytes!.slice();
+    const atSave = toSnapshot(session.doc);
     addBox(session.doc, 5, 5);
     await session.flush();
     const p2 = program(m);
-    expect(await p2.storage.discardChanges(session.slot)).toBe("open");
+    expect(await p2.storage.discardChanges(session.slot, file)).toEqual({
+      ok: false,
+      reason: "open",
+    });
     p1.crash(session);
     const [offer] = await p2.storage.recoverable();
     expect(offer?.fileName).toBe("talk.galatsa");
-    expect(await p2.storage.discardChanges(offer!.slot)).toBe("discarded");
-    expect(await p2.storage.list()).toEqual([]);
+    // The file has gone bad meanwhile: nothing is discarded.
+    const broken = memoryFile("talk.galatsa", saved.slice(0, 100));
+    const refused = await p2.storage.discardChanges(offer!.slot, broken);
+    expect(!refused.ok && refused.reason).toBe("file-failed");
+    expect((await p2.storage.list()).map((d) => d.slot)).toContain(offer!.slot);
+    // With the file intact: the file opens, and the stored copy goes.
+    const done = await p2.storage.discardChanges(offer!.slot, file);
+    if (!done.ok) throw new Error(done.reason);
+    expect(Object.keys(toSnapshot(done.session.doc).elements)).toEqual(
+      Object.keys(atSave.elements),
+    );
+    expect((await p2.storage.list()).map((d) => d.slot)).not.toContain(offer!.slot);
     expect([...file.bytes!]).toEqual([...saved]);
   });
 });
