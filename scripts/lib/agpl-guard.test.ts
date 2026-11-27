@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { build, createServer, type InlineConfig, type Plugin } from "vite";
 import {
@@ -112,13 +113,13 @@ const TIMEOUT = 20_000;
 
 describe("AGPL guard: path helpers", () => {
   it("compares folders on POSIX and Windows paths", () => {
-    expect(isInsideFolder("/r/packages/server/src/a.ts", "/r/packages/server")).toBe(
-      true,
-    );
-    expect(isInsideFolder("/r/packages/server", "/r/packages/server")).toBe(true);
-    expect(isInsideFolder("/r/packages/server-x/a.ts", "/r/packages/server")).toBe(false);
-    expect(isInsideFolder("/r/packages/server/..x", "/r/packages/server")).toBe(true);
-    expect(isInsideFolder("/r/bench/a.ts", "/r/packages/server")).toBe(false);
+    const posix = path.posix;
+    const server = "/r/packages/server";
+    expect(isInsideFolder("/r/packages/server/src/a.ts", server, posix)).toBe(true);
+    expect(isInsideFolder("/r/packages/server", server, posix)).toBe(true);
+    expect(isInsideFolder("/r/packages/server-x/a.ts", server, posix)).toBe(false);
+    expect(isInsideFolder("/r/packages/server/..x", server, posix)).toBe(true);
+    expect(isInsideFolder("/r/bench/a.ts", server, posix)).toBe(false);
     const win = path.win32;
     expect(
       isInsideFolder("C:\\r\\packages\\SERVER\\a.ts", "c:\\r\\packages\\server", win),
@@ -129,14 +130,25 @@ describe("AGPL guard: path helpers", () => {
   });
 
   it("reads file paths out of module ids", () => {
-    expect(idToPath("/r/a.ts?raw")).toBe("/r/a.ts");
-    expect(idToPath("\0/r/a.ts?commonjs-proxy")).toBe("/r/a.ts");
-    expect(idToPath("/@fs/r/a.ts")).toBe("/r/a.ts");
-    expect(idToPath("file:///r/a.ts#x")).toBe("/r/a.ts");
-    expect(idToPath("\0vite/preload-helper")).toBeUndefined();
-    expect(idToPath("virtual:x")).toBeUndefined();
-    expect(idToPath("/C:/r/a.ts?url", path.win32)).toBe("C:/r/a.ts");
-    expect(idToPath("C:\\r\\a.ts?inline", path.win32)).toBe("C:\\r\\a.ts");
+    const posix = path.posix;
+    const win = path.win32;
+    expect(idToPath("/r/a.ts?raw", posix)).toBe("/r/a.ts");
+    expect(idToPath("\0/r/a.ts?commonjs-proxy", posix)).toBe("/r/a.ts");
+    expect(idToPath("/@fs/r/a.ts", posix)).toBe("/r/a.ts");
+    expect(idToPath("file:///r/a.ts#x", posix)).toBe("/r/a.ts");
+    expect(idToPath("\0vite/preload-helper", posix)).toBeUndefined();
+    expect(idToPath("virtual:x", posix)).toBeUndefined();
+    expect(idToPath("/C:/r/a.ts?url", win)).toBe("C:/r/a.ts");
+    expect(idToPath("C:\\r\\a.ts?inline", win)).toBe("C:\\r\\a.ts");
+    // File URLs are read by the path rules passed in, whatever the host is.
+    expect(idToPath("file:///C:/r/a.ts?url", win)).toBe("C:\\r\\a.ts");
+    expect(idToPath("file://nas/r/a.ts", win)).toBe("\\\\nas\\r\\a.ts");
+    // A Windows file URL needs a drive letter or a host; without one it names no
+    // file, and the guard falls back on idMentionsFolder.
+    expect(idToPath("file:///r/a.ts", win)).toBeUndefined();
+    // By default the host's own path rules apply.
+    const here = path.resolve("a.ts");
+    expect(idToPath(pathToFileURL(here).href)).toBe(here);
     expect(
       idMentionsFolder("\0commonjs:/r/packages/server/a.js", "/r/packages/server", false),
     ).toBe(true);
