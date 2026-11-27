@@ -169,7 +169,7 @@ test("the camera follows the mouse, the trackpad, touch and the keyboard", async
 
   // The wheel scrolls (a mouse wheel, or two fingers on a trackpad).
   let before = await camera(page);
-  const pointer = at(box.width * 0.7, box.height * 0.3);
+  const pointer = at(Math.round(box.width * 0.7), Math.round(box.height * 0.3));
   await page.mouse.move(pointer.x, pointer.y);
   await page.mouse.wheel(30, 100);
   await expect.poll(async () => (await camera(page)).cy).toBeCloseTo(before.cy + 100, 3);
@@ -178,7 +178,7 @@ test("the camera follows the mouse, the trackpad, touch and the keyboard", async
 
   // Ctrl with the wheel zooms about the pointer, which keeps its point: a
   // mouse wheel's notches in, then a trackpad pinch's small steps out.
-  const local = { x: box.width * 0.7, y: box.height * 0.3 };
+  const local = { x: Math.round(box.width * 0.7), y: Math.round(box.height * 0.3) };
   const target = await under(page, local.x, local.y);
   await page.keyboard.down("Control");
   for (let i = 0; i < 30; i++) await page.mouse.wheel(0, -100);
@@ -213,7 +213,7 @@ test("the camera follows the mouse, the trackpad, touch and the keyboard", async
 
   // The middle button drags the canvas.
   before = await camera(page);
-  const m = at(box.width * 0.2, box.height * 0.8);
+  const m = at(Math.round(box.width * 0.2), Math.round(box.height * 0.8));
   await page.mouse.move(m.x, m.y);
   await page.mouse.down({ button: "middle" });
   await page.mouse.move(m.x + 40, m.y - 20, { steps: 4 });
@@ -248,7 +248,7 @@ test("the camera follows the mouse, the trackpad, touch and the keyboard", async
   // them pans.
   await page.keyboard.press("Control+0");
   before = await camera(page);
-  const mid = { x: box.width * 0.5, y: box.height * 0.5 };
+  const mid = { x: Math.round(box.width * 0.5), y: Math.round(box.height * 0.5) };
   const between = await under(page, mid.x, mid.y);
   await touch(page, "pointerdown", 1, mid.x - 50, mid.y);
   await touch(page, "pointerdown", 2, mid.x + 50, mid.y);
