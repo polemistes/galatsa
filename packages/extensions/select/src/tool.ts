@@ -545,9 +545,25 @@ export function startSelectTool(session: ToolSession): ToolHandler {
   };
 
   /** The preview of a resize: the corner in the element's own parent space. */
-  const resizePreview = (args: ResizeResult): PreviewChanges => ({
-    [args.id]: { x: args.px, y: args.py, w: args.w, h: args.h },
-  });
+  const resizePreview = (args: ResizeResult): PreviewChanges => {
+    const changes: Record<ElementId, { x: number; y: number; w?: number; h?: number }> = {
+      [args.id]: { x: args.px, y: args.py, w: args.w, h: args.h },
+    };
+    // What is in a frame stays where it is on the canvas when the frame's
+    // corner moves, as the resize command keeps it (docs/adr/0014).
+    const r = resolver();
+    if (isFrame(r, args.id)) {
+      const was = r.localPosition(args.id);
+      const dx = args.px - was.x;
+      const dy = args.py - was.y;
+      if (dx !== 0 || dy !== 0)
+        for (const child of r.children(args.id)) {
+          const at = r.localPosition(child);
+          changes[child] = { x: at.x - dx, y: at.y - dy };
+        }
+    }
+    return changes;
+  };
 
   const rotateTo = (
     d: Extract<Drag, { kind: "rotate" }>,

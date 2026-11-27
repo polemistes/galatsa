@@ -588,6 +588,18 @@ describe("the drop rule: an element stays in its frame unless it clearly lands e
     drag(editor, { x: 400, y: 200 }, { x: 600, y: 200 });
     expect(at(editor, a).parent).toBe(g);
   });
+  it("keeps what is in a frame in place while its left side is dragged, and after (F-J)", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 300, 200);
+    const a = rect(editor, 50, 40, 20, 20, f);
+    editor.services.selection.set([f]);
+    editor.pointerDown(pointer(100, 200));
+    for (let i = 1; i <= 4; i++) editor.pointerMove(pointer(100 - 10 * i, 200));
+    expect(editor.renderer.screenBounds(a)).toMatchObject({ x: 150, y: 140 });
+    editor.pointerUp(pointer(60, 200));
+    expect(at(editor, f)).toEqual({ x: 60, y: 100, parent: null });
+    expect(at(editor, a)).toEqual({ x: 150, y: 140, parent: f });
+  });
 });
 
 describe("frames on the canvas", () => {

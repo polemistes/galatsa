@@ -3,7 +3,7 @@
 // Moving, resizing, scaling and rotating elements. Each command writes in one
 // transaction, so a drag that ends in one of them is one document update.
 
-import { GROUP_TYPE, type ElementId, type Point } from "@galatsa/core";
+import { FRAME_TYPE, GROUP_TYPE, type ElementId, type Point } from "@galatsa/core";
 import {
   edit,
   moveElement,
@@ -156,9 +156,27 @@ export const resize = defineCommand<ResizeArgs, void>({
   enabled: (ctx, args) => readResize(ctx, args) !== undefined,
   execute(ctx, args) {
     const a = readResize(ctx, args) ?? refuse("resize");
+    // What is in a frame is placed in the frame's space, whose origin is the
+    // frame's corner: when the corner moves (a left or top handle), what is
+    // inside is moved back by as much, so it stays where it is on the canvas
+    // (docs/adr/0014). Every child in the effective tree, gone ones too, so
+    // that what comes back with an undo of a delete is in place as well.
+    const r = resolve(ctx);
+    const kept: { id: ElementId; x: number; y: number }[] = [];
+    if (a.at !== undefined && r.get(a.id)?.type === FRAME_TYPE) {
+      const was = r.localPosition(a.id);
+      const dx = a.at.x - was.x;
+      const dy = a.at.y - was.y;
+      if (dx !== 0 || dy !== 0)
+        for (const child of r.children(a.id)) {
+          const at = r.localPosition(child);
+          kept.push({ id: child, x: at.x - dx, y: at.y - dy });
+        }
+    }
     edit(ctx.doc, () => {
       if (a.at !== undefined) moveElement(ctx.doc, a.id, a.at.x, a.at.y);
       resizeElement(ctx.doc, a.id, a.w, a.h);
+      for (const child of kept) moveElement(ctx.doc, child.id, child.x, child.y);
     });
   },
 });

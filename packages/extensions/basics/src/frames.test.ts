@@ -366,6 +366,32 @@ describe("stacking inside a frame", () => {
   });
 });
 
+describe("resizing a frame", () => {
+  it("keeps what is in it where it is on the canvas when a left or top side moves (F-J)", () => {
+    const t = setupBasics();
+    const f = t.frame(100, 100, 300, 200);
+    const a = t.shape(50, 40, 20, 20, f);
+    const inner = t.frame(100, 100, 50, 50, f);
+    const deep = t.shape(5, 5, 10, 10, inner);
+    const gone = t.shape(200, 10, 10, 10, f);
+    t.must(BASICS.delete, { ids: [gone] });
+    oneStep(t, BASICS.resize, { id: f, w: 330, h: 240, x: 70, y: 60 });
+    expect(world(t, f)).toEqual({ x: 70, y: 60 });
+    expect(world(t, a)).toEqual({ x: 150, y: 140 });
+    expect(world(t, inner)).toEqual({ x: 200, y: 200 });
+    expect(world(t, deep)).toEqual({ x: 205, y: 205 });
+    // What was deleted in it comes back in place too.
+    t.must(BASICS.undo);
+    t.must(BASICS.undo);
+    t.must(BASICS.redo);
+    t.must(BASICS.redo);
+    expect(world(t, gone)).toEqual({ x: 300, y: 110 });
+    // From the right or bottom nothing inside moves.
+    t.must(BASICS.resize, { id: f, w: 400, h: 300 });
+    expect(world(t, a)).toEqual({ x: 150, y: 140 });
+  });
+});
+
 describe("frame stops", () => {
   it("follow their frame when it is moved, framed or moved into another frame", () => {
     const t = setupBasics();
