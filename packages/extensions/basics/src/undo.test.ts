@@ -25,9 +25,12 @@ import {
 } from "./testing.ts";
 
 const COMMANDS = 1000;
-// Each seed takes a few seconds. Seeds 1 to 42 all passed when this was written;
-// three run by default.
+// A seed takes a few seconds with the two ends checked, and about two minutes
+// with every step checked (a snapshot per step). Seeds 1 to 42 passed with
+// every step checked when this was written. By default three seeds run with
+// the ends checked, and one with every step checked over fewer commands.
 const SEEDS = [1, 2, 3];
+const STEP_CHECKED = { seed: 4, commands: 250 };
 
 /** Where two states differ, briefly. */
 function diff(a: DocumentSnapshot, b: DocumentSnapshot): string {
@@ -54,13 +57,21 @@ function diff(a: DocumentSnapshot, b: DocumentSnapshot): string {
  * back, and checks each undo and redo against it.
  */
 class History {
-  readonly undo: DocumentSnapshot[] = [];
-  readonly redo: DocumentSnapshot[] = [];
+  readonly undo: (DocumentSnapshot | null)[] = [];
+  readonly redo: (DocumentSnapshot | null)[] = [];
   readonly mismatches: string[] = [];
   readonly t: BasicsSetup;
+  /** Whether states are compared (otherwise only the stack sizes are followed). */
+  readonly checks: boolean;
 
-  constructor(t: BasicsSetup) {
+  constructor(t: BasicsSetup, checks: boolean) {
     this.t = t;
+    this.checks = checks;
+  }
+
+  /** The state as the user sees it, when states are compared. */
+  state(): DocumentSnapshot | null {
+    return this.checks ? visibleState(this.t.doc) : null;
   }
 
   /** Records what a command did, given the state and stack sizes before it. */
@@ -68,12 +79,12 @@ class History {
     command: string,
     ok: boolean,
     value: unknown,
-    before: DocumentSnapshot,
+    before: DocumentSnapshot | null,
     u0: number,
     r0: number,
   ): void {
     const t = this.t;
-    const now = visibleState(t.doc);
+    const now = this.state();
     const u1 = t.undo.undoStack.length;
     const r1 = t.undo.redoStack.length;
     if ((command === BASICS.undo || command === BASICS.redo) && ok && value === true) {
@@ -84,12 +95,17 @@ class History {
       const expected = from[from.length - removed]!;
       from.length -= removed;
       to.push(before);
-      if (JSON.stringify(expected) !== JSON.stringify(now))
+      if (expected && now && JSON.stringify(expected) !== JSON.stringify(now))
         this.mismatches.push(`${command}: ${diff(expected, now)}`);
     } else if (u1 - u0 === 1) {
       this.undo.push(before);
       this.redo.length = 0;
-    } else if (u1 === u0 && JSON.stringify(before) !== JSON.stringify(now)) {
+    } else if (
+      u1 === u0 &&
+      before &&
+      now &&
+      JSON.stringify(before) !== JSON.stringify(now)
+    ) {
       this.mismatches.push(
         `${command} changed the document without a step: ${diff(before, now)}`,
       );
@@ -101,7 +117,7 @@ class History {
   /** Runs undo or redo, checked. Returns whether it changed something. */
   step(command: string): boolean {
     const t = this.t;
-    const before = visibleState(t.doc);
+    const before = this.state();
     const [u0, r0] = [t.undo.undoStack.length, t.undo.redoStack.length];
     const done = t.must<boolean>(command);
     this.after(command, true, done, before, u0, r0);
@@ -109,8 +125,8 @@ class History {
   }
 }
 
-/** Runs the scenario of a seed, checking every step. */
-function scenario(seed: number, count = COMMANDS) {
+/** Runs the scenario of a seed, checking every step if `checks`. */
+function scenario(seed: number, count = COMMANDS, checks = false) {
   return withSeed(seed, () => {
     const doc = new Y.Doc();
     doc.clientID = seed;
@@ -118,7 +134,7 @@ function scenario(seed: number, count = COMMANDS) {
     const empty = visibleState(doc);
     const random = seededRandom(seed);
     const memory: RandomMemory = {};
-    const history = new History(t);
+    const history = new History(t, checks);
     const log: string[] = [];
     const succeeded = new Map<string, number>();
     let ran = 0;
@@ -126,7 +142,7 @@ function scenario(seed: number, count = COMMANDS) {
     doc.on("update", () => (updates += 1));
     while (ran < count) {
       const commands = randomCommands(t, random, memory);
-      const before = visibleState(doc);
+      const before = history.state();
       const [u0, r0] = [t.undo.undoStack.length, t.undo.redoStack.length];
       const updatesBefore = updates;
       const outcomes = runRandom(t, commands, memory);
@@ -171,9 +187,13 @@ function redoSteps(history: History, count: number): void {
 }
 
 describe("a thousand random commands", () => {
-  for (const seed of SEEDS) {
-    it(`undo back to the empty document and redo to the same result, every step checked (seed ${seed})`, () => {
-      const { t, empty, succeeded, history } = scenario(seed);
+  const runs = [
+    ...SEEDS.map((seed) => ({ seed, commands: COMMANDS, checks: false })),
+    { ...STEP_CHECKED, checks: true },
+  ];
+  for (const { seed, commands, checks } of runs) {
+    it(`undo back to the empty document and redo to the same result (${commands} commands, seed ${seed}${checks ? ", every step checked" : ""})`, () => {
+      const { t, empty, succeeded, history } = scenario(seed, commands, checks);
       const final = visibleState(t.doc);
       expect(Object.keys(final.elements).length).toBeGreaterThan(10);
       // The scenario exercised the commands it is about.
@@ -190,7 +210,7 @@ describe("a thousand random commands", () => {
 
       withSeed(seed + 1000, () => {
         const undone = undoAll(history, t);
-        expect(undone).toBeGreaterThan(50);
+        expect(undone).toBeGreaterThan(commands / 20);
         expect(t.resolver().drawOrder()).toEqual([]);
         expect(visibleState(t.doc)).toEqual(empty);
 
