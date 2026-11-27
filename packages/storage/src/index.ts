@@ -71,6 +71,7 @@ export {
   type SaveResult,
   type SessionStatus,
 } from "./session.ts";
+export { serveCheckpoints, workerEncoder, type WorkerLike } from "./worker.ts";
 export {
   DocumentStorage,
   type OpenResult,

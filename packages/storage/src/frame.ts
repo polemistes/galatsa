@@ -52,7 +52,8 @@ export function encodeFrame(
 export function decodeFrame(bytes: Uint8Array, kind: FrameKind): Frame | null {
   if (bytes.length < PREFIX) return null;
   for (let i = 0; i < 4; i++) if (bytes[i] !== MAGIC[i]) return null;
-  if (bytes[4] !== 1 || bytes[5] !== kind) return null;
+  if (bytes[4] !== 1 || bytes[5] !== kind || bytes[6] !== 0 || bytes[7] !== 0)
+    return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const headLength = view.getUint32(8, true);
   const payloadLength = view.getUint32(12, true);

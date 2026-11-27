@@ -13,13 +13,21 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./checkpoint-worker": {
+      "@galatsa/source": "./src/checkpoint-worker.ts",
+      "types": "./dist/checkpoint-worker.d.ts",
+      "default": "./dist/checkpoint-worker.js"
+    },
     "./testing": {
       "@galatsa/source": "./src/testing.ts",
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
     }
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./src/checkpoint-worker.ts",
+    "./dist/checkpoint-worker.js"
+  ],
   "files": [
     "dist"
   ],
