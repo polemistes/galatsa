@@ -85,7 +85,8 @@ export function readClipboard(source: ClipboardSource): ClipboardContent {
   const types = [...source.types];
   const files = source.files ? Array.from(source.files) : [];
   let fragment: unknown;
-  if (types.includes(FRAGMENT_MIME)) fragment = decodeFragment(source.getData(FRAGMENT_MIME));
+  if (types.includes(FRAGMENT_MIME))
+    fragment = decodeFragment(source.getData(FRAGMENT_MIME));
   let text: string | null = types.includes("text/plain")
     ? source.getData("text/plain")
     : null;

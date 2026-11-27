@@ -529,7 +529,9 @@ describe("the keys, the clipboard and the context menu", () => {
     undoTo(editor, before);
     // The clipboard entries are the page's.
     openContextMenu(editor, { x: 120, y: 120 }, clipboard);
-    editor.contextMenu.choose(editor.contextMenu.state!.entries.find((e) => e.key === BASICS.copy)!);
+    editor.contextMenu.choose(
+      editor.contextMenu.state!.entries.find((e) => e.key === BASICS.copy)!,
+    );
     expect(calls).toEqual(["copy"]);
   });
 

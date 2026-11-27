@@ -220,7 +220,7 @@ export function mountEditor(
   const viaEvent = (command: "copy" | "cut", fallback: () => boolean): void => {
     surface.focus({ preventScroll: true });
     clipboardHandled = false;
-    let sent = false;
+    let sent: boolean;
     try {
       sent = document.execCommand(command);
     } catch {

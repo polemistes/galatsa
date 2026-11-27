@@ -113,7 +113,7 @@ test("the development page edits the sample scene with the mouse and the keyboar
   const start = await probe(page);
   expect(start.elements).toBe(2000);
   expect(start.shapes).toBe(1200);
-  expect(start.tool).toBe("examples.select/select");
+  expect(start.tool).toBe("galatsa.select/select");
 
   const box = (await surface.boundingBox())!;
   const at = (x: number, y: number) => ({ x: box.x + x, y: box.y + y });
@@ -130,7 +130,7 @@ test("the development page edits the sample scene with the mouse and the keyboar
   await page.mouse.up();
 
   await expect.poll(async () => (await probe(page)).shapes).toBe(start.shapes + 1);
-  await expect.poll(async () => (await probe(page)).tool).toBe("examples.select/select");
+  await expect.poll(async () => (await probe(page)).tool).toBe("galatsa.select/select");
 
   // The new shape is drawn: the middle of the rectangle has the shape's fill.
   const mid = { x: box.width * 0.4, y: box.height * 0.45 };

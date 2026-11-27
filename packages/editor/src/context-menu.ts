@@ -93,9 +93,9 @@ export function menuEntries(editor: Editor, clipboard: MenuClipboard): MenuEntry
   const args = selection.length > 0 ? { ids: [...selection] } : undefined;
   const env = editor.environment();
   const offered = (id: ContributionId): boolean =>
-    editor.host.commands.get(id) !== undefined &&
-    editor.host.commands.isVisible(id, env);
-  const label = (id: ContributionId): Label => editor.host.commands.get(id)!.definition.label;
+    editor.host.commands.get(id) !== undefined && editor.host.commands.isVisible(id, env);
+  const label = (id: ContributionId): Label =>
+    editor.host.commands.get(id)!.definition.label;
   const out: MenuEntry[] = [];
   const command = (id: ContributionId, group: number): void => {
     if (!offered(id)) return;
@@ -165,6 +165,7 @@ export function openContextMenu(
 ): void {
   if (!editor.inputEnabled) return;
   const hit = elementForMenu(editor, point);
-  if (hit !== null && !editor.selection.includes(hit)) editor.services.selection.set([hit]);
+  if (hit !== null && !editor.selection.includes(hit))
+    editor.services.selection.set([hit]);
   editor.contextMenu.open(point.x, point.y, menuEntries(editor, clipboard));
 }

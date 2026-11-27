@@ -21,10 +21,12 @@
 
   /** The entries with a separator before each new group. */
   const rows = $derived(
-    (current?.entries ?? []).map((entry: MenuEntry, i: number, all: readonly MenuEntry[]) => ({
-      entry,
-      separated: i > 0 && all[i - 1]!.group !== entry.group,
-    })),
+    (current?.entries ?? []).map(
+      (entry: MenuEntry, i: number, all: readonly MenuEntry[]) => ({
+        entry,
+        separated: i > 0 && all[i - 1]!.group !== entry.group,
+      }),
+    ),
   );
 
   // Keep the menu inside the canvas, and give the first entry the keys.
