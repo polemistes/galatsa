@@ -22,4 +22,12 @@ export default {
   "kind.line": "Line",
   "kind.triangle": "Triangle",
   "param.apexX": "Top point",
+  "kind.arrow": "Arrow",
+  "param.startHead": "Start",
+  "param.startHead.none": "None",
+  "param.startHead.arrow": "Arrowhead",
+  "param.endHead": "End",
+  "param.endHead.none": "None",
+  "param.endHead.arrow": "Arrowhead",
+  "param.headSize": "Arrowhead size",
 };

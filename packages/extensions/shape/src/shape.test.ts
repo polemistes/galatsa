@@ -577,13 +577,13 @@ describe("changing the kind", () => {
       x: 0,
       y: 0,
       size: { w: 10, h: 0 },
-      data: { kind: "arrow", head: "big" },
+      data: { kind: "future-line", head: "big" },
     });
     expect(t.run(SHAPE_SET, { ids: [id], key: "kind", value: "rect" })).toMatchObject({
       ok: false,
       reason: "disabled",
     });
-    expect(t.element(id).data).toEqual({ kind: "arrow", head: "big" });
+    expect(t.element(id).data).toEqual({ kind: "future-line", head: "big" });
   });
 });
 
@@ -716,7 +716,7 @@ describe("a kind from a newer version", () => {
 describe("a kind from a newer version drawn as a line", () => {
   it("is a solid line along the box, at least 2 device pixels wide, with the label above it", () => {
     const ctx = createRecordingDrawContext({ scale: 2, t: (label) => label });
-    const { model } = read({ kind: "arrow", stroke: "#000000", strokeWidth: 0.25 });
+    const { model } = read({ kind: "future-line", stroke: "#000000", strokeWidth: 0.25 });
     shapeView.draw(model, ctx, box(120, 0));
     const stroke = ctx.calls.find((c) => c.op === "stroke");
     expect(stroke).toMatchObject({ path: ["moveTo(0,0)", "lineTo(120,0)"] });
@@ -726,7 +726,11 @@ describe("a kind from a newer version drawn as a line", () => {
     expect(text?.op === "text" && text.y).toBeLessThan(0);
     // A thick outline keeps its width.
     const thick = createRecordingDrawContext({ scale: 2 });
-    shapeView.draw(read({ kind: "arrow", strokeWidth: 9 }).model, thick, box(120, 0));
+    shapeView.draw(
+      read({ kind: "future-line", strokeWidth: 9 }).model,
+      thick,
+      box(120, 0),
+    );
     expect(thick.calls.find((c) => c.op === "stroke")).toMatchObject({
       style: { width: 9 },
     });

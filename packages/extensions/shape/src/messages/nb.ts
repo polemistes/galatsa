@@ -22,4 +22,12 @@ export default {
   "kind.line": "Linje",
   "kind.triangle": "Trekant",
   "param.apexX": "Toppunkt",
+  "kind.arrow": "Pil",
+  "param.startHead": "Start",
+  "param.startHead.none": "Ingen",
+  "param.startHead.arrow": "Pilspiss",
+  "param.endHead": "Slutt",
+  "param.endHead.none": "Ingen",
+  "param.endHead.arrow": "Pilspiss",
+  "param.headSize": "Størrelse på pilspiss",
 };
