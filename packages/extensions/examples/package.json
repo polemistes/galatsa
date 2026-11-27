@@ -1,0 +1,39 @@
+{
+  "name": "@galatsa/extension-examples",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Sketches of the text, shape and image extensions, written against the extension interface to show that it covers them",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@galatsa/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./view": {
+      "@galatsa/source": "./src/view.ts",
+      "types": "./dist/view.d.ts",
+      "default": "./dist/view.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*",
+    "@galatsa/extension-api": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "yjs": "13.6.33"
+  }
+}

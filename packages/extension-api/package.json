@@ -1,0 +1,43 @@
+{
+  "name": "@galatsa/extension-api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Extension interface of Galatsa: element types, tools, commands, import, export, transitions and panels, with the extension host and the command registry",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@galatsa/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./editing": {
+      "@galatsa/source": "./src/editing.ts",
+      "types": "./dist/editing.d.ts",
+      "default": "./dist/editing.js"
+    },
+    "./testing": {
+      "@galatsa/source": "./src/testing.ts",
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "yjs": "13.6.33"
+  }
+}

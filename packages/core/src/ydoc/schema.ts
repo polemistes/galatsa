@@ -116,6 +116,13 @@ export const ORIGIN = {
   track: "galatsa:track",
   /** Re-keying the children of a container whose order keys grew long (section 4.1). */
   rebalance: "galatsa:rebalance",
+  /**
+   * An extension bringing an element's data up to a newer layout before a user's
+   * edit of it (section 9.4). Work like any local change, but the undo manager
+   * does not track it: an upgrade keeps the meaning of the data, so undoing the
+   * edit leaves the element in the newer layout.
+   */
+  upgrade: "galatsa:upgrade",
 } as const;
 
 /** Origins whose transactions are neither work nor undoable. */
