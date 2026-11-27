@@ -50,6 +50,9 @@ export interface RichText {
   readonly length: number;
 }
 
+/** Attributes that belong to a paragraph (on its "\n"), not to characters. */
+export const PARAGRAPH_ATTRIBUTES: readonly string[] = ["list"];
+
 /** Width of the list indent, in em. */
 export const LIST_INDENT_EM = 1.5;
 /** Space between a list marker and the text, in em. */

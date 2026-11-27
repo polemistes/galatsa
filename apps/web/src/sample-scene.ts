@@ -24,19 +24,21 @@ import {
   type ElementId,
 } from "@galatsa/core";
 import { fromSnapshot } from "@galatsa/core/ydoc";
-import { IMAGE_TYPE, TEXT_TYPE, imageView, textView } from "@galatsa/extension-examples";
+import { IMAGE_TYPE, imageView } from "@galatsa/extension-examples";
 import {
   SHAPE_TYPE,
   newShapeData,
   shapeKinds,
   shapeView,
 } from "@galatsa/extension-shape";
+import { TEXT_TYPE, textView } from "@galatsa/extension-text";
 import { assetIdOf, FILE_EXTENSION, writeGalatsaFile } from "@galatsa/format";
 import type { DocumentStorage, OpenResult } from "@galatsa/storage";
 
-// A new key since the shapes became the shape extension's, so that a copy
-// stored before (of the shape sketch's type) is not opened again.
-const SLOT_KEY = "galatsa-dev:sample-slot-2";
+// A new key since the shapes and the text became the shape and text
+// extensions', so that a copy stored before (of the sketches' types) is not
+// opened again.
+const SLOT_KEY = "galatsa-dev:sample-slot-3";
 /** Long side of the generated pictures, in pixels. */
 const PICTURE_SIZE = 160;
 

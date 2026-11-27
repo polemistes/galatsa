@@ -51,6 +51,8 @@ export interface TextEditKey {
   readonly altKey: boolean;
   readonly ctrlKey: boolean;
   readonly metaKey: boolean;
+  /** `getModifierState("AltGraph")`. */
+  readonly altGraph: boolean;
   readonly repeat: boolean;
 }
 
@@ -663,6 +665,7 @@ function keyOf(e: KeyboardEvent): TextEditKey {
     altKey: e.altKey,
     ctrlKey: e.ctrlKey,
     metaKey: e.metaKey,
+    altGraph: typeof e.getModifierState === "function" && e.getModifierState("AltGraph"),
     repeat: e.repeat,
   };
 }

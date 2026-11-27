@@ -55,6 +55,7 @@ export {
   type ListKind,
   parseRichText,
   contentString,
+  PARAGRAPH_ATTRIBUTES,
 } from "./rich-text.ts";
 export {
   type TextEdit,

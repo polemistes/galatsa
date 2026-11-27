@@ -33,8 +33,15 @@ import {
 
 export type { FontFamilies } from "./fonts.ts";
 
-/** Font size, in pixels, at which text is laid out. */
-export const REFERENCE_SIZE = 100;
+/**
+ * Font size, in pixels, at which text is laid out. Large, because Chromium
+ * lays text out with glyph advances rounded to whole pixels: at 100 pixels a
+ * line came out 0.3 % wider than the font says, which zoomed in moved glyphs
+ * of the editing element several pixels from the drawn ones (measured
+ * 2026-11-27, docs/adr/0011-text.md). At 1,000 pixels the rounding is a
+ * tenth of that.
+ */
+export const REFERENCE_SIZE = 1000;
 /** Distinct font sizes per doubling of size that the canvas is given. */
 export const FONT_STEPS = 4;
 /** Text whose font is smaller than this many device pixels is drawn as bars. */

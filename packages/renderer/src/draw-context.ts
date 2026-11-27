@@ -36,6 +36,9 @@ import {
 } from "./text.ts";
 import { intersection, localBoundsOf, translate, type Matrix } from "./transform.ts";
 
+/** The last stretch of each fragment drawn (CanvasDrawContext.#fit). */
+const fits = new WeakMap<LayoutFragment, { readonly px: number; readonly ratio: number }>();
+
 /** Elements smaller than this many device pixels get detail "box". */
 export const BOX_BELOW_PX = 4;
 /** Elements smaller than this many device pixels get detail "reduced". */
@@ -264,9 +267,10 @@ export class CanvasDrawContext implements DrawContext {
       if (f.x > view.x + view.w || f.x + f.width < view.x) return;
       state.font(`${f.prefix}${drawPx}px ${f.family}`);
       state.fill(f.color);
+      const fit = this.#fit(f, drawPx, s, k);
       state.transform(
-        cos,
-        sin,
+        cos * fit,
+        sin * fit,
         -sin,
         cos,
         m.a * f.x + m.c * baseline + m.e,
@@ -280,6 +284,29 @@ export class CanvasDrawContext implements DrawContext {
       if (line.marker) draw(line.marker, line.baseline);
       for (const f of line.fragments) draw(f, line.baseline);
     }
+  }
+
+  /**
+   * How much wider a fragment must be drawn than the canvas sets it at
+   * `drawPx`, so that it is as wide as the layout says. The canvas's glyph
+   * advances at a small size are hinted and differ from the layout's (made at
+   * the reference size), most at small sizes; stretching the fragment by that
+   * keeps every fragment where the editing element shows it. Remembered per
+   * fragment for the last font size.
+   */
+  #fit(f: LayoutFragment, drawPx: number, s: number, k: number): number {
+    const known = fits.get(f);
+    if (known !== undefined && known.px === drawPx) return known.ratio;
+    const ctx = this.#env.state.ctx as Partial<{ measureText(t: string): { width: number } }>;
+    let ratio = 1;
+    if (typeof ctx.measureText === "function" && f.width > 0) {
+      // measureText is at drawPx (the font just set); the matrix scales it by k.
+      const drawn = ctx.measureText(f.text).width * k;
+      if (drawn > 0) ratio = (f.width * s) / drawn;
+    }
+    if (!(ratio > 0.5 && ratio < 2)) ratio = 1;
+    fits.set(f, { px: drawPx, ratio });
+    return ratio;
   }
 
   /** Text too small to read: bars where the lines are, or one faint block. */

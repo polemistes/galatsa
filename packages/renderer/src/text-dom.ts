@@ -276,21 +276,29 @@ export class DomTextEngine {
           const run = clusters[i]!.run;
           let j = i;
           let chars = "";
+          let shown = "";
+          let visibleStart = -1;
           let visibleEnd = -1;
           while (j <= last && clusters[j]!.run === run) {
             chars += clusters[j]!.text;
-            if (!/^\s+$/.test(clusters[j]!.text)) visibleEnd = j;
+            if (!/^\s+$/.test(clusters[j]!.text)) {
+              if (visibleStart < 0) visibleStart = j;
+              visibleEnd = j;
+            }
+            if (visibleStart >= 0) shown += clusters[j]!.text;
             j++;
           }
-          const a = rectOf(clusters[i]!);
-          const b = rectOf(clusters[j - 1]!);
-          const x0 = a.left - origin.left;
-          const x1 = b.right - origin.left;
           text += chars;
           if (visibleEnd >= 0) {
+            // Drawn from its first visible character to its last: spaces
+            // around it are not drawn, and are not measured, so the first
+            // glyph stands exactly where the browser put it.
+            shown = shown.replace(/\s+$/, "");
+            const x0 = rectOf(clusters[visibleStart]!).left - origin.left;
+            const x1 = rectOf(clusters[visibleEnd]!).right - origin.left;
             const runStyle = paragraph.runs[run]!;
             fragments.push({
-              text: chars,
+              text: shown,
               x: x0 * scale,
               width: (x1 - x0) * scale,
               prefix: fontPrefix(style, runStyle),
@@ -298,7 +306,7 @@ export class DomTextEngine {
               color: runStyle.color ?? style.color,
             });
             left = Math.min(left, x0);
-            right = Math.max(right, rectOf(clusters[visibleEnd]!).right - origin.left);
+            right = Math.max(right, x1);
           }
           i = j;
         }
