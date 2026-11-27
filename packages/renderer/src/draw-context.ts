@@ -23,16 +23,24 @@ import type { MessageValues } from "@galatsa/i18n";
 import type { CanvasState } from "./canvas.ts";
 import type { ImageCache } from "./images.ts";
 import { paintPath, RecordedPath } from "./path.ts";
+import type { DomTextEngine } from "./text-dom.ts";
 import {
   BAR_BELOW_PX,
   ladderSize,
   layoutText,
-  SimpleTextLayout,
+  RichTextLayout,
   type FontFamilies,
   type LayoutCache,
+  type LayoutFragment,
   type TextMeasurer,
 } from "./text.ts";
 import { intersection, localBoundsOf, translate, type Matrix } from "./transform.ts";
+
+/** The last stretch of each fragment drawn (CanvasDrawContext.#fit). */
+const fits = new WeakMap<
+  LayoutFragment,
+  { readonly px: number; readonly ratio: number }
+>();
 
 /** Elements smaller than this many device pixels get detail "box". */
 export const BOX_BELOW_PX = 4;
@@ -56,6 +64,8 @@ export interface DrawEnvironment {
   readonly measurer: TextMeasurer;
   readonly families: FontFamilies;
   readonly layouts: LayoutCache;
+  /** The browser's text layout, where there is a document (text-dom.ts). */
+  readonly textEngine?: DomTextEngine | null;
   t(label: Label, values?: MessageValues): string;
 }
 
@@ -73,6 +83,8 @@ export class CanvasDrawContext implements DrawContext {
   #matrix: Matrix;
   #scale: number;
   #detail: DetailLevel;
+  #skipText = false;
+  #owner: string | undefined = undefined;
   readonly counters: FrameCounters;
 
   constructor(env: DrawEnvironment, counters: FrameCounters) {
@@ -84,10 +96,18 @@ export class CanvasDrawContext implements DrawContext {
   }
 
   /** Prepares the context for the next element. */
-  begin(matrix: Matrix, scale: number, detail: DetailLevel): void {
+  begin(
+    matrix: Matrix,
+    scale: number,
+    detail: DetailLevel,
+    skipText = false,
+    owner?: string,
+  ): void {
     this.#matrix = matrix;
     this.#scale = scale;
     this.#detail = detail;
+    this.#skipText = skipText;
+    this.#owner = owner;
   }
 
   get matrix(): Matrix {
@@ -221,81 +241,139 @@ export class CanvasDrawContext implements DrawContext {
 
   layoutText(content: TextContent, style: TextStyle, width: number): TextLayout {
     const env = this.#env;
-    return env.layouts.get(content, style, width, () =>
-      layoutText(env.measurer, env.families, content, style, width),
+    if (!(style.fontSize > 0) || !Number.isFinite(style.fontSize))
+      return new RichTextLayout({
+        lines: [],
+        width,
+        height: 0,
+        fontSize: 0,
+        color: style.color,
+      });
+    const owner = this.#owner;
+    // The element's text is being edited, so the canvas does not draw it:
+    // its last layout stands in, and nothing is laid out for each key.
+    if (this.#skipText && owner !== undefined) {
+      const last = env.layouts.last(owner);
+      if (last !== undefined) return last;
+    }
+    return env.layouts.get(
+      content,
+      style,
+      width,
+      () =>
+        env.textEngine
+          ? env.textEngine.layout(content, style, width)
+          : layoutText(env.measurer, env.families, content, style, width),
+      owner,
     );
   }
 
   drawText(layout: TextLayout, x: number, y: number): void {
-    if (!(layout instanceof SimpleTextLayout) || layout.lineCount === 0) return;
+    if (!(layout instanceof RichTextLayout) || layout.lineCount === 0) return;
+    // The element's text is being edited in place: the editing element shows it.
+    if (this.#skipText) return;
     const env = this.#env;
     const state = env.state;
     const ctx = state.ctx;
     const m = translate(this.#matrix, x, y);
     const s = this.#scale;
     const fontPx = layout.fontSize * s;
-    const lh = layout.lineHeight;
-    state.fill(layout.color);
     if (fontPx < BAR_BELOW_PX) {
-      // Too small to read: bars where the lines are, or one faint block.
-      this.counters.textBars++;
-      state.transform(m.a, m.b, m.c, m.d, m.e, m.f);
-      const alpha = state.alpha;
-      if (lh * s < 2) {
-        let left = Infinity;
-        let right = -Infinity;
-        for (const line of layout.lines) {
-          if (line.width <= 0) continue;
-          left = Math.min(left, line.x);
-          right = Math.max(right, line.x + line.width);
-        }
-        if (right > left) {
-          state.setAlpha(alpha * 0.2);
-          ctx.fillRect(left, 0, right - left, layout.height);
-        }
-      } else {
-        state.setAlpha(alpha * 0.35);
-        layout.lines.forEach((line, i) => {
-          if (line.width > 0)
-            ctx.fillRect(line.x, i * lh + lh * 0.3, line.width, lh * 0.4);
-        });
-      }
-      state.setAlpha(alpha);
+      this.#drawBars(layout, m);
       return;
     }
     // Lines that can be seen.
-    const view = (() => {
-      const before = this.#matrix;
-      this.#matrix = m;
-      const v = this.#localView(fontPx);
-      this.#matrix = before;
-      return v;
-    })();
-    const first = Math.max(0, Math.floor(view.y / lh));
-    const last = Math.min(layout.lineCount - 1, Math.floor((view.y + view.h) / lh));
-    if (last < first) return;
+    const before = this.#matrix;
+    this.#matrix = m;
+    const view = this.#localView(fontPx);
+    this.#matrix = before;
     // A font from the ladder; the rest of the scale goes into the matrix.
     const drawPx = ladderSize(fontPx);
     const k = fontPx / drawPx;
     const cos = (m.a / s) * k;
     const sin = (m.b / s) * k;
-    state.font(layout.font(drawPx));
-    for (let i = first; i <= last; i++) {
-      const line = layout.lines[i]!;
-      if (line.width <= 0 || line.x > view.x + view.w || line.x + line.width < view.x)
-        continue;
-      const ly = i * lh + layout.baseline;
+    const draw = (f: LayoutFragment, baseline: number): void => {
+      if (f.x > view.x + view.w || f.x + f.width < view.x) return;
+      state.font(`${f.prefix}${drawPx}px ${f.family}`);
+      state.fill(f.color);
+      const fit = this.#fit(f, drawPx, s, k);
       state.transform(
-        cos,
-        sin,
+        cos * fit,
+        sin * fit,
         -sin,
         cos,
-        m.a * line.x + m.c * ly + m.e,
-        m.b * line.x + m.d * ly + m.f,
+        m.a * f.x + m.c * baseline + m.e,
+        m.b * f.x + m.d * baseline + m.f,
       );
-      ctx.fillText(line.text, 0, 0);
+      ctx.fillText(f.text, 0, 0);
       this.counters.fillText++;
+    };
+    for (const line of layout.lines) {
+      if (line.top > view.y + view.h || line.top + line.height < view.y) continue;
+      if (line.marker) draw(line.marker, line.baseline);
+      for (const f of line.fragments) draw(f, line.baseline);
     }
+  }
+
+  /**
+   * How much wider a fragment must be drawn than the canvas sets it at
+   * `drawPx`, so that it is as wide as the layout says. The canvas's glyph
+   * advances at a small size are hinted and differ from the layout's (made at
+   * the reference size), most at small sizes; stretching the fragment by that
+   * keeps every fragment where the editing element shows it. Remembered per
+   * fragment for the last font size.
+   */
+  #fit(f: LayoutFragment, drawPx: number, s: number, k: number): number {
+    const known = fits.get(f);
+    if (known !== undefined && known.px === drawPx) return known.ratio;
+    const ctx = this.#env.state.ctx as Partial<{
+      measureText(t: string): { width: number };
+    }>;
+    let ratio = 1;
+    if (typeof ctx.measureText === "function" && f.width > 0) {
+      // measureText is at drawPx (the font just set); the matrix scales it by k.
+      const drawn = ctx.measureText(f.text).width * k;
+      if (drawn > 0) ratio = (f.width * s) / drawn;
+    }
+    if (!(ratio > 0.5 && ratio < 2)) ratio = 1;
+    fits.set(f, { px: drawPx, ratio });
+    return ratio;
+  }
+
+  /** Text too small to read: bars where the lines are, or one faint block. */
+  #drawBars(layout: RichTextLayout, m: Matrix): void {
+    const state = this.#env.state;
+    const ctx = state.ctx;
+    const s = this.#scale;
+    this.counters.textBars++;
+    state.fill(layout.color);
+    state.transform(m.a, m.b, m.c, m.d, m.e, m.f);
+    const alpha = state.alpha;
+    const lh = layout.lines[0]?.height ?? 0;
+    if (lh * s < 2) {
+      let left = Infinity;
+      let right = -Infinity;
+      for (const line of layout.lines) {
+        if (line.width <= 0) continue;
+        left = Math.min(left, line.x);
+        right = Math.max(right, line.x + line.width);
+      }
+      if (right > left) {
+        state.setAlpha(alpha * 0.2);
+        ctx.fillRect(left, 0, right - left, layout.height);
+      }
+    } else {
+      state.setAlpha(alpha * 0.35);
+      for (const line of layout.lines)
+        if (line.width > 0)
+          ctx.fillRect(
+            line.x,
+            line.top + line.height * 0.3,
+            line.width,
+            line.height * 0.4,
+          );
+    }
+    state.setAlpha(alpha);
   }
 
   t(label: Label, values?: MessageValues): string {

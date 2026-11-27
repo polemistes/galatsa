@@ -20,6 +20,7 @@
     "@galatsa/extension-image": "workspace:*",
     "@galatsa/extension-routes": "workspace:*",
     "@galatsa/extension-shape": "workspace:*",
+    "@galatsa/extension-text": "workspace:*",
     "@galatsa/format": "workspace:*",
     "@galatsa/i18n": "workspace:*",
     "@galatsa/renderer": "workspace:*",
@@ -27,6 +28,9 @@
     "yjs": "13.6.33"
   },
   "devDependencies": {
+    "@fontsource/noto-sans": "5.3.0",
+    "@fontsource/noto-sans-mono": "5.3.0",
+    "@fontsource/noto-serif": "5.3.0",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "svelte": "5.57.3",
     "vite": "catalog:"

@@ -15,6 +15,8 @@ export interface Canvas2D {
   font: string;
   textAlign: CanvasTextAlign;
   textBaseline: CanvasTextBaseline;
+  /** Where supported (Chromium). */
+  textRendering?: CanvasTextRendering;
   imageSmoothingEnabled: boolean;
   setLineDash(segments: number[]): void;
   setTransform(a: number, b: number, c: number, d: number, e: number, f: number): void;
@@ -108,6 +110,10 @@ export class CanvasState {
     ctx.setLineDash([]);
     ctx.textAlign = "left";
     ctx.textBaseline = "alphabetic";
+    // Unhinted glyph advances where the browser offers the choice (Chromium),
+    // so the drawn text keeps the layout's positions at every size
+    // (docs/adr/0011-text.md).
+    if ("textRendering" in ctx) ctx.textRendering = "geometricPrecision";
     this.#font = "";
     this.#stack.length = 0;
   }

@@ -268,6 +268,9 @@ importers:
       '@galatsa/extension-shape':
         specifier: workspace:*
         version: link:../../packages/extensions/shape
+      '@galatsa/extension-text':
+        specifier: workspace:*
+        version: link:../../packages/extensions/text
       '@galatsa/format':
         specifier: workspace:*
         version: link:../../packages/format
@@ -284,6 +287,15 @@ importers:
         specifier: 13.6.33
         version: 13.6.33
     devDependencies:
+      '@fontsource/noto-sans':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource/noto-sans-mono':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource/noto-serif':
+        specifier: 5.3.0
+        version: 5.3.0
       '@sveltejs/vite-plugin-svelte':
         specifier: 7.3.1
         version: 7.3.1(svelte@5.57.3(@typescript-eslint/types@8.72.2))(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
@@ -380,6 +392,9 @@ importers:
       '@galatsa/extension-examples':
         specifier: workspace:*
         version: link:../extensions/examples
+      '@galatsa/extension-text':
+        specifier: workspace:*
+        version: link:../extensions/text
       svelte-check:
         specifier: 4.7.8
         version: 4.7.8(picomatch@4.0.7)(svelte@5.57.3(@typescript-eslint/types@8.72.2))(typescript@6.0.3)
@@ -559,6 +574,25 @@ importers:
         specifier: 'catalog:'
         version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
 
+  packages/extensions/text:
+    dependencies:
+      '@galatsa/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../../extension-api
+      '@galatsa/i18n':
+        specifier: workspace:*
+        version: link:../../i18n
+      yjs:
+        specifier: 13.6.33
+        version: 13.6.33
+    devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
+
   packages/extensions/transitions:
     dependencies:
       '@galatsa/core':
@@ -621,6 +655,15 @@ importers:
 
   packages/renderer:
     dependencies:
+      '@fontsource/noto-sans':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource/noto-sans-mono':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource/noto-serif':
+        specifier: 5.3.0
+        version: 5.3.0
       '@galatsa/core':
         specifier: workspace:*
         version: link:../core
@@ -730,6 +773,15 @@ packages:
   '@eslint/plugin-kit@0.7.3':
     resolution: {integrity: sha512-IkO+/KEUvwbVpiURZg+P7zF74z5Jxe0UgJxVni+RtoHQ6IZieXaO02kmadomap/q+l6bc/jdPGGqTjhuZnuz1Q==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
+
+  '@fontsource/noto-sans-mono@5.3.0':
+    resolution: {integrity: sha512-DPZ+/Ng9HP5UKiALCKtoeGfA7zJzEjHFB/18OU/c3+4I9zZ3eMVAuFZb0SqzT89Yj7KNhJFYnYjyDaVKhdRuUg==}
+
+  '@fontsource/noto-sans@5.3.0':
+    resolution: {integrity: sha512-fBCog2PY7DiVVTEEqtI/Qdinx/knobHYfoGpjFXdfBX5RoJaBp1Prw2G75p0OIsdlMZg3cLo0c+YbIUYOxnQJw==}
+
+  '@fontsource/noto-serif@5.3.0':
+    resolution: {integrity: sha512-ZrMzjuQlBIcw+qma1slZQdU3YDJvrjLG+9CWU1bxSf3YTkucwqd3EYa/Kfo4Ts19w8IMTGAmtOE3d6wWlgnBtA==}
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -1798,6 +1850,12 @@ snapshots:
     dependencies:
       '@eslint/core': 1.2.1
       levn: 0.4.1
+
+  '@fontsource/noto-sans-mono@5.3.0': {}
+
+  '@fontsource/noto-sans@5.3.0': {}
+
+  '@fontsource/noto-serif@5.3.0': {}
 
   '@humanfs/core@0.19.2':
     dependencies:
