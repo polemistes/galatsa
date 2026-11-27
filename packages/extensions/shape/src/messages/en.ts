@@ -36,4 +36,7 @@ export default {
   "param.bracket.square": "Square",
   "param.bracket.round": "Round",
   "param.pointY": "Tip position",
+  "kind.speech-bubble": "Speech bubble",
+  "param.tailX": "Tail tip, horizontal",
+  "param.tailY": "Tail tip, vertical",
 };

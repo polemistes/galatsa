@@ -9,6 +9,7 @@ import { bracket } from "./bracket.ts";
 import { ellipse } from "./ellipse.ts";
 import { line } from "./line.ts";
 import { rect } from "./rect.ts";
+import { speechBubble } from "./speech-bubble.ts";
 import { triangle } from "./triangle.ts";
 
 export const SHAPE_KINDS: readonly ShapeKind[] = [
@@ -18,4 +19,5 @@ export const SHAPE_KINDS: readonly ShapeKind[] = [
   line,
   arrow,
   bracket,
+  speechBubble,
 ];
