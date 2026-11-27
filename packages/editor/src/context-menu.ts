@@ -12,9 +12,10 @@
 // The menu's state is a store here; the interface draws it, and the page
 // supplies the clipboard actions, which need the browser (dom.ts).
 
-import type { ElementId, Point } from "@galatsa/core";
+import { FRAME_TYPE, type ElementId, type Point } from "@galatsa/core";
 import type { ContributionId, Label } from "@galatsa/extension-api";
 import { BASICS } from "@galatsa/extension-basics";
+import { labelAt, shownFrames } from "@galatsa/extension-select";
 import type { Editor } from "./editor.ts";
 import { RENAME_FRAME } from "./rename-target.ts";
 import { selectableFor } from "./services.ts";
@@ -172,10 +173,21 @@ export function menuEntries(editor: Editor, clipboard: MenuClipboard): MenuEntry
   return out;
 }
 
-/** The element a right click at a point on screen is on, locked ones included. */
+/**
+ * The element a right click at a point on screen is on, locked ones
+ * included; a frame's name above it counts as the frame, as it does for the
+ * selection tool (docs/adr/0014), where no element is hit there.
+ */
 export function elementForMenu(editor: Editor, point: Point): ElementId | null {
-  const hit = editor.renderer.hitTest(point.x, point.y, { tolerance: PICK });
-  return hit === null ? null : selectableFor(editor.live, hit);
+  const found = editor.renderer.hitTest(point.x, point.y, { tolerance: PICK });
+  const hit = found === null ? null : selectableFor(editor.live, found);
+  if (hit !== null && editor.live.get(hit)?.type !== FRAME_TYPE) return hit;
+  const name = labelAt(
+    shownFrames(editor.services, editor.doc),
+    editor.screenToWorld(point),
+    editor.services.camera.get().zoom,
+  );
+  return name ?? hit;
 }
 
 /**

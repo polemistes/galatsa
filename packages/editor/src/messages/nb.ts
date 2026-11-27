@@ -61,5 +61,7 @@ export default {
   "frames.panel": "Navn på rammen",
   "frames.name": "Rammens navn",
   "frames.save": "Lagre",
+  "frames.cancel": "Avbryt",
+  "frames.close": "Lukk",
   "frames.none": "Velg én ramme for å gi den nytt navn.",
 };

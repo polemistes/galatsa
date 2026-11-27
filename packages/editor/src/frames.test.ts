@@ -20,7 +20,7 @@ import {
 } from "@galatsa/extension-select";
 import { afterEach, describe, expect, it } from "vitest";
 import { readClipboard, type ClipboardSource } from "./clipboard.ts";
-import { menuEntries, type MenuClipboard } from "./context-menu.ts";
+import { menuEntries, openContextMenu, type MenuClipboard } from "./context-menu.ts";
 import type { Editor } from "./editor.ts";
 import { RENAME_FRAME, RENAME_PANEL } from "./rename.ts";
 import { drag, key, pointer, testEditor } from "./test-support.ts";
@@ -315,6 +315,20 @@ describe("the context menu", () => {
     // What the panel runs.
     oneStep(editor, () => must(editor, BASICS.rename, { id: f, name: "Kapittel 1" }));
     expect(elementName(editor.doc, f)).toBe("Kapittel 1");
+  });
+
+  it("selects a frame with a right click on its name, a locked one too", () => {
+    const editor = make();
+    const f = frame(editor, 100, 100, 300, 200);
+    const a = rect(editor, 600, 100, 40, 40);
+    setLocked(editor.doc, f, true);
+    editor.services.selection.set([a]);
+    openContextMenu(editor, { x: 150, y: 100 - LABEL_HEIGHT / 2 }, none);
+    expect(editor.selection).toEqual([f]);
+    // An element over the name wins.
+    const over = rect(editor, 140, 80, 40, 40);
+    openContextMenu(editor, { x: 150, y: 100 - LABEL_HEIGHT / 2 }, none);
+    expect(editor.selection).toEqual([over]);
   });
 });
 

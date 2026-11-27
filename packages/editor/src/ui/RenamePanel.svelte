@@ -70,7 +70,7 @@
   {#if target === null}
     <p>{t("editor:frames.none")}</p>
     <div class="buttons">
-      <button type="button" onclick={close}>{t("common:action.close")}</button>
+      <button type="button" onclick={close}>{t("editor:frames.close")}</button>
     </div>
   {:else}
     {#key target}
@@ -94,7 +94,7 @@
         />
         <div class="buttons">
           <button type="submit">{t("editor:frames.save")}</button>
-          <button type="button" onclick={close}>{t("common:action.cancel")}</button>
+          <button type="button" onclick={close}>{t("editor:frames.cancel")}</button>
         </div>
       </form>
     {/key}

@@ -61,5 +61,7 @@ export default {
   "frames.panel": "Frame name",
   "frames.name": "Name of the frame",
   "frames.save": "Save",
+  "frames.cancel": "Cancel",
+  "frames.close": "Close",
   "frames.none": "Select one frame to rename it.",
 };
