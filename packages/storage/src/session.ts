@@ -557,6 +557,8 @@ export class StorageSession {
       this.#setStatus({ pending: true, unsavedToFile: true });
     }
     this.#scheduleFlush();
+    // The timer looks again when it fires, so it is armed once, not per change.
+    if (this.#checkpointTimer === null) this.#scheduleCheckpoint();
   }
 
   #onMessage(message: ChannelMessage): void {
