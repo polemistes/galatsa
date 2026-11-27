@@ -40,6 +40,7 @@ import { BASICS } from "@galatsa/extension-basics";
 import type { I18n, MessageValues } from "@galatsa/i18n";
 import {
   CanvasRenderer,
+  spaceMap,
   type Canvas2D,
   type ImageSource,
   type SceneAssets,
@@ -56,6 +57,7 @@ import {
   type KeyInput,
   type Platform,
 } from "./keymap.ts";
+import { projectedContext, type Projection } from "./overlay.ts";
 import { EditorScene } from "./scene-source.ts";
 import {
   createServices,
@@ -372,6 +374,11 @@ export class Editor {
     this.renderer.render();
   }
 
+  /**
+   * The overlay, in screen space (CSS pixels): the selection outline from the
+   * renderer's screen rectangles, then the tool's preview, which the tool
+   * draws in root space through a projection.
+   */
   #drawOverlay(ctx: DrawContext): void {
     const px = 1 / ctx.scale;
     for (const id of this.#state.selection) {
@@ -379,14 +386,27 @@ export class Editor {
       if (rect === null) continue;
       const path = ctx.createPath();
       rect.corners.forEach((corner, i) => {
-        const p = this.screenToWorld(corner);
-        if (i === 0) path.moveTo(p.x, p.y);
-        else path.lineTo(p.x, p.y);
+        if (i === 0) path.moveTo(corner.x, corner.y);
+        else path.lineTo(corner.x, corner.y);
       });
       path.closePath();
       ctx.stroke(path, { color: SELECTION_COLOR, width: 2 * px });
     }
-    this.tools.drawOverlay(ctx);
+    this.tools.drawOverlay(projectedContext(ctx, this.projection(null)));
+  }
+
+  /**
+   * How a space of the document (a container's, or the root's) lies on the
+   * screen now: screen = point * scale + (ox, oy), in CSS pixels. Computed
+   * from the offset between that space and the camera's, so it stays exact
+   * wherever the camera is anchored.
+   */
+  projection(space: ElementId | null): Projection {
+    const viewport = this.renderer.viewport;
+    const camera = this.#state.camera;
+    const map = spaceMap(camera, viewport, this.scene.offset(space, camera.space));
+    const ratio = viewport.devicePixelRatio;
+    return { space, scale: map.scale / ratio, ox: map.ox / ratio, oy: map.oy / ratio };
   }
 
   // -------------------------------------------------------------------------

@@ -23,23 +23,30 @@ function setup() {
 }
 
 describe("overlay", () => {
-  it("draws after the document, in root space, with the device scale", () => {
+  it("draws after the document, in CSS pixels of the screen, whatever the camera", () => {
     const { renderer, ctx } = setup();
     let scale = 0;
     renderer.setOverlay((dc) => {
       scale = dc.scale;
       const path = dc.createPath();
-      path.rect(100, 50, 1, 1);
+      path.rect(400, 300, 1, 1);
       dc.fill(path, "#123456");
     });
     renderer.render();
-    expect(scale).toBe(8);
+    // Device pixels per CSS pixel.
+    expect(scale).toBe(2);
     const fills = ctx.calls.filter((c) => c.name === "set fillStyle");
     expect(fills[fills.length - 1]?.args[0]).toBe("#123456");
-    // The camera centre (100, 50) is the middle of the canvas: 800 x 600 device pixels.
-    const moves = ctx.calls.filter((c) => c.name === "rect" || c.name === "moveTo");
-    const last = moves[moves.length - 1]!;
-    expect(last.args.slice(0, 2)).toEqual([800, 600]);
+    // (400, 300) CSS pixels is the middle of the canvas: 800 x 600 device pixels.
+    const at = () => {
+      const moves = ctx.calls.filter((c) => c.name === "rect" || c.name === "moveTo");
+      return moves[moves.length - 1]!.args.slice(0, 2);
+    };
+    expect(at()).toEqual([800, 600]);
+    // Another camera, even in a frame's space, draws the overlay at the same place.
+    renderer.setCamera({ space: null, cx: -5000, cy: 7000, zoom: 2 ** 20 });
+    renderer.render();
+    expect(at()).toEqual([800, 600]);
   });
 
   // renderRegion needs a real canvas (OffscreenCanvas), which Node has not; it

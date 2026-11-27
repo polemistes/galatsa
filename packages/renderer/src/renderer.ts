@@ -105,9 +105,11 @@ export interface RenderStats {
 }
 
 /**
- * Draws above the document in root space, after everything else: an editor's
- * tool previews (a rubber band, the outline of a shape being drawn). `ctx.scale`
- * is device pixels per world unit.
+ * Draws above the document, after everything else, in screen space: CSS pixels
+ * of the drawing area, (0, 0) at its top-left corner. `ctx.scale` is device
+ * pixels per CSS pixel. An editor draws its tool previews and the selection
+ * here, projecting from the document through the camera itself; so the
+ * overlay does not depend on which space the camera is anchored in.
  */
 export type OverlayDraw = (ctx: DrawContext) => void;
 
@@ -288,8 +290,8 @@ export class CanvasRenderer {
   }
 
   /**
-   * Sets what is drawn above the document in each frame on screen, in root
-   * space (null for nothing). renderRegion never draws it. A function that
+   * Sets what is drawn above the document in each frame on screen, in screen
+   * space (see OverlayDraw; null for nothing). renderRegion never draws it. A function that
    * throws is left out of that frame; its error goes to `reportError` where the
    * platform has one.
    */
@@ -434,8 +436,9 @@ export class CanvasRenderer {
     };
     visit(tree.root, mapFor(null));
     if (target.overlay) {
-      const root = mapFor(null);
-      dc.begin(spaceMatrix(root), root.scale, "full");
+      // Screen space: CSS pixels, so one unit is devicePixelRatio device pixels.
+      const ratio = viewport.devicePixelRatio;
+      dc.begin({ a: ratio, b: 0, c: 0, d: ratio, e: 0, f: 0 }, ratio, "full");
       state.save();
       try {
         target.overlay(dc);
