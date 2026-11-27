@@ -320,7 +320,7 @@ A stop's `transition` value ([0001](0001-document-model-and-file-format.md) sect
 A `PanelDefinition` adds user interface to the editor: a name, a label, an icon, a `quick` flag, a location (`side`, `bottom` or `floating`), a `visible` predicate, and its content. The interface does not depend on React or any other user interface library; there are two kinds of content:
 
 - **Fields** (`{ kind: "fields", fields }`): a list of field definitions (3.9) whose values are read from the editor context and whose changes run commands. Most panels (document settings, defaults, options of a tool) need nothing more, and the editor draws them in its own style, in both languages, accessible by keyboard, without the extension writing any user interface code. The text sketch's "Text defaults" panel is one.
-- **Custom views** (`{ kind: "custom", binding, view }`): for panels that need their own interface (a map editor, a chart data table). `CustomPanelViews` is an empty interface that a user interface binding fills by declaration merging (tested); the React binding will add `react: ComponentType<PanelProps>`. Until a binding does, a custom panel cannot even be written, so the interface package never refers to React, and the player, which has no React, never sees such panels.
+- **Custom views** (`{ kind: "custom", binding, view }`): for panels that need their own interface (a map editor, a chart data table). `CustomPanelViews` is an empty interface that a user interface binding fills by declaration merging (tested); the React binding of the editor ([0007](0007-editor-foundation.md)) adds `react?: ComponentType<PanelProps>`, with `PanelProps` giving the panel the command context. Until a binding does, a custom panel cannot even be written, so the interface package never refers to React, and the player, which has no React, never sees such panels.
 
 Panels use the extension's message namespace for their text, like every other contribution.
 
@@ -457,7 +457,7 @@ After every sync, both replicas hold the same document. Four seeds of 400 steps 
 
 **Can wait** (to be settled where noted, or when they matter):
 
-1. Shortcut matching on keyboard layouts where a key needs AltGr or Option (`Mod+[` on a Norwegian keyboard) and on macOS; and treating `Mod` and `Ctrl` as the same key on Windows and Linux when looking for conflicts. Before the editor's shortcut handling is built.
+1. Shortcut matching on keyboard layouts where a key needs AltGr or Option (`Mod+[` on a Norwegian keyboard) and on macOS; and treating `Mod` and `Ctrl` as the same key on Windows and Linux when looking for conflicts. Matching is settled in the editor foundation ([0007](0007-editor-foundation.md), "The keyboard map"): AltGr is not a modifier of a shortcut, punctuation and digits also match by their place on a US keyboard, letters by character, and `Ctrl` is `Mod` on Windows and Linux. Conflict checking across layouts, and whether the chosen shortcuts suit a Norwegian keyboard and macOS, remain for the editor shell's shortcut handling.
 2. Optional dependencies: an extension that uses an unloaded one optionally is not told; it checks `isActive` when it needs it.
 3. Label keys in a dependency's or the common namespace are not checked at load time (only the namespace is).
 4. `buildFragment` makes only top-level elements with generated ids, so an importer cannot yet build frames, routes or references between the elements it imports; it can build the `Fragment` structure itself until a richer builder is needed.

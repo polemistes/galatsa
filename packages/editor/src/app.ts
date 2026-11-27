@@ -115,7 +115,9 @@ export class EditorApp {
     this.#loaded = loadExtensions(options.i18n, options.extensions);
     const root = options.root;
     root.replaceChildren();
-    Object.assign(root.style, { position: "relative", overflow: "hidden" });
+    // The canvas and the panels are placed over each other inside the root.
+    if (getComputedStyle(root).position === "static") root.style.position = "relative";
+    root.style.overflow = "hidden";
     this.#stage = document.createElement("div");
     this.#stage.className = "galatsa-stage";
     Object.assign(this.#stage.style, { position: "absolute", inset: "0" });

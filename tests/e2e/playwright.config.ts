@@ -4,10 +4,20 @@ import { defineConfig, devices } from "@playwright/test";
 
 /** Port of the bench harness dev server (bench/index.html). */
 export const BENCH_PORT = 5199;
+/** Port of the web app's dev server (apps/web, the editor's development page). */
+export const WEB_PORT = 5198;
+
+/**
+ * Playwright's WebKit needs the libraries of the Ubuntu release it was built
+ * for, so it runs where that is so (GitHub Actions) or when asked for with
+ * E2E_WEBKIT=1; elsewhere the WebKit project is left out.
+ */
+const WEBKIT = Boolean(process.env["CI"] || process.env["E2E_WEBKIT"]);
 
 // End-to-end tests are not part of `pnpm check`. They need browsers, which are
 // installed separately with
-// `pnpm --filter @galatsa/e2e exec playwright install chromium firefox`.
+// `pnpm --filter @galatsa/e2e exec playwright install chromium firefox`
+// (and webkit, with its system libraries, where it can run).
 export default defineConfig({
   testDir: ".",
   // One test at a time: benchmark runs must not compete for the CPU.
@@ -19,12 +29,20 @@ export default defineConfig({
   use: {
     trace: "retain-on-failure",
   },
-  webServer: {
-    command: `pnpm --filter @galatsa/bench exec vite --port ${BENCH_PORT} --strictPort`,
-    url: `http://localhost:${BENCH_PORT}/`,
-    reuseExistingServer: !process.env["CI"],
-    timeout: 60_000,
-  },
+  webServer: [
+    {
+      command: `pnpm --filter @galatsa/bench exec vite --port ${BENCH_PORT} --strictPort`,
+      url: `http://localhost:${BENCH_PORT}/`,
+      reuseExistingServer: !process.env["CI"],
+      timeout: 60_000,
+    },
+    {
+      command: `pnpm --filter @galatsa/web exec vite --port ${WEB_PORT} --strictPort`,
+      url: `http://localhost:${WEB_PORT}/`,
+      reuseExistingServer: !process.env["CI"],
+      timeout: 60_000,
+    },
+  ],
   projects: [
     {
       name: "chromium",
@@ -38,6 +56,22 @@ export default defineConfig({
       testMatch: "storage.spec.ts",
       use: { ...devices["Desktop Firefox"] },
     },
+    {
+      // The editor's development page in Firefox and WebKit too. Chromium runs it
+      // in the "chromium" project above.
+      name: "editor-firefox",
+      testMatch: "editor.spec.ts",
+      use: { ...devices["Desktop Firefox"] },
+    },
+    ...(WEBKIT
+      ? [
+          {
+            name: "editor-webkit",
+            testMatch: "editor.spec.ts",
+            use: { ...devices["Desktop Safari"] },
+          },
+        ]
+      : []),
     {
       name: "bench-chromium",
       testMatch: "bench-*.spec.ts",

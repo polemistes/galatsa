@@ -227,6 +227,37 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
 
+  apps/web:
+    dependencies:
+      '@galatsa/bench':
+        specifier: workspace:*
+        version: link:../../bench
+      '@galatsa/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@galatsa/editor':
+        specifier: workspace:*
+        version: link:../../packages/editor
+      '@galatsa/extension-examples':
+        specifier: workspace:*
+        version: link:../../packages/extensions/examples
+      '@galatsa/format':
+        specifier: workspace:*
+        version: link:../../packages/format
+      '@galatsa/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
+      '@galatsa/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      yjs:
+        specifier: 13.6.33
+        version: 13.6.33
+    devDependencies:
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.8(@types/node@26.6.6)(yaml@2.9.1)
+
   bench:
     dependencies:
       '@galatsa/core':

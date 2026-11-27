@@ -1,0 +1,126 @@
+# 0007 Editor foundation
+
+- Status: Accepted
+- Date: 2026-11-27
+- Code: `packages/editor` (`@galatsa/editor`), `apps/web` (the development page), `setOverlay` in `packages/renderer`, `tests/e2e/editor.spec.ts`, `tests/e2e/webkitgtk/editor_check.py`
+
+## Context
+
+The document model ([0001](0001-document-model-and-file-format.md)), the renderer ([0004](0004-rendering-engine.md)), the extension interface ([0005](0005-extension-interface.md)) and the storage layer ([0006](0006-storage.md)) each specify what "the editor" provides. This is the first version of that editor: the core that owns a document and runs tools and commands on it, and a development page that starts it. Camera controls, the selection tool with handles, toolbars, the properties panel, in-place text editing and the shortcut editor come later, on top of this.
+
+## Decision
+
+### One document, one undo manager, work tracked from the start
+
+An `Editor` edits one `Y.Doc`. Its constructor first calls `trackWork(doc)` (an edit made before the work tracker is attached is not recorded as work and loses against a concurrent delete, 0001 section 12, assumption 7; attaching twice does nothing), then creates the document's one `DocumentUndoManager` (`createUndoManager`) and takes the document's live resolver (`liveResolver`). Every command runs through the extension host's command registry with a `CommandEnvironment` of that document, that undo manager and the editor's services. Typing (later) will join the same history through the undo manager's tracked origins.
+
+### The live resolver feeds the renderer
+
+The renderer reads an `EditorScene`, a `SceneSource` over the live resolver. The editor subscribes to the live resolver and passes `added ∪ changed ∪ removed` of every `ResolvedChanges` to `renderer.applyChanges`, as 0004 asks. No snapshot is taken and nothing is resolved anew after an edit. Element records (type, layout version, data, size, rotation) are read from the `Y.Doc` when the renderer asks for them; data goes through the same `readData` as commands.
+
+### Previews of gestures
+
+A gesture's preview (0005 section 4.7) is laid over the live resolver by the scene source: positions, sizes, rotations and data values for the previewed elements, positions in each element's effective parent space. A previewed container moves its contents, because every offset through it (`offset(from, to)`) is shifted by the preview of the containers on the way (containers only translate, so the shift is the same in every space below). When a preview changes, the renderer is told to read the previewed elements and everything inside them again. The document is not written until the gesture commits, so a drag of any size is one command and one transaction, and the scene queries the tools use (`placement`, `bounds`) keep answering from the document, which is what a tool needs to compute the next preview from.
+
+### Overlays: a small addition to the renderer
+
+Tools draw previews (a rubber band, the outline of a shape being drawn) through `drawOverlay(ctx)` in root space (0005 section 5), and the editor draws the selection outline. The renderer had no place for this, so it gains `setOverlay(draw)`: a function called after the document in every frame on screen, with the renderer's own drawing context set to root space and `ctx.scale` in device pixels per world unit. It is never drawn by `renderRegion`. A function that throws is left out of that frame. This is an additive change to the renderer's interface (0004 is updated).
+
+### Editor services
+
+The services of 0005 section 4.8 are implemented over the editor's state and the live resolver:
+
+- **Clicks** ask the renderer (`hitTest`), so a click hits what each element type says is its outline. What a click inside a group selects is the editor's decision: the outermost group the element is in, up to the nearest frame. Locked elements are passed over.
+- **Rubber bands and bounds** answer from the live resolver: the elements at the top level of the canvas as the user sees it (members of a dissolved group in its place).
+- **Visible elements** (candidates for snapping) come from the renderer's spatial index, at the top level of the root.
+- **Text** is not editable in place yet: the service reports no text being edited.
+- **The selection** is pruned when an element it holds goes away (an undo of its creation).
+
+### Tools
+
+A `ToolController` holds the current tool and gives it a `ToolSession`. A session whose tool has been put away does nothing, so a tool that keeps a reference cannot act after it is stopped. `done()` returns to the default tool after the event that ended the tool's work has been handled. A tool that throws is reported and the editor goes on.
+
+### Input
+
+`mountEditor` turns DOM events into the editor's plain input (`PointerInput`, `KeyInput`), so the core runs without a page and is tested in Node over a context that draws nothing:
+
+- Pointer events cover mouse, pen, touch and trackpad clicks. The first pointer that goes down belongs to the tool until it goes up (with pointer capture); further pointers are ignored for now.
+- Just enough camera to reach things: the middle button drags the canvas, the wheel scrolls it, and the wheel with Ctrl or Cmd, which is also what browsers send for a trackpad pinch, zooms about the pointer within the zoom limits of the document model. The camera controls proper (touch gestures, keyboard, zoom anchored in frames) are later work.
+- Keys go to the editor while the canvas has focus; it takes focus when clicked.
+
+### The keyboard map
+
+A key press goes first to the current tool (Escape cancels its drag), then to the keyboard map of the current mode: the command registry's shortcuts (`shortcuts(mode)`), then the tools' shortcuts, which pick a tool. A shortcut runs its command the way a menu would: with the selection as its elements (`{ ids }`), and for the basics' copy and paste through a clipboard in the editor's memory (the system clipboard comes with the selection tool). When a shortcut matches, the browser's default is prevented even if the command is disabled, so that Ctrl+D with nothing selected does not open the browser's bookmark dialog. Shortcuts written with `Ctrl` mean the same as `Mod` on Windows and Linux.
+
+A key press may name a shortcut in more than one way; the candidates are tried in order:
+
+1. By the character the key gives (`KeyboardEvent.key`), with the modifiers. AltGr is not a modifier of the shortcut: where the system reports it as `AltGraph`, Alt is left out, and on Windows, which reports AltGr as Ctrl and Alt together, both are. On Linux, `Mod+[` on a Norwegian keyboard is then Ctrl+AltGr+8.
+2. By the key's place (`KeyboardEvent.code`), named as on a US keyboard, for punctuation and digits only. So `Mod+Shift+]` works on a US keyboard, where Shift+] gives `}`, and `Mod+[` is also Ctrl and the key right of P (Å on a Norwegian keyboard). Letters are not matched by place, so Ctrl+Z is the key marked Z on every layout.
+3. On macOS with Option, letters by place too, because Option changes the character a letter key gives.
+
+This settles the matching part of 0005 section 13, "Can wait" 1, as far as the editor foundation needs. Not settled: whether the shortcuts the basics chose are good ones on a Norwegian keyboard and on macOS, conflicts that only show on one layout, and user-defined shortcuts. Those belong to the shortcut handling of the editor shell.
+
+### Storage
+
+`EditorApp` starts the program the way 0006 section 7.1 asks:
+
+- The store is IndexedDB; checkpoints are built in a worker (`workerEncoder` over the program's worker, which imports `@galatsa/storage/checkpoint-worker`). If IndexedDB cannot be opened, the program works on a memory store and says that nothing is stored automatically; if the worker cannot start, checkpoints are built on the editing thread.
+- At start, work left by a program that stopped is offered with the choices of 0006 section 7.1: restore, not now, keep without asking again, and either discard the changes (only for a document saved to a file; the user picks the file, since no file handle is kept yet, and the stored copy goes only after the file opened) or delete the presentation (only for one never saved to a file, after the text that says what is lost and a second confirmation).
+- `EditorDocument` follows one open document: the save status, the storage layer's notices until dismissed, saving as a file (`pickFileToSave`, which falls back to a download), and a warning before the window closes while changes are not stored. Persistent storage is asked for (`requestPersistentStorage`) once per run, when the first change is waiting to be stored.
+- **Closing.** While closing, the program says so. If the store has a problem, the offer to save as a file comes at once. If changes are only waiting for their turn (`status.pending`), they are stored first (a flush, which normally takes well under a second, waited for at most five seconds) and the offer comes only if that does not clear them, so that closing right after an edit does not always ask; this is our reading of 0006 section 7.1, whose aim is that nothing unstored is closed without the offer. Then `close()`; if it answers that not everything reached the store, the offer comes. After the offer the user can save as a file (the document then closes, since the file holds everything), close without saving (`close({ evenIfUnstored: true })`), or keep the document open.
+
+### The React root
+
+The user interface around the canvas is React (the plan's choice for the editor), drawn into its own root over the canvas: the save status, notices, the close and recovery dialogs, extensions that were not loaded and shortcut conflicts, and open custom panels. All text comes from message bundles (`editor` for the editor's own, `storage` for the storage layer's), in Norwegian and English. The React binding for custom panels adds `react?: ComponentType<PanelProps>` to `CustomPanelViews` by declaration merging, as 0005 section 8 foresaw; `PanelProps` gives the panel the command context. Panels of fields need the field renderer and are not drawn yet. There is no toolbar and no properties panel yet.
+
+### The development page
+
+`apps/web` is for now a development page: it starts `EditorApp` with the example extensions (and the basics, which the editor always loads first, so they keep their shortcuts when a sketch claims the same one; the conflict is shown). It opens the sample scene: the benchmark scene of `bench/` (2,000 elements in ten clusters) as a document of the examples' element types, imported through the storage layer as a file. The benchmark's images are 2 to 12 megapixels and take half a minute to generate, so each gets a small generated picture of the same proportions instead. The page remembers the stored copy and opens it again; `?fresh` makes a new one, `?scene=empty` starts an empty document, `?lang=nb|en` chooses the language and `?mode=advanced` the mode. `window.galatsaDev` gives tests and the console the running editor. The page depends on `@galatsa/bench` for the scene; when the page becomes the installable web app, the sample scene goes behind a development switch.
+
+Images are drawn from the storage session's asset bytes, one stored version each (the original), until reduced versions are stored with the document.
+
+## Assumptions
+
+- Nobody else writes to the document while a gesture runs in a way that moves the elements being dragged; if someone does (another tab), the preview shows the drag from the old place until it commits. There is no sync yet; showing collaborators' drags is presence, later (0005 section 4.7).
+- The editor runs on the main thread with one document per editor. Several documents in one window are several editors.
+- One `Editor` per `Y.Doc` at a time: the editor detaches the document's live resolver when it is disposed.
+
+## Known limitations
+
+- The clipboard for copy and paste is in the editor's memory, not the system's.
+- In-place text editing is not built; the text sketch's tool inserts a text box, and asking to edit it does nothing.
+- The camera is the minimum: no touch gestures, no keyboard camera, no anchoring in frames.
+- Only the first pointer is used; multi-touch is later.
+- Field panels are not drawn.
+- The development page's sample scene is regenerated per `?fresh`, and every copy stays in the store until deleted (0006 section 11, item 4).
+
+## Tests
+
+- `packages/editor/src/editor.test.ts` (Node, over a real document and the example extensions): work tracking on a document that came as an update; a shape tool used with pointer events and the default tool back afterwards; undo with Ctrl+Z and redo with Ctrl+Shift+Z and Ctrl+Y; a drag previewed without writing (the renderer shows the preview, the document and its updates unchanged, undo refused during the gesture), committed as one step and at most two updates, and undone; Escape cancels without writing; a frame's preview moves what is inside it; shortcut commands on the selection, copy and paste, Delete, and the basics keeping Ctrl+A; click and rubber-band selection and drawing the overlay; a click selects the outermost group; undo prunes the selection; a refused command writes nothing.
+- `packages/editor/src/keymap.test.ts`: shortcut candidates on Windows/Linux and macOS, Shift with punctuation, AltGr on Linux and Windows, Mod+[ on a Norwegian keyboard, letters not matched by place except with Option on macOS, modifiers and dead keys, Ctrl spelled Mod.
+- `packages/editor/src/document.test.ts` (memory store): closing when everything is stored, with the closing phase shown and persistent storage asked for once; the offer to save as a file when the store is full, saving, and closing afterwards; keeping the document open; the suggested file name.
+- `packages/renderer/src/overlay.test.ts`: the overlay is drawn after the document in root space with the device scale, is left out after `setOverlay(null)`, and a throwing overlay does not break the frame.
+- `tests/e2e/editor.spec.ts` (Playwright): the development page opens the sample scene (2,000 elements); the rectangle tool, picked with R, draws a shape with the mouse and the canvas shows its fill; Ctrl+Z, Ctrl+Shift+Z, Ctrl+Z and Ctrl+Y undo and redo it; the selection tool drags it, the renderer shows it moving during the drag, and Ctrl+Z takes the move back; the save status is shown; no errors in the console. Runs in Chromium and Firefox (`chromium` and `editor-firefox` projects), and in WebKit (`editor-webkit`) where Playwright's WebKit can run: in CI, or with `E2E_WEBKIT=1`.
+- `tests/e2e/webkitgtk/editor_check.py`: the same steps in the system's WebKitGTK (the engine of the Linux desktop app), with real mouse and keyboard input sent to the X server with xdotool, under Xvfb.
+
+## Rejected alternatives
+
+- **Writing previews into the document** (and undoing them): every pointer move would be a document update and work on the elements (0005 section 14).
+- **A preview service inside the renderer** (`setPreview`). The scene source already stands between the document and the renderer; laying the preview over it there needs no change to the renderer, and the renderer keeps reading one source.
+- **Drawing overlays on a second canvas** above the renderer's. It would need a second implementation of the drawing context, or exporting the renderer's internal one; and the two canvases would have to agree on size and device pixel ratio.
+- **Matching every shortcut by key place** (`KeyboardEvent.code`), as some editors do. Ctrl+Z would then be Ctrl+W on a French keyboard. Matching letters by character and punctuation also by place gives the expected letter shortcuts on every layout and still reaches bracket shortcuts.
+- **A React component library or a state library.** The interface so far is a status bar and two dialogs; plain React with `useSyncExternalStore` over the editor's own stores is enough, and adds nothing to review.
+- **`@vitejs/plugin-react`.** Vite compiles JSX without it; the plugin adds fast refresh, which the development page does not need yet.
+
+## New dependencies
+
+Licenses compatible with GPL-3.0-or-later; versions at least two weeks old on 2026-11-27 (publish dates from the npm registry).
+
+| Package                                                              | Version | Published         | License | Why                                   |
+| -------------------------------------------------------------------- | ------- | ----------------- | ------- | ------------------------------------- |
+| [react](https://www.npmjs.com/package/react)                         | 19.3.1  | 2026-10-14        | MIT     | The editor's user interface.          |
+| [react-dom](https://www.npmjs.com/package/react-dom)                 | 19.3.1  | 2026-10-14        | MIT     | Draws React into the page.            |
+| [scheduler](https://www.npmjs.com/package/scheduler) (via react-dom) | 0.28.0  | 2026-09-09        | MIT     | React's task scheduling.              |
+| [@types/react](https://www.npmjs.com/package/@types/react)           | 19.3.0  | 2026-09-09        | MIT     | Types for React (type checking only). |
+| [@types/react-dom](https://www.npmjs.com/package/@types/react-dom)   | 19.3.0  | 2026-09-09        | MIT     | Types for react-dom.                  |
+| [csstype](https://www.npmjs.com/package/csstype) (via @types/react)  | 3.2.3   | from the lockfile | MIT     | CSS types for React's style objects.  |
