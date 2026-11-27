@@ -1,0 +1,38 @@
+{
+  "name": "@galatsa/format",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Galatsa file format: reading and writing presentation files, assets and migrations",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@galatsa/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./read": {
+      "@galatsa/source": "./src/read-entry.ts",
+      "types": "./dist/read-entry.d.ts",
+      "default": "./dist/read-entry.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*",
+    "fflate": "0.8.3",
+    "yjs": "13.6.33"
+  }
+}
