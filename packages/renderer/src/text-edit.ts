@@ -35,6 +35,11 @@ export interface TextEdit {
   readonly index: number;
   readonly length: number;
   readonly text: string;
+  /**
+   * An undo step of its own, not joined to the typing around it: a paste, a
+   * drop, the text an input method composed.
+   */
+  readonly step?: boolean;
 }
 
 /** A selection in characters of the content: start and length. */
@@ -526,7 +531,7 @@ export class DomTextEditSession implements TextEditSession {
     const el = this.element;
     this.#on("beforeinput", (e) => this.#beforeInput(e));
     this.#on("input", (e) => {
-      if (!(e as InputEvent).isComposing && !this.#composing) this.#reconcile();
+      if (!(e as InputEvent).isComposing && !this.#composing) this.#reconcile(false);
     });
     this.#on("compositionstart", () => {
       this.#composing = true;
@@ -536,7 +541,7 @@ export class DomTextEditSession implements TextEditSession {
       const deferred = this.#deferred;
       this.#deferred = null;
       if (deferred === null) {
-        this.#reconcile();
+        this.#reconcile(true);
         return;
       }
       // Others changed the text while the user composed: hand on the
@@ -547,7 +552,7 @@ export class DomTextEditSession implements TextEditSession {
       this.#rich = rich;
       this.#text = stringOf(rich);
       const moved = local === null ? null : transformEdit(local, remote);
-      if (moved !== null) this.#edit(moved);
+      if (moved !== null) this.#edit({ ...moved, step: true });
       else this.setContent(deferred.content, deferred.selection);
     });
     this.#on("paste", (e) => {
@@ -556,7 +561,7 @@ export class DomTextEditSession implements TextEditSession {
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (text === "") return;
       const sel = this.#current();
-      this.#edit({ ...sel, text: text.replace(/\r\n?/g, "\n") });
+      this.#edit({ ...sel, text: text.replace(/\r\n?/g, "\n"), step: true });
     });
     this.#on("drop", (e) => {
       // Dropping text moves it in ways the replacement model cannot follow.
@@ -621,7 +626,8 @@ export class DomTextEditSession implements TextEditSession {
           "\n",
         );
         const range = this.#target(e);
-        this.#edit({ ...this.#clampDeletion(range), text });
+        const step = type !== "insertText" && type !== "insertReplacementText";
+        this.#edit({ ...this.#clampDeletion(range), text, step });
         return;
       }
       case "insertParagraph":
@@ -651,7 +657,7 @@ export class DomTextEditSession implements TextEditSession {
   }
 
   /** Hands on what the browser changed in the element (composition, an uncancelled edit). */
-  #reconcile(): void {
+  #reconcile(step: boolean): void {
     if (this.#ended) return;
     const now = this.#shownText();
     const edit = diffText(this.#text, now);
@@ -660,7 +666,7 @@ export class DomTextEditSession implements TextEditSession {
     // The element now shows the edited text; until the caller shows it again
     // (setContent), indices refer to it.
     this.#text = now;
-    this.#edit(edit);
+    this.#edit({ ...edit, step });
     if (caret !== null && this.#text === now && this.#hasFocus()) this.select(caret);
   }
 

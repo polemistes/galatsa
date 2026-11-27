@@ -397,6 +397,9 @@ export class TextEditController {
 
   #edit(active: Active, change: TextEdit): void {
     const doc = this.#host.doc;
+    // A paste or composed text is an undo step of its own (with the height
+    // that follows it).
+    if (change.step) this.#host.undo.stopCapturing();
     edit(
       doc,
       () => {
@@ -406,6 +409,7 @@ export class TextEditController {
     );
     active.caret = null;
     this.#fitHeight(active);
+    if (change.step) this.#host.undo.stopCapturing();
   }
 
   /** With autoHeight, the box's height follows the text, in the typing's undo step. */
