@@ -46,6 +46,35 @@ export const FLIGHT_SPEED = FLIGHT_PEAK_SPEED * (1 - RAMP);
 /** Shortest flight in milliseconds, so that a small move is not abrupt. */
 export const MIN_FLIGHT_DURATION = 500;
 
+/** How fast a flight into a stop goes: the stop's choice (the fly transition's option). */
+export type FlightSpeed = "calm" | "normal" | "fast";
+
+/**
+ * The speed of a flight of each kind, as a factor of the peak speed (and so
+ * of the mean speed: the profile keeps its shape, its start and its slowing
+ * down are as much gentler or brisker). Claude's choice, see
+ * docs/adr/0015-presentation.md. "fast" at 1.4 has a mean speed of
+ * 0.85 x 0.75 x 1.4 = 0.89 units per second, what the users in the
+ * experiment of van Wijk and Nuij chose on average for a constant speed on a
+ * notebook (0.90): the fastest that was found comfortable to watch, and so a
+ * ceiling for an audience that does not choose it. "calm" at 0.7 is as much
+ * slower as "fast" is faster (1 / 1.4 = 0.71), so a flight takes about 1.4
+ * times as long.
+ */
+export const FLIGHT_SPEEDS: { readonly [speed in FlightSpeed]: number } = {
+  calm: 0.7,
+  normal: 1,
+  fast: 1.4,
+};
+
+/** The fly transition's options: its speed ("normal" for anything else). */
+export function readFlightSpeed(options: unknown): FlightSpeed {
+  if (options === null || typeof options !== "object" || Array.isArray(options))
+    return "normal";
+  const speed = (options as { speed?: unknown }).speed;
+  return speed === "calm" || speed === "fast" ? speed : "normal";
+}
+
 /** Duration of a cross-fade in milliseconds, at normal speed. */
 export const FADE_DURATION = 700;
 
@@ -97,13 +126,24 @@ function settle(from: CameraView, to: CameraView): CameraMotion {
 
 /**
  * Duration in milliseconds of a flight of `length` (in the metric of van Wijk
- * and Nuij): the length at FLIGHT_SPEED, at least MIN_FLIGHT_DURATION, times
+ * and Nuij): the length at FLIGHT_SPEED times `speed` (FLIGHT_SPEEDS), at
+ * least MIN_FLIGHT_DURATION (longer for a slower flight), times
  * `durationScale`. 0 for no length.
+ *
+ * The comfort settings win: a viewer who has slowed transitions down
+ * (`durationScale` above 1) never gets a flight faster than normal, so
+ * "fast" is then normal speed.
  */
-export function flightDuration(length: number, durationScale: number): number {
+export function flightDuration(length: number, durationScale: number, speed = 1): number {
   if (!(length > 0)) return 0;
+  const scale = scaleOf(durationScale);
+  let factor = Number.isFinite(speed) && speed > 0 ? speed : 1;
+  if (scale > 1) factor = Math.min(factor, 1);
   return (
-    Math.max(MIN_FLIGHT_DURATION, (length / FLIGHT_SPEED) * 1000) * scaleOf(durationScale)
+    Math.max(
+      MIN_FLIGHT_DURATION / Math.min(factor, 1),
+      (length / (FLIGHT_SPEED * factor)) * 1000,
+    ) * scale
   );
 }
 
@@ -166,13 +206,18 @@ export function planFade(
  */
 export function planFlight(
   request: Omit<TransitionRequest<unknown>, "options">,
+  speed: FlightSpeed = "normal",
 ): CameraMotion {
   const { from, to, comfort, viewport } = request;
   if (!isUsable(from) || !isUsable(to) || sameView(from, to)) return settle(from, to);
   if (comfort.reducedMotion || exceedsFlightLimits(from, to, viewport, comfort))
     return planFade(from, to, comfort.durationScale);
   const path = flightPath(from, to, widthOf(viewport));
-  const duration = flightDuration(path.length, comfort.durationScale);
+  const duration = flightDuration(
+    path.length,
+    comfort.durationScale,
+    FLIGHT_SPEEDS[speed],
+  );
   if (!(duration > 0)) return cutTo(to);
   return {
     duration,
@@ -205,13 +250,17 @@ export function restingView(frame: MotionFrame): CameraView {
   return frame.mix < 0.5 ? frame.from : frame.to;
 }
 
-/** Fly: the smooth and efficient path of van Wijk and Nuij. No options. */
-export const fly = defineTransition<null>({
+/**
+ * Fly: the smooth and efficient path of van Wijk and Nuij. Options:
+ * `{ speed: "calm" | "normal" | "fast" }` (FLIGHT_SPEEDS); none, or anything
+ * else, is normal. The comfort settings still decide whether it flies at all.
+ */
+export const fly = defineTransition<FlightSpeed>({
   name: "fly",
   label: messageKey(transitionMessages, "fly.name"),
   quick: true,
-  read: () => null,
-  plan: (request) => planFlight(request),
+  read: (options) => readFlightSpeed(options),
+  plan: (request) => planFlight(request, request.options),
 });
 
 /** Cross-fade from the start to the goal. No options. */

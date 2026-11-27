@@ -11,6 +11,7 @@ import {
   guardComfort,
   readTransitionValue,
   ViewHost,
+  type AnyTransition,
   type CameraMotion,
   type ComfortSettings,
   type MotionFrame,
@@ -27,8 +28,10 @@ import {
   FLIGHT_PEAK_SPEED,
   FLIGHT_SPEED,
   flightDuration,
+  FLIGHT_SPEEDS,
   fly,
   MIN_FLIGHT_DURATION,
+  readFlightSpeed,
   restingView,
   transitionsExtension,
 } from "./transitions.ts";
@@ -347,11 +350,11 @@ describe("the limits of a flight", () => {
     ];
     for (const to of broken) {
       // The camera stays where it is rather than giving the renderer NaN.
-      for (const transition of [fly, fade, cut]) {
+      for (const transition of [fly, fade, cut] as AnyTransition[]) {
         const motion = transition.plan({
           from: A,
           to,
-          options: null,
+          options: transition.read(null),
           comfort: DEFAULT_COMFORT,
           viewport: VIEWPORT,
         });
@@ -388,7 +391,7 @@ describe("reduced motion", () => {
   ];
 
   it("shows nothing but the start and the goal, in every frame of every transition", () => {
-    for (const transition of [fly, fade, cut]) {
+    for (const transition of [fly, fade, cut] as AnyTransition[]) {
       for (const [from, to] of cases) {
         const motion = transition.plan({
           from,
@@ -522,6 +525,76 @@ describe("the extension", () => {
       expect(() => fly.read(options)).not.toThrow();
       expect(() => fade.read(options)).not.toThrow();
       expect(() => cut.read(options)).not.toThrow();
+    }
+  });
+});
+
+describe("the speed of a flight into a stop", () => {
+  const far: CameraView = { space: null, cx: 2500, cy: 0, zoom: 1 };
+  const near: CameraView = { space: null, cx: 1, cy: 0, zoom: 1 };
+  const at = (speed: unknown, to: CameraView, comfort = NO_LIMITS) =>
+    fly.plan({
+      from: A,
+      to,
+      options: fly.read(speed as never),
+      comfort,
+      viewport: VIEWPORT,
+    });
+
+  it("is read from the stop's options; anything else is normal", () => {
+    expect(readFlightSpeed({ speed: "calm" })).toBe("calm");
+    expect(readFlightSpeed({ speed: "fast" })).toBe("fast");
+    expect(readFlightSpeed({ speed: "normal" })).toBe("normal");
+    expect(readFlightSpeed(null)).toBe("normal");
+    expect(readFlightSpeed({ speed: "warp" })).toBe("normal");
+    expect(readFlightSpeed(["fast"])).toBe("normal");
+    expect(fly.read(null)).toBe("normal");
+  });
+
+  it("changes how long the flight takes: calm longer, fast shorter, by the speed", () => {
+    const normal = at(null, far).duration;
+    expect(normal).toBeGreaterThan(2 * MIN_FLIGHT_DURATION);
+    expect(at({ speed: "normal" }, far).duration).toBe(normal);
+    expect(at({ speed: "calm" }, far).duration).toBeCloseTo(
+      normal / FLIGHT_SPEEDS.calm,
+      6,
+    );
+    expect(at({ speed: "fast" }, far).duration).toBeCloseTo(
+      normal / FLIGHT_SPEEDS.fast,
+      6,
+    );
+    // The same path, only faster or slower: halfway in time is halfway along it.
+    const slow = at({ speed: "calm" }, far);
+    const quick = at({ speed: "fast" }, far);
+    expect(slow.frame(slow.duration / 2)).toEqual(quick.frame(quick.duration / 2));
+  });
+
+  it("keeps a short move from being abrupt, and a calm one calmer", () => {
+    expect(at({ speed: "fast" }, near).duration).toBe(MIN_FLIGHT_DURATION);
+    expect(at({ speed: "calm" }, near).duration).toBeCloseTo(
+      MIN_FLIGHT_DURATION / FLIGHT_SPEEDS.calm,
+      9,
+    );
+  });
+
+  it("gives way to the comfort settings", () => {
+    // A viewer who slowed transitions down gets no flight faster than normal.
+    const slower = { ...NO_LIMITS, durationScale: 2 };
+    expect(at({ speed: "fast" }, far, slower).duration).toBe(
+      at(null, far, slower).duration,
+    );
+    expect(at({ speed: "calm" }, far, slower).duration).toBeCloseTo(
+      at(null, far, slower).duration / FLIGHT_SPEEDS.calm,
+      6,
+    );
+    // Reduced motion and the flight limits still make it a cross-fade, at any speed.
+    for (const speed of ["calm", "fast"]) {
+      const reduced = at({ speed }, far, { ...NO_LIMITS, reducedMotion: true });
+      expect(reduced.duration).toBe(FADE_DURATION);
+      expect(reduced.frame(reduced.duration / 2).kind).toBe("blend");
+      const limited = at({ speed }, far, { ...NO_LIMITS, maxFlightDistance: 0.5 });
+      expect(limited.duration).toBe(FADE_DURATION);
+      expect(limited.frame(limited.duration / 2).kind).toBe("blend");
     }
   });
 });

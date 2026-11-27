@@ -778,6 +778,24 @@ describe("the surroundings", () => {
     expect(taken).toBe(alone);
   });
 
+  it("flies into a stop at the speed the stop asks for", () => {
+    const times: Record<string, number> = {};
+    for (const speed of ["calm", "normal", "fast"]) {
+      const doc = far();
+      doc.stops["s1"]!.transition = { type: FLY, options: { speed } };
+      const t = setup(doc);
+      t.p.next();
+      times[speed] = arrival(t);
+      expect(single(t.p.picture())).toEqual(t.viewOf("s1"));
+    }
+    const plain = setup(far());
+    plain.p.next();
+    // No transition named: the route's default, at normal speed.
+    expect(arrival(plain)).toBe(times["normal"]);
+    expect(times["calm"]! / times["normal"]!).toBeCloseTo(1 / 0.7, 1);
+    expect(times["fast"]! / times["normal"]!).toBeCloseTo(1 / 1.4, 1);
+  });
+
   it("steers onto the new fit when the screen changes size in the middle of a flight", () => {
     const plain = setup(far());
     plain.p.next();
