@@ -25,7 +25,20 @@ export {
   defaultDecoderKind,
   versionsOf,
   pickVersion,
+  decodeSvg,
+  svgAtSize,
+  MAX_SCALABLE_SIDE,
+  SVG_TYPE,
 } from "./images.ts";
+export {
+  type MadePreview,
+  type PreviewOptions,
+  makeImagePreviews,
+  previewSizes,
+  PREVIEW_LARGEST,
+  PREVIEW_MARGIN,
+  PREVIEW_SMALLEST,
+} from "./previews.ts";
 export {
   type TextMeasurer,
   type FontFamilies,

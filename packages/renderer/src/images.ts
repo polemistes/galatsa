@@ -23,7 +23,18 @@
 export interface ImageLevel {
   readonly width: number;
   readonly height: number;
+  /**
+   * The level can be decoded at any size, larger ones included: the original
+   * of a vector image (SVG). Its width and height are its natural size.
+   */
+  readonly scalable?: boolean;
 }
+
+/** The longest side a scalable (vector) original is drawn at, in pixels. */
+export const MAX_SCALABLE_SIDE = 8192;
+
+/** The media type of SVG, which is decoded on the main thread through an image element. */
+export const SVG_TYPE = "image/svg+xml";
 
 /** Where the renderer gets image bytes. */
 export interface ImageSource {
@@ -96,6 +107,70 @@ export async function decodeWithImageDecoder(
   } finally {
     decoder.close();
   }
+}
+
+/**
+ * An SVG file prepared to be drawn at a given size: its root gets that width
+ * and height (and a viewBox from its own width and height if it had none), so
+ * the browser draws the vector picture at that size rather than scaling a
+ * picture of its natural size. Returns the text unchanged if it is not SVG the
+ * browser can parse.
+ */
+export function svgAtSize(text: string, width: number, height: number): string {
+  if (typeof DOMParser !== "function" || typeof XMLSerializer !== "function") return text;
+  const parsed = new DOMParser().parseFromString(text, SVG_TYPE);
+  const root = parsed.documentElement;
+  if (root.localName !== "svg" || parsed.getElementsByTagName("parsererror").length > 0)
+    return text;
+  if (!root.hasAttribute("viewBox")) {
+    const w = parseFloat(root.getAttribute("width") ?? "");
+    const h = parseFloat(root.getAttribute("height") ?? "");
+    if (w > 0 && h > 0) root.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  }
+  root.setAttribute("width", String(width));
+  root.setAttribute("height", String(height));
+  return new XMLSerializer().serializeToString(parsed);
+}
+
+/**
+ * Decodes SVG at (width, height) through an image element, on the main thread.
+ * An SVG image runs no scripts and loads nothing from outside.
+ */
+export async function decodeSvg(
+  blob: Blob,
+  width: number,
+  height: number,
+): Promise<Decoded> {
+  const text = svgAtSize(await blob.text(), width, height);
+  const url = URL.createObjectURL(new Blob([text], { type: SVG_TYPE }));
+  try {
+    const image = new Image(width, height);
+    image.decoding = "async";
+    image.src = url;
+    await image.decode();
+    // Drawn onto a canvas of the size asked for: browsers that cannot make a
+    // bitmap of an SVG element directly can still draw it.
+    const canvas = makeCanvas(width, height);
+    const ctx = canvas.getContext("2d") as
+      CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+    if (!ctx) throw new Error("no 2D context for SVG");
+    ctx.drawImage(image, 0, 0, width, height);
+    return fromBitmap(await createImageBitmap(canvas));
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** A canvas to draw into off screen: an OffscreenCanvas where there is one. */
+export function makeCanvas(
+  width: number,
+  height: number,
+): OffscreenCanvas | HTMLCanvasElement {
+  if (typeof OffscreenCanvas === "function") return new OffscreenCanvas(width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
 }
 
 /** createImageBitmap on the main thread (the browser may still decode elsewhere). */
@@ -272,8 +347,18 @@ export function versionsOf(
     width: l.width,
     height: l.height,
   }));
-  if (!reducedDecode || levels.length === 0) return out;
+  if (levels.length === 0) return out;
   const original = levels.length - 1;
+  const scalable = levels[original]!.scalable === true;
+  if (scalable) {
+    // A vector original is drawn at any size: also at twice, four times ... its
+    // natural size, up to MAX_SCALABLE_SIDE, so it stays sharp when zoomed in.
+    const { width, height } = levels[original]!;
+    for (let f = 2; Math.max(width, height) * f <= MAX_SCALABLE_SIDE; f *= 2) {
+      out.push({ level: original, width: width * f, height: height * f });
+    }
+  }
+  if (!reducedDecode && !scalable) return out;
   const { width, height } = levels[original]!;
   const largestReduced = original > 0 ? levels[original - 1]!.width : 0;
   const extra: Version[] = [];
@@ -325,6 +410,8 @@ export const RETRY_MAX_MS = 60000;
 
 interface Entry {
   readonly asset: string;
+  /** Width of the stored original (the last level). */
+  readonly originalWidth: number;
   readonly versions: readonly Version[];
   readonly slots: Slot[];
 }
@@ -338,6 +425,8 @@ export interface ImageCacheOptions {
   readonly decoder?: DecoderKind;
   /** A decode function of one's own (tests); overrides `decoder`. */
   readonly decode?: DecodeFn;
+  /** How SVG is decoded (tests); default `decode` if given, else `decodeSvg`. */
+  readonly decodeSvg?: DecodeFn;
   /** Whether `decode` decodes at reduced size. */
   readonly reducedDecode?: boolean;
   /** Bytes of decoded pixels kept, besides the smallest version of each image. */
@@ -358,6 +447,11 @@ export interface ImageCacheStats {
   peakDecodedBytes: number;
   /** Decodes of an original at full size. */
   originalDecodes: number;
+  /**
+   * Decodes of an original at any size (an original decoded at reduced size
+   * included): what opening a document with stored reduced versions must not do.
+   */
+  originalLevelDecodes: number;
 }
 
 export class ImageCache {
@@ -368,6 +462,7 @@ export class ImageCache {
   readonly #maxInFlight: number;
   readonly #onChange: (() => void) | undefined;
   readonly #dispose: (() => void) | undefined;
+  readonly #decodeSvg: DecodeFn;
   readonly #entries = new Map<string, Entry | Missing>();
   readonly #now: () => number;
   readonly #wants = new Map<
@@ -385,6 +480,7 @@ export class ImageCache {
     decodedBytes: 0,
     peakDecodedBytes: 0,
     originalDecodes: 0,
+    originalLevelDecodes: 0,
   };
   readonly decoderKind: DecoderKind | "custom";
 
@@ -394,6 +490,7 @@ export class ImageCache {
     this.#maxInFlight = options.maxInFlight ?? 3;
     this.#onChange = options.onChange;
     this.#now = options.now ?? (() => performance.now());
+    this.#decodeSvg = options.decodeSvg ?? options.decode ?? decodeSvg;
     if (options.decode) {
       this.#decode = options.decode;
       this.#reduced = options.reducedDecode ?? false;
@@ -439,6 +536,7 @@ export class ImageCache {
     const versions = versionsOf(levels, this.#reduced);
     const entry: Entry = {
       asset,
+      originalWidth: levels[levels.length - 1]!.width,
       versions,
       slots: versions.map(() => ({
         decoded: null,
@@ -566,13 +664,21 @@ export class ImageCache {
     try {
       const blob = await this.#source.blob(entry.asset, version.level);
       if (!current()) return;
-      const decoded = await this.#decode(blob, version.width, version.height);
+      // SVG needs an image element, which neither ImageDecoder nor a worker has.
+      const decoded =
+        blob.type === SVG_TYPE
+          ? await this.#decodeSvg(blob, version.width, version.height)
+          : await this.#decode(blob, version.width, version.height);
       if (!current()) {
         decoded.close();
         return;
       }
       slot.failed = false;
-      if (index === entry.versions.length - 1) this.stats.originalDecodes++;
+      const original = entry.versions[entry.versions.length - 1]!.level;
+      if (version.level === original) {
+        this.stats.originalLevelDecodes++;
+        if (version.width === entry.originalWidth) this.stats.originalDecodes++;
+      }
       slot.decoded = decoded;
       slot.lastUsed = this.#frame;
       slot.bytes = decoded.width * decoded.height * 4;
