@@ -2,7 +2,7 @@
 
 - Status: proposed
 - Date: 2026-11-27
-- Code: `packages/extensions/basics` (`frames.ts`: `frame`, `remove-frame`, `rename`, `move-into-frame`, `move-out-of-frame`, `frameAt`; `move` with `target`; the stacking shortcuts in `structure.ts`), `packages/extensions/select` (`frames.ts`: frame outlines and names, drop targets; `frame-tool.ts`; dragging into and out of frames and a band inside a frame in `tool.ts`), `packages/editor` (`rename.ts`, `rename-target.ts` and `ui/RenamePanel.svelte`; the context menu's entries and a right click on a frame's name in `context-menu.ts`; `paste-target.ts`; a dead key in `keymap.ts`), `tests/e2e/frames.spec.ts`
+- Code: `settleStep` in `packages/core/src/ydoc/track.ts` (rule 2, into a delete); `packages/extensions/basics` (`frames.ts`: `frame`, `remove-frame`, `rename`, `move-into-frame`, `move-out-of-frame`, `frameAt`; `move` with `target`; the stacking shortcuts in `structure.ts`), `packages/extensions/select` (`frames.ts`: frame outlines and names, drop targets; `frame-tool.ts`; dragging into and out of frames and a band inside a frame in `tool.ts`), `packages/editor` (`rename.ts`, `rename-target.ts` and `ui/RenamePanel.svelte`; the context menu's entries and a right click on a frame's name in `context-menu.ts`; `paste-target.ts`; a dead key in `keymap.ts`), `tests/e2e/frames.spec.ts`
 
 ## Context
 
@@ -10,9 +10,9 @@ The document model has frames and z-order from the start ([0001](0001-document-m
 
 ## Decision
 
-### No change to core or the extension interface
+### One change to core, none to the extension interface
 
-Everything is built on the basics, the selection extension and the editor. `packages/core` and `packages/extension-api` are unchanged, and the interface version stays at 1.6: the commands are the basics', the outlines and names are an overlay (1.5, [0013](0013-routes-and-stops.md)), the frame tool is a tool, and the rename panel is a custom panel with the editor's Svelte binding (0007).
+Everything is built on the basics, the selection extension and the editor, with one change to `packages/core`, needed by what the frame commands made reachable: the undo manager keeps back a change of container that would hide what the user sees under another user's delete ("Undo and other users" below; 0001 section 10). `packages/extension-api` is unchanged, and the interface version stays at 1.6: the commands are the basics', the outlines and names are an overlay (1.5, [0013](0013-routes-and-stops.md)), the frame tool is a tool, and the rename panel is a custom panel with the editor's Svelte binding (0007).
 
 ### Commands (basics)
 
@@ -29,7 +29,9 @@ Everything is built on the basics, the selection extension and the editor. `pack
 
 Each is one undo step through the registry, and the random undo tests (`undo.test.ts`, `concurrent.test.ts`, `alone-after-concurrent.test.ts`) now draw them too, `move` with a target included.
 
-**The two-user undo test.** Its rule 1 puts back every position the undo wrote and checks that nothing else moved. A move into another container writes the element's container and its position in one step; the old position read under the restored container is then converted from another space (0001 section 5.3, rule 3), which says nothing about the step. So for an element whose container the step changed as well as its position, the check now puts back its container and rebase with the position. Seed 9 failed before this, with the element back exactly where it was before the step; 24 seeds of 500 steps pass.
+**Undo and other users.** The two-user test (`concurrent.test.ts`) found, with the frame commands drawn, that undoing a frame put around elements (and a grouping, which has the same shape) after another user deleted the container the elements had been in hid them: they had survived the delete in the frame, which was worked on since, and the undo put them back into the deleted container, where the delete hid them, and the undo's work on them is not recorded because they are hidden when it is judged. The undo manager now keeps such a change of container back (`settleStep` in `ydoc/track.ts`, rule 2, "into a delete"), as it already kept back one that would take an element out of a delete; the marks the undo writes itself (the frame's creation taken back) are not counted.
+
+**The two-user undo test.** Its rule 1 puts back every position the undo wrote and checks that nothing else moved. A move into another container writes the element's container and its position in one step; the old position read under the restored container is then converted from another space (0001 section 5.3, rule 3), which says nothing about the step. So for an element whose container the step changed as well as its position, the check now puts back its container and rebase with the position. Seed 9 failed before this, with the element back exactly where it was before the step. The same now goes for a step that wrote an element's rebase with its position. Since that says nothing about the element itself, a check of its own (rule 1b) asks that such an element ends where the step found it (its place keys as before the step, everything else as now), or stays where it is (an undo finished with a rebase that keeps the place). Rule 1 leaves out, by name, the cases 0001 section 13 lists as known: an element in or under a parent cycle before or after the undo (item 27), an element or a container above it with a position converted by rule 3 (item 16), and a step that changed the container of an element and of a container above it (item 26). Rule 4 (the undo is done) leaves out the place keys of an element whose change of container the undo manager kept back (restoring them would bring back something deleted, or hide something under another user's delete). With 600 steps, the test written before this package fails seeds 56 and 124 of 1 to 132 (rule 1: the cases now named); with the frame commands and before these changes, 12 seeds failed, among them the two of a real error (above).
 
 ### Stacking: keys, menu and mode
 

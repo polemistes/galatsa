@@ -530,6 +530,44 @@ describe("two users undoing concurrently", () => {
     expect(b.resolver().worldOrigin(x)).toEqual({ x: 10, y: 50 });
   });
 
+  for (const command of [BASICS.frame, BASICS.group])
+    it(`undoing ${command === BASICS.frame ? "a frame around elements" : "a grouping"} after the other user deleted their container does not hide them by that delete (docs/adr/0014)`, () => {
+      for (const clients of [
+        [1, 2],
+        [2, 1],
+      ] as const) {
+        const { a, b, sync } = pair(clients);
+        const c = a.frame(0, 0, 500, 500);
+        const x = a.shape(10, 10, 10, 10, c);
+        const y = a.shape(40, 10, 10, 10, c);
+        const made = a.must<ElementId>(command, { ids: [x, y] });
+        sync();
+        // B deletes the container, seeing what is in it; A, not yet aware,
+        // moves the new frame or group, so it and what is in it survive.
+        b.must(BASICS.delete, { ids: [c] });
+        a.must(BASICS.move, { ids: [made], dx: 5, dy: 0 });
+        sync();
+        expect(a.resolver().isGone(x)).toBe(false);
+        // A undoes the move, then the frame or grouping.
+        a.must(BASICS.undo);
+        a.must(BASICS.undo);
+        sync();
+        for (const t of [a, b]) {
+          const r = t.resolver();
+          for (const id of [x, y]) {
+            // Gone only by A's own undo (the frame's creation taken back), or
+            // still seen (a dissolved group).
+            if (r.isGone(id)) expect([...removers(t, id)]).toEqual([a.doc.clientID]);
+            else expect(r.isDeleted(id)).toBe(false);
+          }
+        }
+        // A's redo brings them back as they were.
+        a.must(BASICS.redo);
+        sync();
+        for (const id of [x, y]) expect(b.resolver().isGone(id)).toBe(false);
+      }
+    });
+
   it("an undo after receiving the other user's delete of the element leaves it deleted", () => {
     const { a, b, sync } = pair();
     const x = a.shape(0, 0);
