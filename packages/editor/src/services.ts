@@ -24,6 +24,7 @@ import type {
   EditorServices,
   ElementPlacement,
   PreviewChanges,
+  TextEditingService,
 } from "@galatsa/extension-api/editing";
 import type { MessageValues } from "@galatsa/i18n";
 import type { CanvasRenderer } from "@galatsa/renderer";
@@ -48,6 +49,8 @@ export interface ServiceHost {
   toScreen(point: Point): Point;
   /** Shows a message to the user. */
   notify(message: string, values?: MessageValues): void;
+  /** The text being edited in place (text-edit.ts). */
+  readonly text?: TextEditingService;
 }
 
 export type StateChange = "selection" | "camera" | "mode" | "panels";
@@ -211,9 +214,8 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
       },
     },
     text: {
-      // In-place text editing is not built yet (the renderer's beginTextEdit).
-      current: () => null,
-      select: () => {},
+      current: () => host.text?.current() ?? null,
+      select: (index, length) => host.text?.select(index, length),
     },
     preview: {
       show: (changes) => setPreview(changes),

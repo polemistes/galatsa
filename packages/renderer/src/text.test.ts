@@ -22,7 +22,8 @@ const STYLE = { fontFamily: "sans", fontSize: 10, color: "#000", align: "left" }
 
 describe("layout", () => {
   it("breaks lines at spaces and long words between characters", () => {
-    // The estimate: 5.5 units per character at size 10.
+    // The estimate: 5.5 units per character at size 10. Lines keep their
+    // trailing spaces, as the browser's do.
     const layout = layoutText(
       estimateMeasurer,
       DEFAULT_FAMILIES,
@@ -31,9 +32,9 @@ describe("layout", () => {
       40,
     );
     expect(layout.lines.map((l) => l.text)).toEqual([
-      "aaa bbb",
+      "aaa bbb ",
       "ccccccc",
-      "cccccc",
+      "cccccc ",
       "d",
     ]);
     expect(layout.height).toBeCloseTo(4 * 12, 9);
@@ -190,5 +191,39 @@ describe("the layout cache", () => {
     expect(made).toBe(0);
     get("t1");
     expect(made).toBe(1);
+  });
+});
+
+describe("the layout cache while text is typed", () => {
+  it("keeps a few layouts per element, however many keys are typed", () => {
+    const cache = new LayoutCache();
+    let text = "";
+    for (let i = 0; i < 1000; i++) {
+      // Every key makes a new content, as an edit of the shared text does.
+      text += "x";
+      const content = { $y: "text" as const, delta: [{ insert: text }] };
+      cache.get(
+        content,
+        STYLE,
+        100,
+        () => layoutText(estimateMeasurer, DEFAULT_FAMILIES, content, STYLE, 100),
+        "t",
+      );
+      // Another element's text stays.
+      cache.get("other", STYLE, 100, () =>
+        layoutText(estimateMeasurer, DEFAULT_FAMILIES, "other", STYLE, 100),
+      );
+    }
+    expect(cache.size).toBeLessThanOrEqual(3);
+    expect(cache.last("t")?.lines[0]?.text.length).toBeGreaterThan(0);
+  });
+
+  it("keeps a few widths per content while a width is dragged", () => {
+    const cache = new LayoutCache();
+    for (let w = 100; w < 1100; w++)
+      cache.get("same", STYLE, w, () =>
+        layoutText(estimateMeasurer, DEFAULT_FAMILIES, "same", STYLE, w),
+      );
+    expect(cache.size).toBeLessThanOrEqual(4);
   });
 });

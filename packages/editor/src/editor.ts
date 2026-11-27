@@ -80,6 +80,7 @@ import {
   type EditorState,
   type StateChange,
 } from "./services.ts";
+import { TextEditController, type TextSessionFactory } from "./text-edit.ts";
 import { ToolController } from "./tools.ts";
 import {
   IMPORT_CASCADE,
@@ -122,6 +123,8 @@ export interface EditorOptions {
   /** Default: requestAnimationFrame. */
   readonly schedule?: FrameScheduler;
   readonly background?: string;
+  /** Starts in-place text editing; default the renderer's (tests give a stand-in). */
+  readonly textSessions?: TextSessionFactory;
 }
 
 /** A pointer event as the editor takes it: a position in CSS pixels of the drawing area. */
@@ -137,7 +140,7 @@ export interface PointerInput {
   readonly metaKey: boolean;
 }
 
-export type EditorChange = StateChange | "tool" | "cursor" | "notice";
+export type EditorChange = StateChange | "tool" | "cursor" | "notice" | "text";
 
 /**
  * A message the interface shows: a message key (of the editor's bundle, or an
@@ -162,6 +165,8 @@ export type KeyResult =
   | { readonly kind: "tool-key" }
   /** Space: the hand is out (a drag moves the canvas). */
   | { readonly kind: "hand" }
+  /** Enter: editing of the selected text began. */
+  | { readonly kind: "edit-text" }
   | ShortcutResult;
 
 /** What a shortcut ran. */
@@ -203,6 +208,8 @@ export class Editor {
   readonly renderer: CanvasRenderer;
   readonly services: EditorServices;
   readonly tools: ToolController;
+  /** In-place text editing (text-edit.ts, docs/adr/0011). */
+  readonly textEdit: TextEditController;
   readonly platform: Platform;
   readonly #state: EditorState;
   readonly #schedule: FrameScheduler;
@@ -236,6 +243,11 @@ export class Editor {
     readonly steps: number;
     readonly top: unknown;
   } | null = null;
+  /** The last press of the tool's pointer, for double clicks. */
+  #lastPress: { readonly t: number; readonly x: number; readonly y: number } | null =
+    null;
+  /** A press that started text editing: its moves and release are not the tool's. */
+  #swallow = false;
 
   constructor(options: EditorOptions) {
     const doc = options.doc;
@@ -282,6 +294,7 @@ export class Editor {
       this.live.subscribe((changes) => {
         const ids = [...changes.added, ...changes.changed, ...changes.removed];
         this.renderer.applyChanges(ids);
+        this.textEdit?.documentChanged(ids);
         this.#pruneSelection();
         this.#view.documentChanged();
         this.invalidate();
@@ -315,6 +328,10 @@ export class Editor {
         previewChanged: () => this.#view.follow(),
         toScreen: (point) => this.#view.toScreen(point),
         notify: (message, values) => this.#notify(message, values),
+        text: {
+          current: () => this.textEdit.current(),
+          select: (index, length) => this.textEdit.select(index, length),
+        },
       },
       this.#state,
     );
@@ -331,20 +348,58 @@ export class Editor {
           this.#cursor = cursor;
           this.#emit("cursor");
         },
-        editText: (id) => {
-          try {
-            this.renderer.beginTextEdit(id);
-            return true;
-          } catch {
-            // In-place text editing is not built yet.
-            return false;
-          }
-        },
+        editText: (id) => this.editText(id),
         toolChanged: () => this.#emit("tool"),
       },
       options.defaultTool ?? null,
     );
+    this.textEdit = new TextEditController(
+      {
+        doc,
+        host: this.host,
+        undo: this.undo,
+        scene: this.scene,
+        live: this.live,
+        platform: this.platform,
+        keymap: () => this.keymap(),
+        runFromShortcut: (command) => this.runFromShortcut(command),
+        run: (command, args) => this.run(command, args),
+        changed: () => this.#emit("text"),
+        ended: (id) => this.services.selection.set([id]),
+        invalidate: () => this.invalidate(),
+      },
+      options.textSessions ?? ((id, opts) => this.renderer.beginTextEdit(id, opts)),
+    );
     this.tools.selectDefault();
+  }
+
+  /**
+   * Starts editing an element's text in place, with the caret at a point of
+   * the drawing area or at the end. False if it cannot be edited in place
+   * (not a text-like type, locked, or no mounted canvas). When a press of
+   * the tool made the element (the text tool), an empty box is taken back as
+   * if never made when editing ends. While the text is edited the element is
+   * outlined, not selected; it is selected when editing ends.
+   */
+  editText(id: ElementId, caretAt?: Point): boolean {
+    const press = this.#press;
+    const stack = this.undo.undoStack;
+    const fresh =
+      this.#toolPointer && press !== null && stack.length > press.steps
+        ? { steps: press.steps, top: press.top }
+        : null;
+    let begun: boolean;
+    try {
+      begun = this.textEdit.begin(id, { fresh, ...(caretAt ? { caretAt } : {}) });
+    } catch (error) {
+      console.error(error);
+      return false;
+    }
+    // While its text is edited, the element is outlined but not selected
+    // (the selection tool's handles would stand on the text); it is selected
+    // when editing ends.
+    if (begun) this.services.selection.set([]);
+    return begun;
   }
 
   /** The editor state behind the services. */
@@ -511,6 +566,17 @@ export class Editor {
       }
     }
     const px = 1 / ctx.scale;
+    const edited = this.textEdit?.id ?? null;
+    const outline = edited === null ? null : this.renderer.screenBounds(edited);
+    if (outline !== null) {
+      const path = ctx.createPath();
+      outline.corners.forEach((corner, i) => {
+        if (i === 0) path.moveTo(corner.x, corner.y);
+        else path.lineTo(corner.x, corner.y);
+      });
+      path.closePath();
+      ctx.stroke(path, { color: SELECTION_COLOR, width: px, dash: [4 * px, 3 * px] });
+    }
     for (const id of this.#state.selection) {
       const rect = this.renderer.screenBounds(id);
       if (rect === null) continue;
@@ -647,6 +713,7 @@ export class Editor {
     if (enabled === this.#inputEnabled) return;
     this.#inputEnabled = enabled;
     if (!enabled) {
+      this.textEdit.end();
       this.#toolPointer = false;
       this.tools.pointerCancel();
       this.#view.handUp(null);
@@ -661,6 +728,10 @@ export class Editor {
   pointerDown(e: PointerInput): void {
     if (!this.#inputEnabled) return;
     if (this.#view.handDown({ x: e.x, y: e.y })) return;
+    // A press on the canvas ends text editing (presses inside the editing
+    // element never reach the canvas).
+    this.textEdit.end();
+    if (this.#doubleClickEdit(e)) return;
     this.#toolPointer = true;
     const stack = this.undo.undoStack;
     this.#press = {
@@ -675,18 +746,24 @@ export class Editor {
   pointerMove(e: PointerInput): void {
     if (!this.#inputEnabled) return;
     if (this.#view.handMove({ x: e.x, y: e.y })) return;
+    if (this.#swallow) return;
     this.tools.pointerMove(this.#toolEvent(e));
   }
 
   pointerUp(e: PointerInput): void {
     if (!this.#inputEnabled) return;
     if (this.#view.handUp({ x: e.x, y: e.y })) return;
+    if (this.#swallow) {
+      this.#swallow = false;
+      return;
+    }
     this.#toolPointer = false;
     this.tools.pointerUp(this.#toolEvent(e));
   }
 
   pointerCancel(): void {
     if (this.#view.handUp(null)) return;
+    this.#swallow = false;
     this.#toolPointer = false;
     this.tools.pointerCancel();
   }
@@ -723,6 +800,28 @@ export class Editor {
     this.services.selection.set(press.selection);
   }
 
+  /**
+   * A second press of the primary button close in time and place to the
+   * first, on an element whose text can be edited in place: editing begins,
+   * with the caret where the pointer is, and the press is not the tool's.
+   */
+  #doubleClickEdit(e: PointerInput): boolean {
+    if (e.button !== 0) return false;
+    const now = typeof performance === "object" ? performance.now() : Date.now();
+    const last = this.#lastPress;
+    this.#lastPress = { t: now, x: e.x, y: e.y };
+    if (last === null || now - last.t > DOUBLE_CLICK_MS) return false;
+    if (Math.hypot(e.x - last.x, e.y - last.y) > DOUBLE_CLICK_PX) return false;
+    const hit = this.renderer.hitTest(e.x, e.y, {
+      accept: (id) => !this.live.isLocked(id),
+    });
+    if (hit === null || !this.textEdit.canEdit(hit)) return false;
+    this.#lastPress = null;
+    if (!this.editText(hit, { x: e.x, y: e.y })) return false;
+    this.#swallow = true;
+    return true;
+  }
+
   /** The canvas lost focus: keys held down (Space) are let go. */
   focusLost(): void {
     this.#view.releaseHand();
@@ -748,6 +847,12 @@ export class Editor {
     };
     if (!this.#inputEnabled) return null;
     if (this.tools.keyDown(toolEvent)) return { kind: "tool-key" };
+    if (isEnterKey(input) && !input.repeat) {
+      const selection = this.#state.selection;
+      if (selection.length === 1 && this.textEdit.canEdit(selection[0]!)) {
+        if (this.editText(selection[0]!)) return { kind: "edit-text" };
+      }
+    }
     if (isHandKey(input) && this.#view.holdHand(this.#toolPointer))
       return { kind: "hand" };
     if (isClipboardKey(input, this.platform)) return null;
@@ -1078,6 +1183,7 @@ export class Editor {
 
   dispose(): void {
     if (this.#disposed) return;
+    this.textEdit.end();
     this.tools.dispose();
     this.#disposed = true;
     this.#cancelFrame?.();
@@ -1093,6 +1199,21 @@ export class Editor {
 /** A clipboard file whose bytes can be read. */
 function isImportFile(file: ClipboardFile): file is ClipboardFile & ImportFile {
   return typeof file.arrayBuffer === "function";
+}
+
+/** Two presses this close in time (ms) and place (CSS px) are a double click. */
+const DOUBLE_CLICK_MS = 500;
+const DOUBLE_CLICK_PX = 5;
+
+/** Enter alone (no modifiers): edit the selected text. */
+function isEnterKey(input: KeyInput): boolean {
+  return (
+    input.key === "Enter" &&
+    !input.ctrlKey &&
+    !input.altKey &&
+    !input.metaKey &&
+    !input.shiftKey
+  );
 }
 
 /** Space alone (no modifiers): the hand. */

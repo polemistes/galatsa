@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The development page: starts the editor with the shape and image extensions
-// and the text sketch, on the
+// The development page: starts the editor with the shape, image and text
+// extensions, on the
 // sample scene (the benchmark scene as a document) or, with `?scene=empty`, on
 // a new empty document.
 //
@@ -12,10 +12,11 @@
 // `window.galatsaDev` gives tests and the browser console the running program.
 
 import { EditorApp, renderEditorUi, type Editor } from "@galatsa/editor";
-import { textExtension } from "@galatsa/extension-examples";
 import { imageExtension } from "@galatsa/extension-image";
 import { routesExtension } from "@galatsa/extension-routes";
 import { shapeExtension } from "@galatsa/extension-shape";
+import { textExtension } from "@galatsa/extension-text";
+import "@galatsa/renderer/fonts.css";
 import { browserLocaleStorage, createI18n, isLocale } from "@galatsa/i18n";
 import { webMessages } from "./messages/index.ts";
 
@@ -48,8 +49,8 @@ let app: EditorApp | null = null;
 const ready = EditorApp.start({
   root,
   i18n,
-  // The shape and image extensions and the text sketch. The shape, image and
-  // selection sketches are left out: the extensions replace two of them, and
+  // The shape, image and text extensions. The shape, image, text and
+  // selection sketches are left out: the extensions replace three of them, and
   // the editor's own selection tool (galatsa.select) is loaded first and is
   // the default tool.
   extensions: [textExtension, shapeExtension, imageExtension, routesExtension],

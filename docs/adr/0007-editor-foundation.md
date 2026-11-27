@@ -39,7 +39,7 @@ The services of 0005 section 4.8 are implemented over the editor's state and the
 - **Clicks** ask the renderer (`hitTest`), so a click hits what each element type says is its outline. What a click inside a group selects is the editor's decision: the outermost group the element is in, up to the nearest frame. Locked elements are passed over (a right click, which opens the context menu, does select them, so they can be unlocked: [0008](0008-selection.md)).
 - **Rubber bands and bounds** answer from the live resolver: the elements at the top level of the canvas as the user sees it (members of a dissolved group in its place).
 - **Visible elements** (candidates for snapping) come from the renderer's spatial index, at the top level of the root.
-- **Text** is not editable in place yet: the service reports no text being edited.
+- **Text** is edited in place since [0011](0011-text.md); the service reports the text being edited and its selection.
 - **The selection** is pruned when an element it holds goes away (an undo of its creation).
 
 ### Tools
@@ -97,7 +97,7 @@ Images are drawn from the storage session's asset bytes, one stored version each
 
 ## Known limitations
 
-- In-place text editing is not built; the text sketch's tool inserts a text box, and asking to edit it does nothing.
+- In-place text editing came with [0011](0011-text.md).
 - Only the first pointer is the tool's; a second finger moves the camera ([0009](0009-camera.md)).
 - Field panels are not drawn.
 - The development page's sample scene is regenerated per `?fresh`, and every copy stays in the store until deleted (0006 section 11, item 4).
