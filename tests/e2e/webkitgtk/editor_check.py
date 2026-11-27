@@ -6,7 +6,8 @@ other systems the editor is checked in the system's WebKitGTK instead (the
 engine of the Linux desktop app). The same steps as tests/e2e/editor.spec.ts:
 the sample scene opens; the rectangle tool, picked with its key, draws a
 shape with the mouse; Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y undo and redo it; the
-selection tool drags it, and Ctrl+Z takes the move back. Mouse and keys are
+selection tool drags it, and Ctrl+Z takes the move back; Ctrl+C and Ctrl+V
+copy and paste it through the browser's events. Mouse and keys are
 sent to the X server with xdotool (XTEST), so they reach WebKit the way a
 user's input does.
 
@@ -163,6 +164,12 @@ def scenario():
     state = yield ("probe",)
     assert abs(state["box"]["x"] - before["x"]) < 0.01, ("undo move", before, state)
     assert state["shapes"] == start + 1, state
+    # Copy and paste, through the browser's copy and paste events.
+    for keys, expected in [("ctrl+c", start + 1), ("ctrl+v", start + 2), ("ctrl+z", start + 1)]:
+        yield ("xdo", ["key", keys])
+        yield ("wait", 300)
+        state = yield ("probe",)
+        assert state["shapes"] == expected, (keys, state)
 
 
 def main() -> int:

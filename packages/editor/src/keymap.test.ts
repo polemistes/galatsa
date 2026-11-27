@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  isClipboardKey,
   matchShortcut,
   platformShortcut,
   shortcutCandidates,
@@ -91,6 +92,25 @@ describe("shortcut candidates", () => {
     expect(shortcutCandidates(press("Delete", "Delete"), PC)).toEqual(["Delete"]);
     expect(shortcutCandidates(press(" ", "Space"), PC)).toEqual(["Space"]);
     expect(shortcutCandidates(press("r", "KeyR"), PC)).toEqual(["r"]);
+  });
+});
+
+describe("clipboard keys", () => {
+  it("leaves Mod+C, Mod+X and Mod+V to the browser, on every layout", () => {
+    expect(isClipboardKey(press("c", "KeyC", { ctrlKey: true }), PC)).toBe(true);
+    expect(
+      isClipboardKey(press("X", "KeyX", { ctrlKey: true, shiftKey: true }), PC),
+    ).toBe(true);
+    expect(isClipboardKey(press("v", "KeyV", { metaKey: true }), MAC)).toBe(true);
+    // A Russian keyboard: the key marked V gives "м".
+    expect(isClipboardKey(press("м", "KeyV", { ctrlKey: true }), PC)).toBe(true);
+    // Not: Ctrl+C on macOS, plain C, Ctrl+Alt+C, Ctrl+D.
+    expect(isClipboardKey(press("c", "KeyC", { ctrlKey: true }), MAC)).toBe(false);
+    expect(isClipboardKey(press("c", "KeyC"), PC)).toBe(false);
+    expect(isClipboardKey(press("c", "KeyC", { ctrlKey: true, altKey: true }), PC)).toBe(
+      false,
+    );
+    expect(isClipboardKey(press("d", "KeyD", { ctrlKey: true }), PC)).toBe(false);
   });
 });
 

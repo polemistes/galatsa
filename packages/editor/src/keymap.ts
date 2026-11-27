@@ -182,6 +182,22 @@ export function matchShortcut<T>(
   return undefined;
 }
 
+/**
+ * Mod+C, Mod+X or Mod+V (by character, or by place for layouts without Latin
+ * letters): left to the browser, which turns them into copy, cut and paste
+ * events.
+ */
+export function isClipboardKey(input: KeyInput, platform: Platform): boolean {
+  const mod = platform.mac ? input.metaKey : input.ctrlKey;
+  if (!mod || input.altKey || input.altGraph) return false;
+  const letter = /^[a-z]$/i.test(input.key)
+    ? input.key.toLowerCase()
+    : /^Key[A-Z]$/.test(input.code)
+      ? input.code.slice(3).toLowerCase()
+      : "";
+  return letter === "c" || letter === "x" || letter === "v";
+}
+
 /** A KeyInput from a DOM keyboard event. */
 export function keyInput(event: KeyboardEvent): KeyInput {
   return {

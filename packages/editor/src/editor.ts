@@ -50,6 +50,7 @@ import { fitCamera, panBy, screenToWorld, zoomAbout, type ScreenSize } from "./c
 import { documentAssets } from "./images.ts";
 import {
   detectPlatform,
+  isClipboardKey,
   matchShortcut,
   platformShortcut,
   type KeyInput,
@@ -510,6 +511,11 @@ export class Editor {
    * null if nothing used it; otherwise the caller prevents the browser's
    * default (also when the command was disabled, so that Ctrl+D with nothing
    * selected does not open the browser's bookmark dialog).
+   *
+   * Copy, cut and paste (Mod+C, Mod+X, Mod+V) are left to the browser, which
+   * then sends its copy, cut and paste events; the page passes those to
+   * `clipboardCopy`, `clipboardCut` and `clipboardPaste`. So the system
+   * clipboard can be used for them later.
    */
   keyDown(input: KeyInput & { readonly repeat?: boolean }): KeyResult {
     const toolEvent: ToolKeyEvent = {
@@ -519,6 +525,7 @@ export class Editor {
     };
     if (!this.#inputEnabled) return null;
     if (this.tools.keyDown(toolEvent)) return { kind: "tool-key" };
+    if (isClipboardKey(input, this.platform)) return null;
     const match = matchShortcut(input, this.platform, this.#keymapFor().map);
     if (match === undefined) return null;
     const target = match.value;
@@ -542,10 +549,29 @@ export class Editor {
     });
   }
 
+  /** The browser's copy event: copies the selection. True if something was copied. */
+  clipboardCopy(): boolean {
+    if (!this.#inputEnabled || this.#state.selection.length === 0) return false;
+    return this.runFromShortcut(BASICS.copy).ok;
+  }
+
+  /** The browser's cut event: copies the selection, then deletes it. */
+  clipboardCut(): boolean {
+    if (!this.clipboardCopy()) return false;
+    return this.runFromShortcut(BASICS.delete).ok;
+  }
+
+  /** The browser's paste event: pastes what the last copy gave. */
+  clipboardPaste(): boolean {
+    if (!this.#inputEnabled) return false;
+    return this.runFromShortcut(BASICS.paste).ok;
+  }
+
   /**
    * Runs a command the way a shortcut or a menu does: with the selection as
    * its elements (`{ ids }`), and for the basics' copy and paste through the
-   * editor's clipboard.
+   * editor's clipboard (in memory for now; the system clipboard comes with
+   * the selection tool).
    */
   runFromShortcut(command: ContributionId): CommandOutcome {
     const ids = this.#state.selection;

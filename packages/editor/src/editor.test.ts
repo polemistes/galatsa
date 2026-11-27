@@ -186,9 +186,16 @@ describe("editor core", () => {
       }) as { value: string }
     ).value;
     editor.services.selection.set([a]);
-    editor.keyDown(key("c", { ctrlKey: true }));
+    // Mod+C, Mod+X and Mod+V are left to the browser (no default prevented),
+    // which sends copy, cut and paste events; the page passes those on.
+    expect(editor.keyDown(key("c", { ctrlKey: true }))).toBeNull();
+    expect(editor.keyDown(key("x", { ctrlKey: true }))).toBeNull();
+    expect(editor.keyDown(key("v", { ctrlKey: true }))).toBeNull();
+    expect(editor.clipboard).toBeNull();
+    expect(shapes(editor)).toHaveLength(1);
+    expect(editor.clipboardCopy()).toBe(true);
     expect(editor.clipboard).not.toBeNull();
-    editor.keyDown(key("v", { ctrlKey: true }));
+    expect(editor.clipboardPaste()).toBe(true);
     expect(shapes(editor)).toHaveLength(2);
     // Paste selects what it pasted; Delete removes it.
     expect(editor.selection).not.toContain(a);
@@ -200,6 +207,11 @@ describe("editor core", () => {
       command: BASICS.selectAll,
     });
     expect(editor.selection).toEqual([a]);
+    // Cut: copied, then deleted; paste brings a copy back.
+    expect(editor.clipboardCut()).toBe(true);
+    expect(shapes(editor)).toEqual([]);
+    expect(editor.clipboardPaste()).toBe(true);
+    expect(shapes(editor)).toHaveLength(1);
   });
 
   it("selects with a click and a rubber band, and draws the selection and the band", () => {

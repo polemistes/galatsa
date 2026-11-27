@@ -157,6 +157,19 @@ export function mountEditor(
   on("keyup", (e) => {
     if (editor.keyUp(keyInput(e))) e.preventDefault();
   });
+  // Copy, cut and paste: the browser's events, while the canvas has focus
+  // (they are sent to the document when the focused element is not editable).
+  const clipboard = (type: "copy" | "cut" | "paste", handle: () => boolean): void => {
+    const listener = (event: ClipboardEvent): void => {
+      if (document.activeElement !== surface) return;
+      if (handle()) event.preventDefault();
+    };
+    document.addEventListener(type, listener);
+    offList.push(() => document.removeEventListener(type, listener));
+  };
+  clipboard("copy", () => editor.clipboardCopy());
+  clipboard("cut", () => editor.clipboardCut());
+  clipboard("paste", () => editor.clipboardPaste());
   // A middle click would start the browser's autoscroll.
   on("auxclick", (e) => e.preventDefault());
 
