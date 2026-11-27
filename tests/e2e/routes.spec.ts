@@ -76,7 +76,10 @@ async function withEditor<T, A>(
         window as unknown as { galatsaDev: { editor(): DevEditor | null } }
       ).galatsaDev.editor();
       if (editor === null) throw new Error("No editor");
-      return (new Function(`return (${source as string})`)() as typeof fn)(editor, a as A);
+      return (new Function(`return (${source as string})`)() as typeof fn)(
+        editor,
+        a as A,
+      );
     },
     [fn.toString(), arg] as const,
   );
@@ -305,7 +308,10 @@ test("routes and stops through the panel, each action one undo step", async ({
   // Deleting anyway takes it out of both routes, as one step.
   const before = (await routes(page)).undoSteps;
   await panel.getByRole("button", { name: "Delete stop" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Delete anyway" }).click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Delete anyway" })
+    .click();
   await expect(steps.getByRole("listitem")).toHaveCount(1);
   now = await routes(page);
   expect(now.routes).toEqual([[viewStop], []]);
