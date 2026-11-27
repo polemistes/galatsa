@@ -139,6 +139,7 @@ Pictures are stored for Chromium (`chromium`) and Firefox (`editor-firefox`) on 
 - **No screenshot pictures for WebKit** (Playwright's WebKit does not run on the development machine), and none made or compared in CI.
 - **The viewer bundle** has about 11 kB left of its 80 kB budget with the shapes; four more kinds of a few hundred bytes each fit, a larger addition to the viewing part may not.
 - The tool's preview leaves out images and text (a kind does not draw them).
+- **The drawing tool works in root space** (`ToolPointerEvent.world`) and inserts into the root. Under a camera anchored deep inside a frame it should take the pointer in the camera's space (`local`, interface 1.3) and insert into that frame, so shapes drawn there are placed to the pixel.
 
 ## Rejected alternatives
 
