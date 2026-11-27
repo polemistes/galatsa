@@ -65,7 +65,7 @@ There are no third-party extensions. All extensions are first-party code bundled
 
 **Shortcuts** are strings such as `"Mod+Shift+Z"`: modifiers (`Mod`, `Ctrl`, `Alt`, `Shift`, `Meta`; `Mod` is Ctrl on Windows and Linux, Cmd on macOS) and a `KeyboardEvent.key` value. `normalizeShortcut` gives the canonical spelling (modifiers in a fixed order, a single letter in lower case).
 
-**Interface version.** `EXTENSION_API_VERSION` is `{ major, minor }`, now 1.1 (1.1 added named undo steps, section 4.2). The minor version rises with every additive change (a new optional member, a new extension point); the major version rises with every incompatible one. An extension declares the version it was written against (`api`) and runs if the major versions are equal and its minor version is at most the host's.
+**Interface version.** `EXTENSION_API_VERSION` is `{ major, minor }`, now 1.2 (1.1 added named undo steps, section 4.2; 1.2 added `applies` to fields, section 3.9). The minor version rises with every additive change (a new optional member, a new extension point); the major version rises with every incompatible one. An extension declares the version it was written against (`api`) and runs if the major versions are equal and its minor version is at most the host's.
 
 ## 3. Element types
 
@@ -173,7 +173,7 @@ The policy is that of [0001](0001-document-model-and-file-format.md) section 9.4
 
 ### 3.9 Properties and fields
 
-A `FieldDefinition<S>` describes one adjustable value: a key, a label, a control (`number` with range and step, `color`, `select` with labelled options, `toggle`, `text`), a `quick` flag, a getter, and the id of the command that changes it. When the user changes the value, the editor runs that command with a `FieldChange` (`{ ids, key, value }`), so every change is one undo step and goes through the same checks as any other command. For several selected elements the editor reads each and shows a mixed state when they differ.
+A `FieldDefinition<S>` describes one adjustable value: a key, a label, a control (`number` with range and step, `color`, `select` with labelled options, `toggle`, `text`), a `quick` flag, a getter, and the id of the command that changes it. When the user changes the value, the editor runs that command with a `FieldChange` (`{ ids, key, value }`), so every change is one undo step and goes through the same checks as any other command. For several selected elements the editor reads each and shows a mixed state when they differ. A field MAY say which elements it is for with `applies(model)` (since 1.2): one element type with several variants lists every field once, and the shape type ([0008](0008-shapes.md)) offers corner rounding only for kinds with corners and fill only for closed outlines. The editor shows a field for a selection only when it applies to every selected element; without `applies`, a field always applies.
 
 An element type lists its fields in its editing part's `properties` (`S` is its model); the editor's properties panel shows them for the selection, filtered by mode (`host.properties(type, mode)`). This is how quick mode shows fewer adjustments than advanced mode on the same element: the shape sketch offers fill, outline and outline width in quick mode, and also the shape type, corner rounding and opacity in advanced mode. A value set in advanced mode stays in effect in quick mode; only its control is hidden (decided by the users).
 

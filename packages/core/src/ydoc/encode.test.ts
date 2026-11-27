@@ -100,6 +100,14 @@ describe("generic data encoding", () => {
     });
   });
 
+  it("writes null as a value of its own", () => {
+    const sample = buildSampleDocument();
+    setData(sample, "shape", "nothing", null);
+    const data = sample.getMap<Y.Map<unknown>>("elements").get("shape")!.get("data");
+    expect((data as Y.Map<unknown>).get("nothing")).toBeNull();
+    expect((data as Y.Map<unknown>).has("nothing")).toBe(true);
+  });
+
   it("encodes values JSON cannot express losslessly, and rejects them as plain JSON input", () => {
     const sample = buildSampleDocument();
     expect(() => setData(sample, "shape", "bad", Number.NaN)).toThrow(

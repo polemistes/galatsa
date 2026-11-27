@@ -482,6 +482,14 @@ export function setTypeVersion(
 /** Nesting level of a value directly in a data or ext map of a record. */
 const VALUE_LEVEL = 5;
 
+/**
+ * A data or ext value, checked with the grammar's reader. Wrapped, because
+ * `checked` takes a null result for a failed read, and null is a valid value.
+ */
+function checkedValue(value: DataValue): DataValue {
+  return checked("value", (p) => ({ value: readValue(value, p, VALUE_LEVEL) })).value;
+}
+
 /** Replaces one key of the element's data with a new value. */
 export function setData(
   doc: Y.Doc,
@@ -491,7 +499,7 @@ export function setData(
   options?: OpOptions,
 ): void {
   checkText("data key", key);
-  const read = checked("value", (p) => readValue(value, p, VALUE_LEVEL));
+  const read = checkedValue(value);
   transact(doc, options, () => dataMap(doc, id).set(key, valueToY(read)));
 }
 
@@ -504,7 +512,7 @@ export function setExt(
   options?: OpOptions,
 ): void {
   checkText("ext key", key);
-  const read = checked("value", (p) => readValue(value, p, VALUE_LEVEL));
+  const read = checkedValue(value);
   transact(doc, options, () => {
     const map = elementMap(doc, id);
     let ext = map.get("ext");
