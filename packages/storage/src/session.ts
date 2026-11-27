@@ -10,9 +10,19 @@ import {
   FileFormatError,
   assetIdOf,
   assetsToWrite,
+  normalizePreviews,
   writeGalatsaFile,
+  type AssetPreview,
+  type PreviewFacts,
+  type PreviewSource,
 } from "@galatsa/format";
 import * as Y from "yjs";
+import {
+  previewKey,
+  readPreviews,
+  storePreviews,
+  storedPreviewFacts,
+} from "./previews.ts";
 import { StorageError, type StorageBackend } from "./backend.ts";
 import {
   encodeCheckpointFile,
@@ -198,6 +208,10 @@ export interface SessionStart {
   assets?: ReadonlyMap<AssetId, Uint8Array>;
   /** Of those, the ones not yet in the store. */
   unstoredAssets?: ReadonlySet<AssetId>;
+  /** Reduced versions of image assets already in memory (from the file). */
+  previews?: ReadonlyMap<AssetId, readonly AssetPreview[]>;
+  /** Of those, the assets whose previews are not yet in the store. */
+  unstoredPreviews?: ReadonlySet<AssetId>;
   /** The channel to other tabs, opened before the document was read. */
   channel?: OpenChannel | null;
   /** Why the store could not take the document, if it could not. */
@@ -297,6 +311,13 @@ export class StorageSession {
   /** Asset bytes this session has seen, so a save works when the store does not. */
   #assets = new Map<AssetId, Uint8Array>();
   #unstoredAssets = new Set<AssetId>();
+  /**
+   * Previews this session made or opened from a file. A cache: kept so that a
+   * save works when the store does not, and written to the store later if it
+   * could not take them.
+   */
+  #previews = new Map<AssetId, readonly AssetPreview[]>();
+  #unstoredPreviews = new Set<AssetId>();
   #detach: (() => void)[] = [];
 
   /** Use DocumentStorage to open sessions. */
@@ -314,6 +335,9 @@ export class StorageSession {
     this.#startProblem = start.problem ?? null;
     for (const [assetId, bytes] of start.assets ?? []) this.#assets.set(assetId, bytes);
     for (const assetId of start.unstoredAssets ?? []) this.#unstoredAssets.add(assetId);
+    for (const [assetId, list] of start.previews ?? []) this.#previews.set(assetId, list);
+    for (const assetId of start.unstoredPreviews ?? [])
+      this.#unstoredPreviews.add(assetId);
     this.#retryDelay = ctx.timing.retryDelay;
     const now = ctx.scheduler.now();
     this.#lastCheckpointAt = now;
@@ -443,6 +467,75 @@ export class StorageSession {
   }
 
   /**
+   * Stores reduced versions of an image asset (docs/adr/0012), made when the
+   * image was added. They are kept in memory for the session too; if the
+   * store cannot take them now, they are written later. Never fails: they are
+   * a cache.
+   */
+  async putPreviews(
+    id: AssetId,
+    previews: readonly AssetPreview[],
+    options: { readonly replace?: boolean } = {},
+  ): Promise<void> {
+    const list = normalizePreviews(previews);
+    if (list.length === 0) return;
+    // Kept with what was there before: the new ones first, so they win.
+    this.#previews.set(
+      id,
+      normalizePreviews([...list, ...(this.#previews.get(id) ?? [])]),
+    );
+    try {
+      await storePreviews(this.#ctx.backend, this.slot, id, list, options.replace);
+    } catch {
+      this.#unstoredPreviews.add(id);
+    }
+  }
+
+  /**
+   * The pixel sizes and encodings of an asset's previews, smallest first,
+   * without their bytes (the renderer's list of versions). Empty if there are
+   * none, or the store cannot be read and none are in memory.
+   */
+  async previewFacts(id: AssetId): Promise<PreviewFacts[]> {
+    try {
+      const stored = await storedPreviewFacts(this.#ctx.backend, this.slot, id);
+      if (stored.length > 0) return stored;
+    } catch {
+      // The store cannot be read: what is in memory.
+    }
+    return (this.#previews.get(id) ?? []).map(({ width, height, mediaType }) => ({
+      width,
+      height,
+      mediaType,
+    }));
+  }
+
+  /** The bytes of one preview, or undefined if it is not there. */
+  async getPreview(id: AssetId, facts: PreviewFacts): Promise<Uint8Array | undefined> {
+    const kept = this.#previews
+      .get(id)
+      ?.find((p) => p.width === facts.width && p.height === facts.height);
+    if (kept) return kept.bytes;
+    try {
+      const bytes = await this.#ctx.backend.read(previewKey(this.slot, id, facts));
+      return bytes !== undefined && bytes.length > 0 ? bytes : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Every preview of an asset with its bytes, smallest first (for saving a file). */
+  async getPreviews(id: AssetId): Promise<AssetPreview[]> {
+    try {
+      const stored = await readPreviews(this.#ctx.backend, this.slot, id);
+      if (stored.length > 0) return stored;
+    } catch {
+      // The store cannot be read: what is in memory.
+    }
+    return [...(this.#previews.get(id) ?? [])];
+  }
+
+  /**
    * Saves the document, with its assets, to a file the user chose. The file is
    * replaced atomically (see FileTarget), and read back to check it where that
    * is possible. A save that fails leaves the old file as it was; the document
@@ -476,6 +569,7 @@ export class StorageSession {
       const download = !target.canRead;
       try {
         const assets = new Map<AssetId, Uint8Array>();
+        const previewsOf = new Map<AssetId, readonly AssetPreview[]>();
         for (const id of assetsToWrite(toSnapshot(this.doc))) {
           const asset = await this.#within(this.getAsset(id), wait).catch(
             () => undefined,
@@ -483,9 +577,22 @@ export class StorageSession {
           const bytes =
             asset === TIMED_OUT || asset === undefined ? this.#assets.get(id) : asset;
           if (bytes) assets.set(id, bytes);
+          const previews = await this.#within(this.getPreviews(id), wait).catch(
+            () => undefined,
+          );
+          const list =
+            previews === TIMED_OUT || previews === undefined || previews.length === 0
+              ? this.#previews.get(id)
+              : previews;
+          if (list) previewsOf.set(id, list);
         }
-        const writeOptions: { generator: string; thumbnail?: Uint8Array } = {
+        const writeOptions: {
+          generator: string;
+          thumbnail?: Uint8Array;
+          previews: PreviewSource;
+        } = {
           generator: this.#ctx.generator,
+          previews: (id) => previewsOf.get(id),
         };
         if (options.thumbnail) writeOptions.thumbnail = options.thumbnail;
         const written = writeGalatsaFile(this.doc, (id) => assets.get(id), writeOptions);
@@ -765,6 +872,11 @@ export class StorageSession {
       const bytes = this.#assets.get(id);
       if (bytes) await this.#ctx.backend.create(keys.asset(this.slot, id), bytes);
       this.#unstoredAssets.delete(id);
+    }
+    for (const id of [...this.#unstoredPreviews]) {
+      const list = this.#previews.get(id);
+      if (list) await storePreviews(this.#ctx.backend, this.slot, id, list);
+      this.#unstoredPreviews.delete(id);
     }
   }
 

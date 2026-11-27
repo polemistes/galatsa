@@ -718,6 +718,49 @@ describe("copy and paste", () => {
     expect(t.element(rootIds[0]!).pos.space).toBeNull();
   });
 
+  it("refuses rectangle stops in the space of an element outside the fragment", () => {
+    const t = setupBasics();
+    const outside = t.frame(300, 300);
+    const f = t.frame(0, 0);
+    const s = t.shape(10, 10);
+    const fragment = t.must<Fragment>(BASICS.copy, { ids: [f, s] });
+    const [frameId, shapeId] = fragment.roots as [string, string];
+    const rect = (space: string | null) => ({
+      kind: "rect" as const,
+      space,
+      x: 1,
+      y: 2,
+      w: 30,
+      h: 20,
+    });
+    const stop = (space: string | null) => ({
+      name: "",
+      view: rect(space),
+      notes: { $y: "text", delta: [] },
+      visibility: {},
+      transition: null,
+      rev: {},
+      deleted: {},
+      ext: {},
+    });
+    for (const space of [outside, shapeId, "missingElement00000000"]) {
+      const withStop = { ...fragment, stops: { stop1: stop(space) } };
+      expect(readFragment(withStop).problems).toEqual([
+        "stops.stop1: space must be a frame or group of the fragment",
+      ]);
+      refused(t, BASICS.paste, { fragment: withStop });
+      const withFallback = { ...fragment, fallbackViews: { stop1: rect(space) } };
+      expect(readFragment(withFallback).problems).toEqual([
+        "fallbackViews.stop1: space must be a frame or group of the fragment",
+      ]);
+    }
+    for (const space of [null, frameId]) {
+      expect(
+        readFragment({ ...fragment, stops: { stop1: stop(space) } }).problems,
+      ).toEqual([]);
+    }
+  });
+
   it("refuses frame and group data that is not theirs", () => {
     const t = setupBasics();
     const f = t.frame(0, 0);

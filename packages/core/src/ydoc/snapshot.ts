@@ -456,6 +456,27 @@ export function toSnapshot(doc: Y.Doc): DocumentSnapshot {
   return inspectDocument(doc).snapshot;
 }
 
+/**
+ * The stops and routes of the document, as `toSnapshot` reads them, without
+ * reading the elements: for an editor's route panel and route line, which
+ * follow every change and must not cost a pass over thousands of elements.
+ */
+export function stopsAndRoutesOf(doc: Y.Doc): Pick<DocumentSnapshot, "stops" | "routes"> {
+  const r = roots(doc);
+  const read = readSnapshot({
+    schemaVersion: 1,
+    minReaderVersion: 1,
+    id: "unknown",
+    title: "",
+    settings: {},
+    elements: {},
+    stops: rawRecords(r.stops as Y.Map<unknown>, STOP_SPECIAL),
+    routes: rawRecords(r.routes as Y.Map<unknown>, ROUTE_SPECIAL),
+    assets: {},
+  });
+  return { stops: read.snapshot!.stops, routes: read.snapshot!.routes };
+}
+
 /** The document's merge identity (section 9.3); empty if it has none. */
 export function lineageOf(doc: Y.Doc): string {
   const lineage = roots(doc).meta.get("lineage");

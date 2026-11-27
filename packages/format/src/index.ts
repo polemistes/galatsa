@@ -10,5 +10,6 @@ export * from "./hash.ts";
 export * from "./json.ts";
 export * from "./layout.ts";
 export * from "./migrations.ts";
+export * from "./previews.ts";
 export * from "./read.ts";
 export * from "./zip.ts";

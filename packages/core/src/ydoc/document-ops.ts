@@ -21,6 +21,8 @@ import { purgeSnapshot } from "../model/purge.ts";
 import { Resolver, lookupFromRecord } from "../model/resolve.ts";
 import { isRemoved, liveRoutes } from "../model/route.ts";
 import {
+  FRAME_TYPE,
+  GROUP_TYPE,
   setOwn,
   type AssetId,
   type DocumentSnapshot,
@@ -354,6 +356,13 @@ export interface PasteResult {
 /** The digest of the revision of a record that was just created. */
 const NEW = "";
 
+/** True if `space` is a frame or group of the fragment. */
+function pastedContainer(fragment: Fragment, space: ElementId | null): boolean {
+  if (space === null || !Object.hasOwn(fragment.elements, space)) return false;
+  const type = fragment.elements[space]!.type;
+  return type === FRAME_TYPE || type === GROUP_TYPE;
+}
+
 /**
  * Pastes a fragment with new ids (section 3.5). Roots go into `parent` (default:
  * the root), moved by (dx, dy), in front of what is there. Inside each element,
@@ -456,9 +465,15 @@ export function pasteFragment(
       : undefined;
     if (view.kind === "frame" && !ids.has(view.frame) && fallback) view = fallback;
     if (view.kind === "frame") view = { ...view, frame: mapId(view.frame)! };
-    else if (view.space === null)
+    else if (pastedContainer(fragment, view.space))
+      view = { ...view, space: mapId(view.space) };
+    else {
+      // In the roots' space: null, as copy writes it, and also a space that
+      // is not a container of the fragment, which would otherwise name an
+      // unrelated element of this document, or one that is not a container
+      // and so reads as the canvas root instead of the paste's target.
       view = { ...view, space: parent, x: view.x + dx, y: view.y + dy };
-    else view = { ...view, space: mapId(view.space) };
+    }
     const visibility: Stop["visibility"] = {};
     for (const element of Object.keys(stop.visibility)) {
       if (ids.has(element))

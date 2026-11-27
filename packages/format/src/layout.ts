@@ -3,6 +3,7 @@
 // Names and layout of a Galatsa file. Section 9.1 of
 // docs/adr/0001-document-model-and-file-format.md.
 
+import { isPreviewEntry } from "./previews.ts";
 import {
   Resolver,
   isRemoved,
@@ -22,6 +23,8 @@ export const ENTRY = {
   ydoc: "ydoc.bin",
   thumbnail: "thumbnail.png",
   assetsPrefix: "assets/",
+  /** Reduced versions of image assets, a cache (previews.ts). */
+  previewsPrefix: "previews/",
 } as const;
 
 /**
@@ -46,12 +49,14 @@ export interface Manifest {
 }
 
 /**
- * True for entry names a reader of this version uses. Others are skipped unread
- * and are not written back: an entry that must survive being saved by an older
- * version cannot be added without raising the minimum reader version
- * (section 9.4).
+ * True for entries a reader of this version uses, by name and compression
+ * method (0 stored, 8 deflated). Others are skipped unread and are not written
+ * back. Reduced versions of images must be stored: a compressed one is
+ * skipped, so that a cache never costs a reader memory for inflating
+ * (docs/adr/0012).
  */
-export function isKnownEntry(name: string): boolean {
+export function isKnownEntry(name: string, method = 0): boolean {
+  if (name.startsWith(ENTRY.previewsPrefix)) return method === 0 && isPreviewEntry(name);
   return (
     name === ENTRY.mimetype ||
     name === ENTRY.manifest ||

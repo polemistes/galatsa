@@ -85,6 +85,8 @@ export interface MenuClipboard {
   copy(): void;
   cut(): void;
   paste(): void;
+  /** Picks files to import ("Insert a file"); absent where files cannot be imported. */
+  chooseFiles?(): void;
 }
 
 /** The entries for the current selection. */
@@ -135,6 +137,16 @@ export function menuEntries(editor: Editor, clipboard: MenuClipboard): MenuEntry
       enabled: !editor.host.commands.gestureActive(env),
       group: 0,
       run: () => clipboard.paste(),
+    });
+  }
+  if (clipboard.chooseFiles !== undefined) {
+    const choose = clipboard.chooseFiles;
+    out.push({
+      key: "import",
+      label: "editor:import.choose",
+      enabled: !editor.host.commands.gestureActive(env) && !editor.importing,
+      group: 0,
+      run: () => choose(),
     });
   }
   command(BASICS.duplicate, 1);

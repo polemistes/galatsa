@@ -26,6 +26,7 @@ import type {
   PreviewChanges,
   TextEditingService,
 } from "@galatsa/extension-api/editing";
+import type { MessageValues } from "@galatsa/i18n";
 import type { CanvasRenderer } from "@galatsa/renderer";
 import { fitCamera, visibleWorld, type ScreenSize } from "./camera.ts";
 import type { EditorScene } from "./scene-source.ts";
@@ -46,6 +47,8 @@ export interface ServiceHost {
   previewChanged(): void;
   /** A point of root space on screen (exact for the pointer's own position). */
   toScreen(point: Point): Point;
+  /** Shows a message to the user. */
+  notify(message: string, values?: MessageValues): void;
   /** The text being edited in place (text-edit.ts). */
   readonly text?: TextEditingService;
 }
@@ -217,6 +220,12 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
     preview: {
       show: (changes) => setPreview(changes),
       clear: () => setPreview(null),
+    },
+    overlays: {
+      invalidate: () => host.invalidate(),
+    },
+    notices: {
+      show: (message, values) => host.notify(message, values),
     },
   };
 }

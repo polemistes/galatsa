@@ -259,6 +259,12 @@ importers:
       '@galatsa/extension-examples':
         specifier: workspace:*
         version: link:../../packages/extensions/examples
+      '@galatsa/extension-image':
+        specifier: workspace:*
+        version: link:../../packages/extensions/image
+      '@galatsa/extension-routes':
+        specifier: workspace:*
+        version: link:../../packages/extensions/routes
       '@galatsa/extension-shape':
         specifier: workspace:*
         version: link:../../packages/extensions/shape
@@ -437,6 +443,74 @@ importers:
         specifier: 13.6.33
         version: 13.6.33
     devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
+
+  packages/extensions/image:
+    dependencies:
+      '@galatsa/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../../extension-api
+      '@galatsa/extension-basics':
+        specifier: workspace:*
+        version: link:../basics
+      '@galatsa/i18n':
+        specifier: workspace:*
+        version: link:../../i18n
+      yjs:
+        specifier: 13.6.33
+        version: 13.6.33
+    devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))
+
+  packages/extensions/routes:
+    dependencies:
+      '@galatsa/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@galatsa/editor':
+        specifier: workspace:*
+        version: link:../../editor
+      '@galatsa/extension-api':
+        specifier: workspace:*
+        version: link:../../extension-api
+      '@galatsa/extension-transitions':
+        specifier: workspace:*
+        version: link:../transitions
+      '@galatsa/i18n':
+        specifier: workspace:*
+        version: link:../../i18n
+      svelte:
+        specifier: 5.57.3
+        version: 5.57.3(@typescript-eslint/types@8.72.2)
+      yjs:
+        specifier: 13.6.33
+        version: 13.6.33
+    devDependencies:
+      '@galatsa/extension-basics':
+        specifier: workspace:*
+        version: link:../basics
+      '@galatsa/extension-examples':
+        specifier: workspace:*
+        version: link:../examples
+      '@galatsa/extension-select':
+        specifier: workspace:*
+        version: link:../select
+      '@galatsa/renderer':
+        specifier: workspace:*
+        version: link:../../renderer
+      svelte-check:
+        specifier: 4.7.8
+        version: 4.7.8(picomatch@4.0.7)(svelte@5.57.3(@typescript-eslint/types@8.72.2))(typescript@6.0.3)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
       vitest:
         specifier: 'catalog:'
         version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.9.1))

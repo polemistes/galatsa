@@ -6,7 +6,8 @@
 // docs/adr/0005-extension-interface.md, section 4.8.
 
 import type { CameraView, ElementData, ElementId, Point, Rect } from "@galatsa/core";
-import type { ContributionId, Mode } from "./ids.ts";
+import type { MessageValues } from "@galatsa/i18n";
+import type { ContributionId, Label, Mode } from "./ids.ts";
 
 export interface SelectionService {
   /** Selected elements, in selection order. */
@@ -114,6 +115,24 @@ export interface PreviewService {
   clear(): void;
 }
 
+/** A message for the user from the editor (docs/adr/0013). */
+export interface NoticeService {
+  /**
+   * Shows a message (a command that could not be done, say) until the user
+   * dismisses it or another replaces it.
+   */
+  show(message: Label, values?: MessageValues): void;
+}
+
+/** The overlays of extensions (docs/adr/0013). */
+export interface OverlayService {
+  /**
+   * Something an overlay shows changed outside the document: draw again
+   * before the next repaint. Changes to the document redraw by themselves.
+   */
+  invalidate(): void;
+}
+
 /**
  * The editor's services. An open interface: the editor may add more by
  * declaration merging,
@@ -132,4 +151,6 @@ export interface EditorServices {
   readonly scene: SceneQuery;
   readonly text: TextEditingService;
   readonly preview: PreviewService;
+  readonly overlays: OverlayService;
+  readonly notices: NoticeService;
 }

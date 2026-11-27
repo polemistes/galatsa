@@ -32,6 +32,7 @@ import { mountEditor } from "./dom.ts";
 import { acceptsInput, EditorDocument } from "./document.ts";
 import { Editor } from "./editor.ts";
 import { loadExtensions } from "./extensions.ts";
+import { sessionAssetStore } from "./assets.ts";
 import { assetImages } from "./images.ts";
 import { checkDiscardFile, type DiscardFileCheck } from "./recovery.ts";
 
@@ -94,6 +95,8 @@ function encoderFor(createWorker: (() => WorkerLike) | undefined) {
 export class EditorApp {
   readonly i18n: I18n;
   readonly storage: DocumentStorage;
+  /** Reads of original image files by the renderer, for the open document (tests, diagnosis). */
+  readonly imageStats = { originalReads: 0 };
   readonly #options: EditorAppOptions;
   readonly #loaded: ReturnType<typeof loadExtensions>;
   readonly #stage: HTMLElement;
@@ -205,16 +208,22 @@ export class EditorApp {
       result.notices,
     );
     let editor: Editor | null = null;
+    this.imageStats.originalReads = 0;
+    // Images are drawn from their stored reduced versions; files imported
+    // into the document get theirs made when they are added (docs/adr/0012).
     const images = assetImages(
       session.doc,
-      (id: AssetId) => session.getAsset(id),
+      session,
       (assets) => editor?.renderer.imagesChanged(assets),
+      { stats: this.imageStats },
     );
     editor = new Editor({
       doc: session.doc,
       host: this.#loaded.host,
       i18n: this.i18n,
       images,
+      assetStore: sessionAssetStore(session),
+      adoptAssets: (ids) => this.#adoptAssets(session, ids),
       ...(this.#options.mode ? { mode: this.#options.mode } : {}),
       ...(this.#options.defaultTool ? { defaultTool: this.#options.defaultTool } : {}),
     });
@@ -234,6 +243,29 @@ export class EditorApp {
     this.#set({ phase: "editing", editor, document: doc, problem: null });
     editor.fitAll();
     this.#options.onEditor?.(editor);
+  }
+
+  /**
+   * Copies the bytes (and reduced versions) of pasted assets this document's
+   * store does not have from another stored document that has them. Returns
+   * the ones found nowhere.
+   */
+  async #adoptAssets(
+    session: StorageSession,
+    ids: readonly AssetId[],
+  ): Promise<AssetId[]> {
+    const missing: AssetId[] = [];
+    for (const id of ids) {
+      if ((await session.getAsset(id).catch(() => undefined)) !== undefined) continue;
+      const found = await this.storage.findAsset(id, session.slot).catch(() => null);
+      if (found === null) {
+        missing.push(id);
+        continue;
+      }
+      await session.putAsset(found.bytes);
+      if (found.previews.length > 0) await session.putPreviews(id, found.previews);
+    }
+    return missing;
   }
 
   #closeEditor(): void {

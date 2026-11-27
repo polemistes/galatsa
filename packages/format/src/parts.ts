@@ -24,6 +24,7 @@ import {
   type MigrationRegistry,
   type RawFile,
 } from "./migrations.ts";
+import { previewsFromEntries, type AssetPreview } from "./previews.ts";
 import { DEFAULT_ZIP_LIMITS, openZip, type ZipLimits } from "./zip.ts";
 
 export interface ReadOptions {
@@ -42,6 +43,11 @@ export interface SnapshotReadResult {
    * bytes passed in: they stay valid as long as those are not changed.
    */
   assets: Map<AssetId, Uint8Array>;
+  /**
+   * Reduced versions of image assets, smallest first, as views of the file
+   * bytes (docs/adr/0012). A cache: empty for files that have none.
+   */
+  previews: Map<AssetId, AssetPreview[]>;
   thumbnail: Uint8Array | null;
   /** The format version the file was written with. */
   formatVersion: number;
@@ -325,6 +331,7 @@ export async function readGalatsaSnapshot(
   return {
     snapshot: parts.snapshot,
     assets,
+    previews: previewsFromEntries(parts.entries, parts.snapshot.assets),
     thumbnail: parts.thumbnail,
     formatVersion: parts.formatVersion,
     ydoc: parts.ydoc,

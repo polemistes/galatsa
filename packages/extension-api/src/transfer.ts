@@ -97,6 +97,12 @@ export interface ImportSource {
 export interface ImportContext extends TransferContext {
   /** Where to put the bytes of images, video and fonts found in the file. */
   readonly assets: AssetStore;
+  /**
+   * The part of the canvas the user sees, in root space, when the import
+   * started (since 1.5), so an importer can size what it makes to the view
+   * (an image no larger than half of it, say). Absent without a view.
+   */
+  readonly view?: Rect;
 }
 
 /**

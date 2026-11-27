@@ -24,6 +24,7 @@ import {
   type Registered,
 } from "./host.ts";
 import { availableIn, type ContributionId, type Mode } from "./ids.ts";
+import type { OverlayDefinition } from "./overlay.ts";
 import type { PanelDefinition } from "./panel.ts";
 import type { ToolDefinition } from "./tool.ts";
 import type { ExporterDefinition, ImporterDefinition } from "./transfer.ts";
@@ -50,6 +51,7 @@ export class EditorHost extends ViewHost implements ExtensionLookup {
   readonly #importers = new Map<ContributionId, Registered<ImporterDefinition>>();
   readonly #exporters = new Map<ContributionId, Registered<ExporterDefinition>>();
   readonly #panels = new Map<ContributionId, Registered<PanelDefinition>>();
+  readonly #overlays = new Map<ContributionId, Registered<OverlayDefinition>>();
 
   constructor(options: HostOptions = {}) {
     super(options);
@@ -87,6 +89,7 @@ export class EditorHost extends ViewHost implements ExtensionLookup {
         ["importer", c.importers ?? []],
         ["exporter", c.exporters ?? []],
         ["panel", c.panels ?? []],
+        ["overlay", c.overlays ?? []],
       ],
       check: () => {
         const own = base.check();
@@ -141,6 +144,7 @@ export class EditorHost extends ViewHost implements ExtensionLookup {
     offer(this.#importers, c.importers);
     offer(this.#exporters, c.exporters);
     offer(this.#panels, c.panels);
+    offer(this.#overlays, c.overlays);
     for (const command of c.commands ?? [])
       undo.push(this.commands.register(id, command));
     return undo;
@@ -233,5 +237,10 @@ export class EditorHost extends ViewHost implements ExtensionLookup {
 
   panels(mode?: Mode): Registered<PanelDefinition>[] {
     return this.#inMode(this.#panels, mode);
+  }
+
+  /** Overlays, in activation order. */
+  overlays(mode?: Mode): Registered<OverlayDefinition>[] {
+    return this.#inMode(this.#overlays, mode);
   }
 }

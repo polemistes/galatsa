@@ -126,9 +126,14 @@ export function copyFragment(
     }
     if (
       view.kind === "rect" &&
-      !(view.space !== null && Object.hasOwn(elements, view.space))
+      !(
+        view.space !== null &&
+        Object.hasOwn(elements, view.space) &&
+        r.isContainer(view.space)
+      )
     ) {
-      // A rectangle outside the copied elements is expressed in the roots' space.
+      // A rectangle outside the copied containers is expressed in the roots'
+      // space (a space that is not a container is read as the root's).
       const from = view.space !== null && r.isContainer(view.space) ? view.space : null;
       const d = r.offset(from, space);
       copy.view = { ...view, space: null, x: view.x + d.x, y: view.y + d.y };
