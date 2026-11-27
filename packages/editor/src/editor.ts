@@ -36,7 +36,7 @@ import type {
   ToolKeyEvent,
   ToolPointerEvent,
 } from "@galatsa/extension-api/editing";
-import { BASICS } from "@galatsa/extension-basics";
+import { BASICS, readFragment } from "@galatsa/extension-basics";
 import type { I18n, MessageValues } from "@galatsa/i18n";
 import {
   CanvasRenderer,
@@ -47,6 +47,13 @@ import {
   type Viewport,
 } from "@galatsa/renderer";
 import type * as Y from "yjs";
+import {
+  fragmentBounds,
+  writeFragment,
+  type ClipboardContent,
+  type ClipboardTarget,
+} from "./clipboard.ts";
+import { ContextMenu } from "./context-menu.ts";
 import { fitCamera, panBy, screenToWorld, zoomAbout, type ScreenSize } from "./camera.ts";
 import { documentAssets } from "./images.ts";
 import {
@@ -159,6 +166,8 @@ export class Editor {
   #cursor: Cursor = "default";
   #keymap: { mode: Mode; map: Map<Shortcut, ShortcutTarget> } | null = null;
   #clipboard: Fragment | null = null;
+  /** The context menu (right click), drawn by the interface. */
+  readonly contextMenu = new ContextMenu();
   #disposed = false;
   #version = 0;
   #inputEnabled = true;
@@ -268,7 +277,11 @@ export class Editor {
     return this.#cursor;
   }
 
-  /** The fragment the last copy gave, for paste (in memory; not the system clipboard). */
+  /**
+   * The fragment the last copy in this editor gave. The system clipboard
+   * carries it too; this copy is for a paste from the context menu where the
+   * browser does not let the page read the clipboard.
+   */
   get clipboard(): Fragment | null {
     return this.#clipboard;
   }
@@ -545,8 +558,8 @@ export class Editor {
    *
    * Copy, cut and paste (Mod+C, Mod+X, Mod+V) are left to the browser, which
    * then sends its copy, cut and paste events; the page passes those to
-   * `clipboardCopy`, `clipboardCut` and `clipboardPaste`. So the system
-   * clipboard can be used for them later.
+   * `clipboardCopy`, `clipboardCut` and `clipboardPaste`, with the system
+   * clipboard's data.
    */
   keyDown(input: KeyInput & { readonly repeat?: boolean }): KeyResult {
     const toolEvent: ToolKeyEvent = {
@@ -580,35 +593,72 @@ export class Editor {
     });
   }
 
-  /** The browser's copy event: copies the selection. True if something was copied. */
-  clipboardCopy(): boolean {
+  /**
+   * The browser's copy event: copies the selection, onto `target` (the
+   * event's clipboard data) and into the editor's memory. True if something
+   * was copied.
+   */
+  clipboardCopy(target?: ClipboardTarget): boolean {
     if (!this.#inputEnabled || this.#state.selection.length === 0) return false;
-    return this.runFromShortcut(BASICS.copy).ok;
+    const outcome = this.runFromShortcut(BASICS.copy);
+    if (!outcome.ok) return false;
+    if (target !== undefined) writeFragment(target, outcome.value as Fragment);
+    return true;
   }
 
   /** The browser's cut event: copies the selection, then deletes it. */
-  clipboardCut(): boolean {
-    if (!this.clipboardCopy()) return false;
+  clipboardCut(target?: ClipboardTarget): boolean {
+    if (!this.clipboardCopy(target)) return false;
     return this.runFromShortcut(BASICS.delete).ok;
   }
 
-  /** The browser's paste event: pastes what the last copy gave. */
-  clipboardPaste(): boolean {
+  /**
+   * The browser's paste event, with what the clipboard holds (`readClipboard`
+   * of its data): pastes a fragment of the program. Text and files from other
+   * programs are not pasted yet (false, so the browser's default goes on).
+   * Without `content`, pastes what the last copy in this editor gave.
+   */
+  clipboardPaste(content?: ClipboardContent): boolean {
     if (!this.#inputEnabled) return false;
-    return this.runFromShortcut(BASICS.paste).ok;
+    const fragment = content === undefined ? this.#clipboard : content.fragment;
+    if (fragment === null || fragment === undefined) return false;
+    return this.run(BASICS.paste, { fragment, ...this.#pasteOffset(fragment) }).ok;
+  }
+
+  /**
+   * Where a paste lands: where the fragment was copied from if any of that is
+   * in view, otherwise in the middle of the view.
+   */
+  #pasteOffset(raw: unknown): { dx: number; dy: number } {
+    const { fragment } = readFragment(raw);
+    const bounds = fragment === null ? null : fragmentBounds(fragment);
+    if (bounds === null || this.screen.width === 0) return { dx: 0, dy: 0 };
+    const view = this.services.camera.viewport();
+    const seen =
+      bounds.x <= view.x + view.w &&
+      view.x <= bounds.x + bounds.w &&
+      bounds.y <= view.y + view.h &&
+      view.y <= bounds.y + bounds.h;
+    if (seen) return { dx: 0, dy: 0 };
+    return {
+      dx: view.x + view.w / 2 - (bounds.x + bounds.w / 2),
+      dy: view.y + view.h / 2 - (bounds.y + bounds.h / 2),
+    };
   }
 
   /**
    * Runs a command the way a shortcut or a menu does: with the selection as
-   * its elements (`{ ids }`), and for the basics' copy and paste through the
-   * editor's clipboard (in memory for now; the system clipboard comes with
-   * the selection tool).
+   * its elements (`{ ids }`); paste takes what the last copy gave, and copy
+   * keeps what it gave for that.
    */
   runFromShortcut(command: ContributionId): CommandOutcome {
     const ids = this.#state.selection;
     if (command === BASICS.paste) {
       if (this.#clipboard === null) return { ok: false, reason: "disabled" };
-      return this.run(command, { fragment: this.#clipboard });
+      return this.run(command, {
+        fragment: this.#clipboard,
+        ...this.#pasteOffset(this.#clipboard),
+      });
     }
     const outcome = this.run(command, ids.length > 0 ? { ids: [...ids] } : undefined);
     if (command === BASICS.copy && outcome.ok)

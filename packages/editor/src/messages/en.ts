@@ -29,5 +29,7 @@ export default {
   "recovery.otherDocument":
     "“{name}” is a different presentation. Nothing was discarded. Choose the file the presentation was last saved to.",
   "problems.heading": "Something was not loaded",
+  "menu.label": "Actions",
+  "menu.cut": "Cut",
   "panels.label": "Panels",
 };

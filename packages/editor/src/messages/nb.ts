@@ -29,5 +29,7 @@ export default {
   "recovery.otherDocument":
     "«{name}» er en annen presentasjon. Ingenting er forkastet. Velg filen presentasjonen sist ble lagret til.",
   "problems.heading": "Noe ble ikke lastet",
+  "menu.label": "Handlinger",
+  "menu.cut": "Klipp ut",
   "panels.label": "Paneler",
 };

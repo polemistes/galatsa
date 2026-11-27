@@ -13,9 +13,13 @@
 //   The real camera controls come later; this is enough to reach an element.
 // - Keys go to the editor while the canvas has focus. It takes focus when it
 //   is clicked.
+// - Copy, cut and paste carry the system clipboard; a right click opens the
+//   context menu (context-menu.ts).
 
 import type { I18n } from "@galatsa/i18n";
 import type { Editor, PointerInput } from "./editor.ts";
+import { decodeFragment, readClipboard } from "./clipboard.ts";
+import { openContextMenu, type MenuClipboard } from "./context-menu.ts";
 import { keyInput } from "./keymap.ts";
 import { PointerTracker, type PointerAction, type PointerFacts } from "./pointers.ts";
 
@@ -167,17 +171,80 @@ export function mountEditor(
   });
   // Copy, cut and paste: the browser's events, while the canvas has focus
   // (they are sent to the document when the focused element is not editable).
-  const clipboard = (type: "copy" | "cut" | "paste", handle: () => boolean): void => {
+  // They carry the system clipboard (clipboard.ts).
+  let clipboardHandled = false;
+  const clipboard = (
+    type: "copy" | "cut" | "paste",
+    handle: (data: DataTransfer | null) => boolean,
+  ): void => {
     const listener = (event: ClipboardEvent): void => {
       if (document.activeElement !== surface) return;
-      if (handle()) event.preventDefault();
+      if (handle(event.clipboardData)) {
+        clipboardHandled = true;
+        event.preventDefault();
+      }
     };
     document.addEventListener(type, listener);
     offList.push(() => document.removeEventListener(type, listener));
   };
-  clipboard("copy", () => editor.clipboardCopy());
-  clipboard("cut", () => editor.clipboardCut());
-  clipboard("paste", () => editor.clipboardPaste());
+  clipboard("copy", (data) => editor.clipboardCopy(data ?? undefined));
+  clipboard("cut", (data) => editor.clipboardCut(data ?? undefined));
+  clipboard("paste", (data) =>
+    data === null ? editor.clipboardPaste() : editor.clipboardPaste(readClipboard(data)),
+  );
+
+  // The context menu's clipboard entries go through the same events: the
+  // browser sends a copy or cut event for `execCommand` during a click. A
+  // paste event cannot be asked for that way; the asynchronous clipboard is
+  // read instead, and where the browser refuses, the editor's last copy is
+  // pasted.
+  const menuClipboard: MenuClipboard = {
+    copy: () => viaEvent("copy", () => editor.clipboardCopy()),
+    cut: () => viaEvent("cut", () => editor.clipboardCut()),
+    paste: () => {
+      const read = navigator.clipboard?.readText?.bind(navigator.clipboard);
+      if (read === undefined) {
+        editor.clipboardPaste();
+        return;
+      }
+      read().then(
+        (text) => {
+          const fragment = decodeFragment(text);
+          if (fragment !== undefined)
+            editor.clipboardPaste({ fragment, text: null, files: [] });
+        },
+        () => editor.clipboardPaste(),
+      );
+    },
+  };
+  const viaEvent = (command: "copy" | "cut", fallback: () => boolean): void => {
+    surface.focus({ preventScroll: true });
+    clipboardHandled = false;
+    let sent = false;
+    try {
+      sent = document.execCommand(command);
+    } catch {
+      sent = false;
+    }
+    // Without the event (a browser that refuses), the copy stays in memory.
+    if (!sent || !clipboardHandled) fallback();
+  };
+  on("contextmenu", (e) => {
+    e.preventDefault();
+    const rect = surface.getBoundingClientRect();
+    openContextMenu(
+      editor,
+      { x: e.clientX - rect.left, y: e.clientY - rect.top },
+      menuClipboard,
+    );
+  });
+  // The canvas takes the keys back when the menu closes.
+  const stopMenu = editor.contextMenu.subscribe(() => {
+    if (editor.contextMenu.state === null && surface.isConnected)
+      surface.focus({ preventScroll: true });
+  });
+  offList.push(stopMenu);
+  offList.push(() => editor.contextMenu.close());
   // A middle click would start the browser's autoscroll.
   on("auxclick", (e) => e.preventDefault());
 

@@ -9,6 +9,7 @@
 <script lang="ts">
   import { noticeText } from "@galatsa/storage";
   import type { EditorApp } from "../app.ts";
+  import ContextMenu from "./ContextMenu.svelte";
   import DocumentBar from "./DocumentBar.svelte";
   import Panels from "./Panels.svelte";
   import Problems from "./Problems.svelte";
@@ -40,6 +41,7 @@
   {/if}
   {#if state.editor !== null}
     <Panels editor={state.editor} />
+    <ContextMenu editor={state.editor} />
   {/if}
   {#if offer !== undefined}
     {#key offer.slot}
