@@ -213,7 +213,13 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     const only = items.length === 1 ? items[0]! : null;
     if (only !== null && (only.at.w > 0 || only.at.h > 0)) {
       const at = only.at;
-      box = { cx: at.worldX + at.w / 2, cy: at.worldY + at.h / 2, w: at.w, h: at.h, rot: at.rot };
+      box = {
+        cx: at.worldX + at.w / 2,
+        cy: at.worldY + at.h / 2,
+        w: at.w,
+        h: at.h,
+        rot: at.rot,
+      };
       single = only;
     } else {
       const rect = union(
@@ -231,7 +237,11 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       scale: session.isEnabled(BASICS.scale, { ids, anchor: centre, factor: 2 }),
       resize:
         single !== null &&
-        session.isEnabled(BASICS.resize, { id: single.id, w: single.at.w, h: single.at.h }),
+        session.isEnabled(BASICS.resize, {
+          id: single.id,
+          w: single.at.w,
+          h: single.at.h,
+        }),
       rotate: session.isEnabled(
         BASICS.rotate,
         single !== null ? { ids, by: 1 } : { ids, by: 1, about: centre },
@@ -373,7 +383,7 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     const f = d.frame;
     const { u, v } = d.handle;
     if (event.modifiers.shift && f.resize && f.single !== null) {
-      const args = resizeTo(f, u, v, event);
+      const args = resizeTo(f, u, v, d.start, event);
       d.result = { kind: "resize", args };
       d.gesture.preview(resizePreview(args));
       return;
@@ -384,7 +394,12 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       : fromBox(f.box, { x: (-u * f.box.w) / 2, y: (-v * f.box.h) / 2 });
     const longest = Math.max(f.box.w, f.box.h);
     const min = longest > 0 ? MIN_SIZE / zoom() / longest : 1e-9;
-    const factor = scaleFactor(anchor, corner, event.world, min);
+    // The corner follows the pointer from where it was taken.
+    const to = {
+      x: corner.x + event.world.x - d.start.world.x,
+      y: corner.y + event.world.y - d.start.world.y,
+    };
+    const factor = scaleFactor(anchor, corner, to, min);
     d.result = { kind: "scale", anchor, factor };
     let steps;
     try {
@@ -398,7 +413,8 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       if (error instanceof LockedError) return;
       throw error;
     }
-    const changes: Record<ElementId, { x: number; y: number; w?: number; h?: number }> = {};
+    const changes: Record<ElementId, { x: number; y: number; w?: number; h?: number }> =
+      {};
     for (const step of steps)
       changes[step.id] =
         step.w !== undefined && step.h !== undefined
@@ -412,14 +428,20 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     f: Frame,
     u: -1 | 0 | 1,
     v: -1 | 0 | 1,
+    start: ToolPointerEvent,
     event: ToolPointerEvent,
   ): ResizeResult => {
     const single = f.single!;
+    // The handle follows the pointer from where it was taken.
+    const handle = fromBox(f.box, { x: (u * f.box.w) / 2, y: (v * f.box.h) / 2 });
     const next = resizedBox(
       f.box,
       u,
       v,
-      event.world,
+      {
+        x: handle.x + event.world.x - start.world.x,
+        y: handle.y + event.world.y - start.world.y,
+      },
       MIN_SIZE / zoom(),
       event.modifiers.alt,
     );
@@ -439,7 +461,10 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     [args.id]: { x: args.px, y: args.py, w: args.w, h: args.h },
   });
 
-  const rotateTo = (d: Extract<Drag, { kind: "rotate" }>, event: ToolPointerEvent): void => {
+  const rotateTo = (
+    d: Extract<Drag, { kind: "rotate" }>,
+    event: ToolPointerEvent,
+  ): void => {
     let by = normalizeAngle(angleAbout(d.pivot, event.world) - d.from);
     const single = d.frame.single;
     if (event.modifiers.shift) {
@@ -477,8 +502,35 @@ export function startSelectTool(session: ToolSession): ToolHandler {
     const scene = services().scene;
     const hit = scene.elementAt(event.world, PICK / zoom());
     const overSelection =
-      f !== null && f.move && (hit === null ? insideBox(f.box, event.world) : f.ids.includes(hit));
+      f !== null &&
+      f.move &&
+      (hit === null ? insideBox(f.box, event.world) : f.ids.includes(hit));
     setCursor(hit !== null || overSelection ? "move" : "default");
+  };
+
+  /** Follows the pointer during a drag. */
+  const follow = (d: Drag, event: ToolPointerEvent): void => {
+    switch (d.kind) {
+      case "band":
+        d.current = event.world;
+        session.requestOverlay();
+        return;
+      case "move":
+        moveTo(d, event);
+        return;
+      case "corner":
+        scaleTo(d, event);
+        return;
+      case "side": {
+        const args = resizeTo(d.frame, d.handle.u, d.handle.v, d.start, event);
+        d.result = args;
+        d.gesture.preview(resizePreview(args));
+        return;
+      }
+      case "rotate":
+        rotateTo(d, event);
+        return;
+    }
   };
 
   // -------------------------------------------------------------------------
@@ -492,7 +544,8 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       const s = services();
       const selection = s.selection.get();
       const f = frame();
-      if (f !== null && !event.modifiers.shift) {
+      // A handle comes first, also with Shift (a free resize from a corner).
+      if (f !== null) {
         const handle = handleUnder(f, event.world);
         if (handle !== null) {
           startHandle(event, f, handle);
@@ -534,32 +587,23 @@ export function startSelectTool(session: ToolSession): ToolHandler {
         hover(event);
         return;
       }
-      switch (d.kind) {
-        case "band":
-          d.current = event.world;
-          session.requestOverlay();
-          return;
-        case "move":
-          moveTo(d, event);
-          return;
-        case "corner":
-          scaleTo(d, event);
-          return;
-        case "side": {
-          const args = resizeTo(d.frame, d.handle.u, d.handle.v, event);
-          d.result = args;
-          d.gesture.preview(resizePreview(args));
-          return;
-        }
-        case "rotate":
-          rotateTo(d, event);
-          return;
-      }
+      follow(d, event);
     },
 
     pointerUp(event) {
       const d = drag;
       if (d === null) return;
+      // Where the pointer was let go counts, also without a move event there;
+      // a handle pressed and let go without moving changes nothing.
+      const still =
+        Math.hypot(event.screen.x - d.start.screen.x, event.screen.y - d.start.screen.y) <
+        CLICK_SLOP;
+      if (still && d.kind !== "band" && d.kind !== "move") {
+        endDrag(true);
+        hover(event);
+        return;
+      }
+      follow(d, event);
       drag = null;
       session.requestOverlay();
       switch (d.kind) {
@@ -577,7 +621,11 @@ export function startSelectTool(session: ToolSession): ToolHandler {
             if (d.clicked !== null) services().selection.set([d.clicked]);
             return;
           }
-          d.gesture.commit(BASICS.move, { ids: [...d.ids], dx: d.offset.x, dy: d.offset.y });
+          d.gesture.commit(BASICS.move, {
+            ids: [...d.ids],
+            dx: d.offset.x,
+            dy: d.offset.y,
+          });
           break;
         case "corner":
           if (d.result === null) d.gesture.cancel();
@@ -634,7 +682,11 @@ export function startSelectTool(session: ToolSession): ToolHandler {
       const ids = services().selection.get();
       if (arrow === undefined || ids.length === 0) return false;
       const step = (NUDGE * (event.modifiers.shift ? 10 : 1)) / zoom();
-      session.run(BASICS.move, { ids: [...ids], dx: arrow[0] * step, dy: arrow[1] * step });
+      session.run(BASICS.move, {
+        ids: [...ids],
+        dx: arrow[0] * step,
+        dy: arrow[1] * step,
+      });
       return true;
     },
 
