@@ -333,12 +333,11 @@ export class Editor {
 
   /**
    * Starts editing an element's text in place, with the caret at a point of
-   * the drawing area or at the end; the element becomes the selection. False
-   * if it cannot be edited in place (not a text-like type, locked, or no
-   * mounted canvas). When a press of the tool made the element (the text
-   * tool), an empty box is taken back as if never made when editing ends.
-   * While the text is edited the element is outlined, not selected; it is
-   * selected when editing ends.
+   * the drawing area or at the end. False if it cannot be edited in place
+   * (not a text-like type, locked, or no mounted canvas). When a press of
+   * the tool made the element (the text tool), an empty box is taken back as
+   * if never made when editing ends. While the text is edited the element is
+   * outlined, not selected; it is selected when editing ends.
    */
   editText(id: ElementId, caretAt?: Point): boolean {
     const press = this.#press;

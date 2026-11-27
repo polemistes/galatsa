@@ -8,11 +8,11 @@
 
 import type { ElementId } from "@galatsa/core";
 import { dataMap, initDocument } from "@galatsa/core/ydoc";
+import type { TextContent } from "@galatsa/extension-api";
 import { SELECT_TOOL } from "@galatsa/extension-select";
 import { TEXT_COMMANDS, TEXT_TYPE, textExtension } from "@galatsa/extension-text";
 import {
   parseRichText,
-  type TextContent,
   type TextEditOptions,
   type TextEditSession,
   type TextSelection,

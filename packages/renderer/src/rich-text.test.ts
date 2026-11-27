@@ -4,6 +4,7 @@
 // lists, the edits of the editing element (diff and moving one past another),
 // and drawing a fragment as wide as the layout says.
 
+import type { TextRun } from "@galatsa/core";
 import { describe, expect, it } from "vitest";
 import { CanvasState } from "./canvas.ts";
 import { CanvasDrawContext } from "./draw-context.ts";
@@ -16,7 +17,7 @@ const STYLE = { fontFamily: "sans", fontSize: 10, color: "#000", align: "left" }
 
 describe("rich text", () => {
   it("splits paragraphs at line breaks; a final one ends the last paragraph", () => {
-    const shape = (delta: Array<{ insert: string; attributes?: object }>) =>
+    const shape = (delta: TextRun[]) =>
       parseRichText({ $y: "text", delta }).paragraphs.map((p) => [
         p.runs.map((r) => r.text).join(""),
         p.start,
