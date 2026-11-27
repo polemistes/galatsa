@@ -1,0 +1,46 @@
+{
+  "name": "@galatsa/extension-routes",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Built-in routes extension: stops from the view or from frames, several routes sharing stops, what each stop shows and hides, speaker notes, the route drawn on the canvas, and jumps to a stop",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@galatsa/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": [
+    "**/*.svelte",
+    "**/*.css"
+  ],
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+  },
+  "dependencies": {
+    "@galatsa/core": "workspace:*",
+    "@galatsa/editor": "workspace:*",
+    "@galatsa/extension-api": "workspace:*",
+    "@galatsa/extension-transitions": "workspace:*",
+    "@galatsa/i18n": "workspace:*",
+    "svelte": "5.57.3",
+    "yjs": "13.6.33"
+  },
+  "devDependencies": {
+    "@galatsa/extension-basics": "workspace:*",
+    "@galatsa/extension-examples": "workspace:*",
+    "@galatsa/extension-select": "workspace:*",
+    "@galatsa/renderer": "workspace:*",
+    "svelte-check": "4.7.8",
+    "typescript": "6.0.3",
+    "vitest": "catalog:"
+  }
+}

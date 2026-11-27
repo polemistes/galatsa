@@ -33,7 +33,7 @@
     {#each open.shown as { panel, View } (panel.id)}
       {#if View !== null}
         <section aria-label={t(panel.definition.label)}>
-          <View context={open.context} />
+          <View context={open.context} i18n={editor.i18n} />
         </section>
       {/if}
     {/each}

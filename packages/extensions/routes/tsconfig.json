@@ -1,0 +1,16 @@
+{
+  // Browser library: the panel is a Svelte component (DOM types). The commands,
+  // the overlay and the jumps touch no DOM when imported, so the tests run in Node.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.mts",
+    "src/**/*.cts",
+    "src/**/*.svelte"
+  ]
+}

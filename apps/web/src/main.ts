@@ -13,6 +13,7 @@
 
 import { EditorApp, renderEditorUi, type Editor } from "@galatsa/editor";
 import { imageExtension, textExtension } from "@galatsa/extension-examples";
+import { routesExtension } from "@galatsa/extension-routes";
 import { shapeExtension } from "@galatsa/extension-shape";
 import { browserLocaleStorage, createI18n, isLocale } from "@galatsa/i18n";
 import { webMessages } from "./messages/index.ts";
@@ -50,7 +51,7 @@ const ready = EditorApp.start({
   // selection sketches are left out: the shape extension replaces the one, and
   // the editor's own selection tool (galatsa.select) is loaded first and is
   // the default tool.
-  extensions: [textExtension, shapeExtension, imageExtension],
+  extensions: [textExtension, shapeExtension, imageExtension, routesExtension],
   createWorker: () =>
     new Worker(new URL("./checkpoint-worker.ts", import.meta.url), { type: "module" }),
   mode: params.get("mode") === "advanced" ? "advanced" : "quick",
