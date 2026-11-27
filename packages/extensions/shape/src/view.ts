@@ -23,7 +23,12 @@ export * from "./outline.ts";
 export { SHAPE_KINDS } from "./kinds/index.ts";
 export { shapeMessages } from "./messages/index.ts";
 export { drawShape, hitShape, shapeBounds, placedContext } from "./draw.ts";
-export { GALLERY_CELL, shapeGallery, type GalleryCase } from "./gallery.ts";
+export {
+  GALLERY_CELL,
+  shapeGallery,
+  type GalleryCase,
+  type GalleryStrip,
+} from "./gallery.ts";
 
 export const SHAPE_EXTENSION = "galatsa.shape";
 /** The one element type of every shape; the data's `kind` says which shape. */

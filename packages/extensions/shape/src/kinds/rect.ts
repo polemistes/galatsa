@@ -10,10 +10,8 @@ export const rect = defineShapeKind({
   shortcut: "r",
   closed: true,
   corners: true,
-  // Sharp corners, as rectangles are expected to have; the miter of a right
-  // angle reaches √2/2 outline widths out.
+  // Sharp corners, as rectangles are expected to have.
   join: "miter",
-  strokeReach: Math.SQRT1_2,
   outline({ body }, { w, h, cornerRadius }) {
     if (cornerRadius > 0) body.roundRect(0, 0, w, h, cornerRadius);
     else body.rect(0, 0, w, h);

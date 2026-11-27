@@ -3,7 +3,12 @@
 // Drawing, hit testing and bounds of shapes, from the kind's outline alone.
 
 import type { ElementId, Rect } from "@galatsa/core";
-import { drawPlaceholder, type DrawContext, type Path } from "@galatsa/extension-api";
+import {
+  drawPlaceholder,
+  placeholderLabel,
+  type DrawContext,
+  type Path,
+} from "@galatsa/extension-api";
 import {
   extent,
   flatten,
@@ -11,6 +16,7 @@ import {
   outlineDistance,
   PlacedPath,
   RecordingPath,
+  strokeReach,
   type Flattened,
   type Placement,
 } from "./geometry.ts";
@@ -46,12 +52,9 @@ export function drawShape(
 ): void {
   const kind = table.kinds.get(model.kind);
   if (kind === undefined) {
-    drawPlaceholder(
-      ctx,
-      { id: box.id ?? "", w: box.w, h: box.h },
-      "newer",
-      `${typeId}: ${model.kind}`,
-    );
+    const type = `${typeId}: ${model.kind}`;
+    if (box.h * ctx.scale < THIN_BOX) drawThinPlaceholder(ctx, box, model, type);
+    else drawPlaceholder(ctx, { id: box.id ?? "", w: box.w, h: box.h }, "newer", type);
     return;
   }
   const body = ctx.createPath();
@@ -79,6 +82,44 @@ export function drawShape(
   });
 }
 
+/** A box less high than this, in device pixels, is a line, drawn as one when its kind is unknown. */
+const THIN_BOX = 8;
+/** The placeholder's colour, as the extension interface's placeholders have it. */
+const PLACEHOLDER_LINE = "rgb(100 116 139)";
+
+/**
+ * The placeholder of a shape of an unknown kind in a box that is (nearly) 0
+ * high, such as an arrow of a newer version: a solid line along the middle of
+ * the box, at least 2 device pixels wide, with the usual label above it. The
+ * dashed outline of other placeholders would be a hairline here.
+ */
+function drawThinPlaceholder(
+  ctx: DrawContext,
+  box: Box,
+  model: ShapeModel,
+  type: string,
+): void {
+  const pixel = 1 / Math.max(ctx.scale, Number.MIN_VALUE);
+  const line = ctx.createPath();
+  line.moveTo(0, box.h / 2);
+  line.lineTo(box.w, box.h / 2);
+  ctx.stroke(line, {
+    color: PLACEHOLDER_LINE,
+    width: Math.max(2 * pixel, model.stroke !== null ? model.strokeWidth : 0),
+    cap: "round",
+  });
+  if (ctx.detail !== "full") return;
+  const fontSize = 12 * pixel;
+  if (box.w <= 4 * fontSize) return;
+  const { label, values } = placeholderLabel("newer", type);
+  const layout = ctx.layoutText(
+    ctx.t(label, values),
+    { fontFamily: "sans-serif", fontSize, color: PLACEHOLDER_LINE, align: "center" },
+    box.w,
+  );
+  ctx.drawText(layout, 0, box.h / 2 - layout.height - 4 * pixel);
+}
+
 /** The outline of a shape, recorded. */
 function recorded(kind: ShapeKind, model: ShapeModel, box: Box) {
   const body = new RecordingPath();
@@ -95,11 +136,6 @@ function recorded(kind: ShapeKind, model: ShapeModel, box: Box) {
   return { body, marks: marks as RecordingPath | null };
 }
 
-function strokeReach(kind: ShapeKind, model: ShapeModel): number {
-  if (model.stroke === null) return 0;
-  return model.strokeWidth * (kind.strokeReach ?? 0.5);
-}
-
 /** Chord error wanted for bounds, which the error is added to: a thousandth of the box. */
 function boundsTolerance(box: Box): number {
   return Math.max(Math.abs(box.w), Math.abs(box.h), Number.MIN_VALUE) / 1024;
@@ -109,7 +145,11 @@ function boundsTolerance(box: Box): number {
 export function shapeBounds(table: KindTable, model: ShapeModel, box: Box): Rect {
   const kind = table.kinds.get(model.kind);
   let area: Rect = { x: 0, y: 0, w: box.w, h: box.h };
-  if (kind === undefined) return area;
+  if (kind === undefined) {
+    // The placeholder's line of an unknown thin kind is as wide as its outline.
+    const out = model.stroke !== null ? model.strokeWidth / 2 : 0;
+    return { x: -out, y: -out, w: box.w + 2 * out, h: box.h + 2 * out };
+  }
   const { body, marks } = recorded(kind, model, box);
   const tolerance = boundsTolerance(box);
   const grow = (rect: Rect, by: number): Rect => ({
@@ -130,8 +170,15 @@ export function shapeBounds(table: KindTable, model: ShapeModel, box: Box): Rect
   };
   const bodyLines = flatten(body.ops, tolerance);
   const bodyExtent = extent(bodyLines.lines);
-  if (bodyExtent !== null)
-    area = union(area, grow(bodyExtent, bodyLines.error + strokeReach(kind, model)));
+  if (bodyExtent !== null) {
+    // How far the stroke reaches, from the outline's own corners and ends.
+    const reach =
+      model.stroke === null
+        ? 0
+        : model.strokeWidth *
+          strokeReach(bodyLines.lines, kind.join ?? "round", kind.cap ?? "round");
+    area = union(area, grow(bodyExtent, bodyLines.error + reach));
+  }
   if (marks !== null && model.stroke !== null) {
     const markLines = flatten(marks.ops, tolerance);
     const markExtent = extent(markLines.lines);
@@ -154,13 +201,15 @@ export function hitShape(
   tolerance: number,
 ): boolean {
   const kind = table.kinds.get(model.kind);
-  if (kind === undefined)
+  if (kind === undefined) {
+    const grow = tolerance + (model.stroke !== null ? model.strokeWidth / 2 : 0);
     return (
-      point.x >= -tolerance &&
-      point.y >= -tolerance &&
-      point.x <= box.w + tolerance &&
-      point.y <= box.h + tolerance
+      point.x >= -grow &&
+      point.y >= -grow &&
+      point.x <= box.w + grow &&
+      point.y <= box.h + grow
     );
+  }
   const { body, marks } = recorded(kind, model, box);
   const size = Math.max(Math.abs(box.w), Math.abs(box.h));
   const flat = (ops: RecordingPath): Flattened =>

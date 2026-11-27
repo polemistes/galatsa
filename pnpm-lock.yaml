@@ -437,6 +437,9 @@ importers:
       '@galatsa/extension-api':
         specifier: workspace:*
         version: link:../../extension-api
+      '@galatsa/extension-basics':
+        specifier: workspace:*
+        version: link:../basics
       '@galatsa/i18n':
         specifier: workspace:*
         version: link:../../i18n

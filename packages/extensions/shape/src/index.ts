@@ -5,7 +5,9 @@
 // "@galatsa/extension-shape/view", which has only the viewing part. See
 // docs/adr/0008-shapes.md and README.md.
 
-import type { ElementId, Json } from "@galatsa/core";
+import { Resolver, type ElementData, type ElementId, type Json } from "@galatsa/core";
+import { dataMap, edit, moveElement, resizeElement, yLookup } from "@galatsa/core/ydoc";
+import { canTarget, isOpenContainer } from "@galatsa/extension-basics";
 import {
   capabilitiesOf,
   defineCommand,
@@ -13,6 +15,7 @@ import {
   defineElementEditing,
   elementFacts,
   insertElement,
+  readData,
   updateElementData,
   type CommandContext,
   type EditExtension,
@@ -25,6 +28,8 @@ import { SHAPE_KINDS } from "./kinds/index.ts";
 import {
   isValidValue,
   newShapeData,
+  normalizeValue,
+  readShape,
   STYLE_KEYS,
   type KindTable,
   type ShapeModel,
@@ -48,6 +53,8 @@ export {
   dragBox,
   dragLine,
   normalizeRotation,
+  STROKE_PIXELS,
+  strokeWidthAt,
   type InsertShapeArgs,
 } from "./tool.ts";
 
@@ -106,12 +113,22 @@ function readFieldChange(args: unknown): FieldChange | undefined {
   return { ids, key, value: value as Json };
 }
 
-function allEditableShapes(ctx: CommandContext, ids: readonly ElementId[]): boolean {
+/**
+ * True if every id is a shape the user may change: one they see, not locked
+ * and not in a locked container (the rules of the basic commands), whose type
+ * is loaded and not older than it.
+ */
+function allEditableShapes(
+  ctx: CommandContext,
+  r: Resolver,
+  ids: readonly ElementId[],
+): boolean {
   try {
     return (
       ids.length > 0 &&
       ids.every(
         (id) =>
+          canTarget(ctx, r, id) &&
           elementFacts(ctx, id).type === SHAPE_TYPE &&
           capabilitiesOf(ctx, id).editContent,
       )
@@ -120,6 +137,69 @@ function allEditableShapes(ctx: CommandContext, ids: readonly ElementId[]): bool
     // An id that is not an element.
     return false;
   }
+}
+
+/** The document as resolved now. */
+function resolve(ctx: Pick<CommandContext, "doc">): Resolver {
+  return new Resolver(yLookup(ctx.doc));
+}
+
+/**
+ * The data writes of a change, for one shape: the key itself, and for a
+ * change of kind the new kind's parameters with their defaults (the old
+ * kind's are removed, `removed`). Undefined if the change is not possible:
+ * a change of kind from a kind this version does not know.
+ */
+function writesFor(
+  table: KindTable,
+  data: ElementData,
+  change: FieldChange,
+): { writes: ElementData; removed: string[] } | undefined {
+  const value = normalizeValue(change.value);
+  if (change.key !== "kind") return { writes: { [change.key]: value }, removed: [] };
+  const from = table.kinds.get(readShape(table, data, () => {}).kind);
+  const to = table.kinds.get(value as string);
+  if (from === undefined || to === undefined) return undefined;
+  const writes: Record<string, Json> = { kind: to.kind };
+  for (const param of to.params ?? [])
+    writes[param.key] =
+      from.params?.includes(param) && Object.hasOwn(data, param.key)
+        ? (data[param.key] as Json)
+        : param.default;
+  const removed = (from.params ?? [])
+    .map((p) => p.key)
+    .filter((key) => !Object.hasOwn(writes, key) && Object.hasOwn(data, key));
+  return { writes: writes as ElementData, removed };
+}
+
+/** True if the data with `writes` reads without a report: what `updateElementData` checks. */
+function readsCleanly(table: KindTable, data: ElementData, writes: ElementData): boolean {
+  let clean = true;
+  readShape(table, { ...data, ...writes }, () => (clean = false));
+  return clean;
+}
+
+/**
+ * The box a shape gets when its kind changes, keeping its centre and
+ * rotation: a kind drawn as a line gets a box 0 high; a box 0 high (a line)
+ * that becomes a kind drawn as a box gets a square as wide as the line.
+ * Undefined when the box stays as it is.
+ */
+function boxFor(
+  r: Resolver,
+  id: ElementId,
+  to: ShapeKind,
+): { x: number; y: number; w: number; h: number } | undefined {
+  const size = r.get(id)?.size;
+  if (size === undefined) return undefined;
+  const { w, h } = size;
+  let next: number;
+  if (to.drawing === "line") next = 0;
+  else if (h === 0) next = w;
+  else return undefined;
+  if (next === h) return undefined;
+  const at = r.localPosition(id);
+  return { x: at.x, y: at.y + (h - next) / 2, w, h: next };
 }
 
 /** The field of a kind parameter, for the kinds that list it. */
@@ -244,10 +324,15 @@ export function createShapeExtension(
     label: shapeLabel("insert"),
     undoLabel: shapeLabel("insert.step"),
     quick: true,
-    enabled: (_ctx, args) => readInsertArgs(table, args) !== undefined,
+    enabled: (ctx, args) => {
+      const a = readInsertArgs(table, args);
+      return a !== undefined && isOpenContainer(resolve(ctx), a.parent ?? null);
+    },
     execute(ctx, args) {
       const a = readInsertArgs(table, args);
-      if (a === undefined) throw new Error("Invalid shape insert arguments");
+      // Into the root or a container the user sees that is not locked.
+      if (a === undefined || !isOpenContainer(resolve(ctx), a.parent ?? null))
+        throw new Error("Invalid shape insert arguments");
       const id = insertElement(ctx, {
         type: SHAPE_TYPE,
         parent: a.parent ?? null,
@@ -262,29 +347,52 @@ export function createShapeExtension(
     },
   });
 
+  /**
+   * What a change does to each shape, checked as a whole: every shape may be
+   * changed, the value is one this version writes, and each shape's data
+   * with the change reads cleanly (as `updateElementData` will check).
+   */
+  const plan = (ctx: CommandContext, args: unknown) => {
+    const change = readFieldChange(args);
+    if (change === undefined || !isValidValue(table, change.key, change.value))
+      return undefined;
+    const r = resolve(ctx);
+    if (!allEditableShapes(ctx, r, change.ids)) return undefined;
+    const steps = [];
+    for (const id of new Set(change.ids)) {
+      const data = readData(ctx, id);
+      const planned = writesFor(table, data, change);
+      if (planned === undefined || !readsCleanly(table, data, planned.writes))
+        return undefined;
+      const box =
+        change.key === "kind"
+          ? boxFor(r, id, table.kinds.get(change.value as string)!)
+          : undefined;
+      steps.push({ id, ...planned, box });
+    }
+    return steps;
+  };
+
   const set = defineCommand<unknown, void>({
     name: "set-style",
     label: shapeLabel("set-style"),
     undoLabel: shapeLabel("set-style.step"),
     quick: true,
-    enabled(ctx, args) {
-      const change = readFieldChange(args);
-      return (
-        change !== undefined &&
-        isValidValue(table, change.key, change.value) &&
-        allEditableShapes(ctx, change.ids)
-      );
-    },
+    enabled: (ctx, args) => plan(ctx, args) !== undefined,
     execute(ctx, args) {
-      const change = readFieldChange(args);
-      if (
-        change === undefined ||
-        !isValidValue(table, change.key, change.value) ||
-        !allEditableShapes(ctx, change.ids)
-      )
-        throw new Error("Invalid shape change");
-      for (const id of change.ids)
-        updateElementData(ctx, id, { [change.key]: change.value });
+      const steps = plan(ctx, args);
+      if (steps === undefined) throw new Error("Invalid shape change");
+      for (const { id, writes, removed, box } of steps) {
+        updateElementData(ctx, id, writes);
+        if (removed.length > 0)
+          edit(ctx.doc, () => {
+            for (const key of removed) dataMap(ctx.doc, id).delete(key);
+          });
+        if (box !== undefined) {
+          resizeElement(ctx.doc, id, box.w, box.h);
+          moveElement(ctx.doc, id, box.x, box.y);
+        }
+      }
     },
   });
 

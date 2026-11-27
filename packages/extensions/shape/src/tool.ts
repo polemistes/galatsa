@@ -13,7 +13,14 @@ import type {
 } from "@galatsa/extension-api/editing";
 import { drawShape, placedContext } from "./draw.ts";
 import type { ShapeKind } from "./kind.ts";
-import { newShapeData, readShape, type KindTable } from "./model.ts";
+import {
+  MAX_LENGTH,
+  newShapeData,
+  readShape,
+  type KindTable,
+  type ShapeModel,
+  type ShapeStyle,
+} from "./model.ts";
 
 /** Arguments of the insert command. */
 export interface InsertShapeArgs {
@@ -26,6 +33,17 @@ export interface InsertShapeArgs {
   /** Rotation about the box centre, in radians (default 0). */
   readonly rot?: number;
   readonly parent?: string | null;
+  /** Style values over the defaults. */
+  readonly style?: Partial<ShapeStyle>;
+}
+
+/** Outline width of a new shape, in screen pixels at the zoom it is drawn at. */
+export const STROKE_PIXELS = 2;
+
+/** The outline width, in world units, that is STROKE_PIXELS wide on screen at `zoom`. */
+export function strokeWidthAt(zoom: number): number {
+  const z = zoom > 0 && Number.isFinite(zoom) ? zoom : 1;
+  return Math.min(MAX_LENGTH, STROKE_PIXELS / z);
 }
 
 /** Size of a shape made by a click without dragging, in screen pixels. */
@@ -97,8 +115,13 @@ export function shapeTool(
   kind: ShapeKind,
   insertCommand: string,
 ): ToolDefinition {
-  // The preview is drawn with the style a new shape gets.
-  const model = readShape(table, newShapeData(table, kind.kind), () => {});
+  // The preview is drawn with the style a new shape gets at the zoom.
+  const modelAt = (zoom: number): ShapeModel =>
+    readShape(
+      table,
+      newShapeData(table, kind.kind, { strokeWidth: strokeWidthAt(zoom) }),
+      () => {},
+    );
   const placed = (from: ToolPointerEvent, to: ToolPointerEvent): Placed =>
     kind.drawing === "line"
       ? dragLine(from.world, to.world, to.modifiers.shift)
@@ -137,13 +160,13 @@ export function shapeTool(
             event.screen.x - from.screen.x,
             event.screen.y - from.screen.y,
           );
+          const zoom = zoomOf(session);
           const box =
-            moved < CLICK_SLOP
-              ? clickShape(kind, from.world, zoomOf(session))
-              : placed(from, event);
+            moved < CLICK_SLOP ? clickShape(kind, from.world, zoom) : placed(from, event);
           session.run(insertCommand, {
             kind: kind.kind,
             ...box,
+            style: { strokeWidth: strokeWidthAt(zoom) },
           } satisfies InsertShapeArgs);
           session.done();
         },
@@ -173,7 +196,10 @@ export function shapeTool(
             dx: cx - (cos * p.w) / 2 + (sin * p.h) / 2,
             dy: cy - (sin * p.w) / 2 - (cos * p.h) / 2,
           });
-          drawShape(table, typeId, model, placedCtx, { w: p.w, h: p.h });
+          drawShape(table, typeId, modelAt(zoomOf(session)), placedCtx, {
+            w: p.w,
+            h: p.h,
+          });
         },
         stop: reset,
       };

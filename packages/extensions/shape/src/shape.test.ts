@@ -4,10 +4,17 @@
 // inserting and changing shapes as one undo step each, fields, shapes of a
 // kind from a newer version, hit testing and bounds, and the drawing tool.
 
-import type { ElementId, ExtensionElement, Point } from "@galatsa/core";
+import {
+  FRAME_TYPE,
+  type ElementId,
+  type ExtensionElement,
+  type Point,
+} from "@galatsa/core";
 import {
   createUndoManager,
+  deleteElements,
   initDocument,
+  setLocked,
   toSnapshot,
   addElement,
 } from "@galatsa/core/ydoc";
@@ -28,7 +35,9 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
   DEFAULT_STYLE,
+  MAX_LENGTH,
   SHAPE_INSERT,
+  SHAPE_KINDS,
   SHAPE_SET,
   SHAPE_TYPE,
   shapeExtension,
@@ -84,24 +93,43 @@ const read = (data: Record<string, unknown>) => {
 
 const box = (w: number, h: number): ElementBox => ({ id: "x", w, h });
 
+/** The default values of a kind's parameters, as its model holds them. */
+const paramsOf = (kind: string) =>
+  Object.fromEntries(
+    (SHAPE_KINDS.find((k) => k.kind === kind)?.params ?? []).map((p) => [
+      p.key,
+      p.default,
+    ]),
+  );
+
+/** Every parameter key of the program's kinds, once, in the order of the kinds. */
+const PARAM_KEYS = [
+  ...new Set(SHAPE_KINDS.flatMap((k) => (k.params ?? []).map((p) => p.key))),
+];
+
 describe("loading", () => {
   it("loads without problems and offers its commands, tools and properties per mode", () => {
     const t = setup("quick");
     expect(t.problems).toEqual([]);
     expect(t.host.active()).toEqual(["galatsa.shape"]);
-    expect(t.host.tools("quick").map((tool) => tool.id)).toEqual([
-      "galatsa.shape/rect",
-      "galatsa.shape/ellipse",
-      "galatsa.shape/line",
-    ]);
+    expect(t.host.tools("quick").map((tool) => tool.id)).toEqual(
+      SHAPE_KINDS.filter((k) => k.quick ?? true).map((k) => `galatsa.shape/${k.kind}`),
+    );
+    expect(t.host.tools("advanced").map((tool) => tool.id)).toEqual(
+      SHAPE_KINDS.map((k) => `galatsa.shape/${k.kind}`),
+    );
     expect(t.host.commands.list("quick").map((c) => c.id)).toEqual([
       SHAPE_INSERT,
       SHAPE_SET,
     ]);
+    const quickParams = SHAPE_KINDS.flatMap((k) =>
+      (k.params ?? []).filter((p) => p.quick === true).map((p) => p.key),
+    );
     expect(t.host.properties(SHAPE_TYPE, "quick").map((f) => f.key)).toEqual([
       "fill",
       "stroke",
       "strokeWidth",
+      ...new Set(quickParams),
     ]);
     expect(t.host.properties(SHAPE_TYPE, "advanced").map((f) => f.key)).toEqual([
       "fill",
@@ -110,6 +138,7 @@ describe("loading", () => {
       "cornerRadius",
       "opacity",
       "kind",
+      ...PARAM_KEYS,
     ]);
     const { conflicts } = t.host.commands.shortcuts("advanced");
     expect(conflicts).toEqual([]);
@@ -155,7 +184,7 @@ describe("loading", () => {
 describe("reading data", () => {
   it("reads every key, with the defaults for missing keys and no reports", () => {
     expect(read({})).toEqual({
-      model: { kind: "rect", ...DEFAULT_STYLE, params: {} },
+      model: { kind: "rect", ...DEFAULT_STYLE, params: paramsOf("rect") },
       reports: [],
     });
     expect(
@@ -175,22 +204,22 @@ describe("reading data", () => {
         strokeWidth: 0,
         cornerRadius: 3,
         opacity: 0,
-        params: {},
+        params: paramsOf("line"),
       },
       reports: [],
     });
   });
 
-  it("reads a value that does not fit as the default, and reports it", () => {
+  it("reads a value of the wrong form as the default, and reports it", () => {
     const { model, reports } = read({
       kind: "Not a kind",
       fill: "red",
       stroke: "#12345",
-      strokeWidth: -1,
+      strokeWidth: "thick",
       cornerRadius: Number.NaN,
-      opacity: 2,
+      opacity: null,
     });
-    expect(model).toEqual({ kind: "rect", ...DEFAULT_STYLE, params: {} });
+    expect(model).toEqual({ kind: "rect", ...DEFAULT_STYLE, params: paramsOf("rect") });
     expect(reports.map((r) => r.split(":")[0])).toEqual([
       "kind",
       "fill",
@@ -199,6 +228,22 @@ describe("reading data", () => {
       "cornerRadius",
       "opacity",
     ]);
+  });
+
+  it("reads numbers out of range, as a newer version may write them, without a report, drawn in range", () => {
+    expect(
+      read({ kind: "rect", strokeWidth: 1e300, cornerRadius: -4, opacity: 2 }),
+    ).toEqual({
+      model: {
+        kind: "rect",
+        ...DEFAULT_STYLE,
+        strokeWidth: MAX_LENGTH,
+        cornerRadius: 0,
+        opacity: 1,
+        params: paramsOf("rect"),
+      },
+      reports: [],
+    });
   });
 
   it("keeps a kind from a newer version, and leaves keys it does not know alone", () => {
@@ -225,7 +270,7 @@ describe("commands", () => {
     expect(e.pos).toMatchObject({ x: 1, y: 2 });
     expect(e.size).toEqual({ w: 30, h: 40 });
     expect(e.rot).toBe(0);
-    expect(e.data).toEqual({ kind: "ellipse", ...DEFAULT_STYLE });
+    expect(e.data).toEqual({ kind: "ellipse", ...DEFAULT_STYLE, ...paramsOf("ellipse") });
     expect(t.services.state.selection).toEqual([id]);
     expect(t.undo.undoStack).toHaveLength(1);
     t.undo.undo();
@@ -330,6 +375,218 @@ describe("commands", () => {
   });
 });
 
+describe("what the commands may act on", () => {
+  const frame = (t: ReturnType<typeof setup>) =>
+    addElement(t.doc, { type: FRAME_TYPE, x: 0, y: 0, size: { w: 100, h: 100 } });
+
+  it("refuses to change a locked shape, a shape in a locked frame, or a deleted one", () => {
+    const t = setup();
+    const locked = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "rect",
+      x: 0,
+      y: 0,
+      w: 10,
+      h: 10,
+    });
+    setLocked(t.doc, locked, true);
+    const f = frame(t);
+    const inside = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "rect",
+      x: 0,
+      y: 0,
+      w: 10,
+      h: 10,
+      parent: f,
+    });
+    setLocked(t.doc, f, true);
+    const gone = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "rect",
+      x: 0,
+      y: 0,
+      w: 10,
+      h: 10,
+    });
+    deleteElements(t.doc, [gone]);
+    const steps = t.undo.undoStack.length;
+    const before = t.updates.length;
+    for (const id of [locked, inside, gone])
+      expect(
+        t.run(SHAPE_SET, { ids: [id], key: "fill", value: "#000000" }),
+      ).toMatchObject({
+        ok: false,
+        reason: "disabled",
+      });
+    expect(t.updates.length).toBe(before);
+    expect(t.undo.undoStack.length).toBe(steps);
+  });
+
+  it("inserts only into the root or a container the user sees that is not locked", () => {
+    const t = setup();
+    const open = frame(t);
+    const locked = frame(t);
+    setLocked(t.doc, locked, true);
+    const gone = frame(t);
+    deleteElements(t.doc, [gone]);
+    const shape = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "rect",
+      x: 0,
+      y: 0,
+      w: 1,
+      h: 1,
+    });
+    const at = (parent: string) => ({ kind: "rect", x: 0, y: 0, w: 1, h: 1, parent });
+    expect(t.run(SHAPE_INSERT, at(open)).ok).toBe(true);
+    const before = t.updates.length;
+    for (const parent of [locked, gone, shape, "nothing"])
+      expect(t.run(SHAPE_INSERT, at(parent))).toMatchObject({
+        ok: false,
+        reason: "disabled",
+      });
+    expect(t.updates.length).toBe(before);
+  });
+
+  it("is not offered when the shape's data would not read cleanly, rather than failing", () => {
+    const t = setup();
+    // Damaged data: a fill that is not a colour.
+    const id = addElement(t.doc, {
+      type: SHAPE_TYPE,
+      typeVersion: 1,
+      x: 0,
+      y: 0,
+      size: { w: 10, h: 10 },
+      data: { kind: "rect", fill: { gradient: true } },
+    });
+    expect(t.run(SHAPE_SET, { ids: [id], key: "opacity", value: 0.5 })).toMatchObject({
+      ok: false,
+      reason: "disabled",
+    });
+    // Repairing the damaged key itself is offered.
+    expect(t.run(SHAPE_SET, { ids: [id], key: "fill", value: "#ffffff" }).ok).toBe(true);
+  });
+
+  it("stays able to change a shape with values out of this version's range", () => {
+    const t = setup();
+    const id = addElement(t.doc, {
+      type: SHAPE_TYPE,
+      typeVersion: 1,
+      x: 0,
+      y: 0,
+      size: { w: 10, h: 10 },
+      data: { kind: "rect", strokeWidth: 1e300, opacity: 3 },
+    });
+    t.must(SHAPE_SET, { ids: [id], key: "fill", value: "#ffffff" });
+    expect(t.element(id).data).toEqual({
+      kind: "rect",
+      strokeWidth: 1e300,
+      opacity: 3,
+      fill: "#ffffff",
+    });
+  });
+});
+
+describe("values as written", () => {
+  it("writes colours in lower case, from insert and from a change", () => {
+    const t = setup();
+    const id = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "rect",
+      x: 0,
+      y: 0,
+      w: 10,
+      h: 10,
+      style: { fill: "#AABBCC", stroke: "#11223344" },
+    });
+    expect(t.element(id).data).toMatchObject({ fill: "#aabbcc", stroke: "#11223344" });
+    t.must(SHAPE_SET, { ids: [id], key: "stroke", value: "#FF00AA" });
+    expect(t.element(id).data["stroke"]).toBe("#ff00aa");
+  });
+
+  it("refuses an outline width or a corner radius beyond MAX_LENGTH", () => {
+    const t = setup();
+    const id = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "rect",
+      x: 0,
+      y: 0,
+      w: 10,
+      h: 10,
+    });
+    expect(
+      t.run(SHAPE_SET, { ids: [id], key: "strokeWidth", value: MAX_LENGTH }).ok,
+    ).toBe(true);
+    for (const key of ["strokeWidth", "cornerRadius"])
+      expect(t.run(SHAPE_SET, { ids: [id], key, value: MAX_LENGTH * 2 }).ok).toBe(false);
+    expect(
+      t.run(SHAPE_INSERT, {
+        kind: "rect",
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+        style: { strokeWidth: 1e300 },
+      }).ok,
+    ).toBe(false);
+  });
+});
+
+describe("changing the kind", () => {
+  const placed = (t: ReturnType<typeof setup>, id: ElementId) => {
+    const e = t.element(id);
+    return { x: e.pos.x, y: e.pos.y, ...e.size, rot: e.rot };
+  };
+
+  it("makes a line a square as wide as the line, around the line's middle, keeping its turn", () => {
+    const t = setup();
+    const id = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "line",
+      x: 10,
+      y: 50,
+      w: 40,
+      h: 0,
+      rot: 1,
+    });
+    const steps = t.undo.undoStack.length;
+    t.must(SHAPE_SET, { ids: [id], key: "kind", value: "rect" });
+    expect(t.undo.undoStack.length).toBe(steps + 1);
+    expect(placed(t, id)).toEqual({ x: 10, y: 30, w: 40, h: 40, rot: 1 });
+    t.undo.undo();
+    expect(placed(t, id)).toEqual({ x: 10, y: 50, w: 40, h: 0, rot: 1 });
+    expect(t.element(id).data["kind"]).toBe("line");
+  });
+
+  it("makes a box 0 high, around its middle, when the new kind is drawn as a line", () => {
+    const t = setup();
+    const id = t.must<ElementId>(SHAPE_INSERT, {
+      kind: "ellipse",
+      x: 0,
+      y: 0,
+      w: 60,
+      h: 20,
+    });
+    t.must(SHAPE_SET, { ids: [id], key: "kind", value: "line" });
+    expect(placed(t, id)).toEqual({ x: 0, y: 10, w: 60, h: 0, rot: 0 });
+    // Between two kinds drawn as boxes the box stays.
+    t.must(SHAPE_SET, { ids: [id], key: "kind", value: "rect" });
+    t.must(SHAPE_SET, { ids: [id], key: "kind", value: "ellipse" });
+    expect(placed(t, id)).toEqual({ x: 0, y: -20, w: 60, h: 60, rot: 0 });
+  });
+
+  it("is refused for a shape of a kind this version does not know", () => {
+    const t = setup();
+    const id = addElement(t.doc, {
+      type: SHAPE_TYPE,
+      typeVersion: 1,
+      x: 0,
+      y: 0,
+      size: { w: 10, h: 0 },
+      data: { kind: "arrow", head: "big" },
+    });
+    expect(t.run(SHAPE_SET, { ids: [id], key: "kind", value: "rect" })).toMatchObject({
+      ok: false,
+      reason: "disabled",
+    });
+    expect(t.element(id).data).toEqual({ kind: "arrow", head: "big" });
+  });
+});
+
 describe("fields", () => {
   it("read the model, and apply only where they mean something", () => {
     const t = setup();
@@ -372,6 +629,7 @@ describe("fields", () => {
       strokeWidth: 12,
       cornerRadius: 4,
       opacity: 0.25,
+      ...paramsOf("ellipse"),
     });
   });
 
@@ -413,7 +671,28 @@ describe("a kind from a newer version", () => {
     expect(shapeView.hitTest!(model, { x: 20, y: 10 }, box(40, 20), 0)).toBe(true);
     t.must(SHAPE_SET, { ids: [id], key: "fill", value: "#ffffff" });
     expect(t.element(id).data).toEqual({ kind: "star", points: 5, fill: "#ffffff" });
-    expect(t.run(SHAPE_SET, { ids: [id], key: "kind", value: "rect" }).ok).toBe(true);
+    // Its kind cannot be changed: this version cannot say what it is.
+    expect(t.run(SHAPE_SET, { ids: [id], key: "kind", value: "rect" }).ok).toBe(false);
+  });
+});
+
+describe("a kind from a newer version drawn as a line", () => {
+  it("is a solid line along the box, at least 2 device pixels wide, with the label above it", () => {
+    const ctx = createRecordingDrawContext({ scale: 2, t: (label) => label });
+    const { model } = read({ kind: "arrow", stroke: "#000000", strokeWidth: 0.25 });
+    shapeView.draw(model, ctx, box(120, 0));
+    const stroke = ctx.calls.find((c) => c.op === "stroke");
+    expect(stroke).toMatchObject({ path: ["moveTo(0,0)", "lineTo(120,0)"] });
+    expect(stroke?.op === "stroke" && stroke.style.width).toBe(1);
+    expect(stroke?.op === "stroke" && stroke.style.dash).toBeUndefined();
+    const text = ctx.calls.find((c) => c.op === "text");
+    expect(text?.op === "text" && text.y).toBeLessThan(0);
+    // A thick outline keeps its width.
+    const thick = createRecordingDrawContext({ scale: 2 });
+    shapeView.draw(read({ kind: "arrow", strokeWidth: 9 }).model, thick, box(120, 0));
+    expect(thick.calls.find((c) => c.op === "stroke")).toMatchObject({
+      style: { width: 9 },
+    });
   });
 });
 
@@ -630,6 +909,23 @@ describe("the drawing tool", () => {
       pos: { x: 70, y: 90 },
       size: { w: 60, h: 20 },
     });
+  });
+
+  it("gives a new shape an outline 2 screen pixels wide at the zoom it is drawn at", () => {
+    for (const zoom of [0.01, 1, 4, 100]) {
+      const t = setup();
+      t.services.state.camera = { space: null, cx: 0, cy: 0, zoom };
+      const { handler } = tool(t, "rect");
+      handler.pointerDown!(pointer({ x: 0, y: 0 }));
+      handler.pointerMove!(pointer({ x: 50, y: 50 }));
+      const overlay = createRecordingDrawContext();
+      handler.drawOverlay!(overlay);
+      const stroke = overlay.calls.find((c) => c.op === "stroke");
+      expect(stroke?.op === "stroke" && stroke.style.width).toBeCloseTo(2 / zoom, 12);
+      handler.pointerUp!(pointer({ x: 50, y: 50 }));
+      const e = t.element(t.services.state.selection[0]!);
+      expect(e.data["strokeWidth"]).toBeCloseTo(2 / zoom, 12);
+    }
   });
 
   it("makes a shape of a fixed size on screen for a click", () => {

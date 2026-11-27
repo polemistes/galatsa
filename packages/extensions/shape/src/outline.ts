@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Helpers for kinds that draw their outline: polygons with rounded corners,
-// and the reach of sharp corners.
+// Helpers for kinds that draw their outline: polygons with rounded corners.
 
 import type { Path } from "@galatsa/extension-api";
 
@@ -10,15 +9,6 @@ export interface OutlinePoint {
   readonly x: number;
   readonly y: number;
 }
-
-/**
- * How far a stroke with miter joins can reach outside its path, in outline
- * widths, whatever the angles: Canvas 2D bevels a miter longer than 10 line
- * widths (its default miter limit), so the reach is at most 5. A kind with
- * miter joins and corners sharper than a right angle gives this as its
- * `strokeReach`.
- */
-export const MITER_REACH = 5;
 
 /**
  * Adds a closed polygon through `points`, with every corner rounded to

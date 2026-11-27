@@ -33,6 +33,7 @@
   "dependencies": {
     "@galatsa/core": "workspace:*",
     "@galatsa/extension-api": "workspace:*",
+    "@galatsa/extension-basics": "workspace:*",
     "@galatsa/i18n": "workspace:*",
     "yjs": "13.6.33"
   }

@@ -32,7 +32,14 @@ import {
 } from "./structure.ts";
 import { move, resize, rotate, scale } from "./transform.ts";
 
-export { BASICS_EXTENSION } from "./common.ts";
+export {
+  BASICS_EXTENSION,
+  // The rules of which elements a command may act on, for other extensions' commands.
+  canTarget,
+  canTargetAll,
+  isOpenContainer,
+  type Need,
+} from "./common.ts";
 export { basicsMessages } from "./messages/index.ts";
 export {
   DUPLICATE_OFFSET,

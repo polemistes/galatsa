@@ -13,7 +13,6 @@
 import type { Element, ElementId } from "@galatsa/core";
 import { ViewHost } from "@galatsa/extension-api";
 import {
-  GALLERY_CELL,
   SHAPE_KINDS,
   SHAPE_TYPE,
   shapeGallery,
@@ -54,9 +53,7 @@ if (problems.length > 0) throw new Error(problems.map((p) => p.detail).join("; "
 
 /** Draws one kind's cases side by side and returns its canvas. */
 function drawKind(kind: (typeof SHAPE_KINDS)[number]): HTMLCanvasElement {
-  const cases = shapeGallery(shapeKinds, kind);
-  const width = cases.length * GALLERY_CELL;
-  const height = GALLERY_CELL;
+  const { cases, width, height } = shapeGallery(shapeKinds, kind);
   const elements: { [id: ElementId]: Element } = {};
   cases.forEach((c, index) => {
     elements[`${kind.kind}-${index}`] = {
@@ -64,7 +61,7 @@ function drawKind(kind: (typeof SHAPE_KINDS)[number]): HTMLCanvasElement {
       typeVersion: shapeView.typeVersion,
       order: `a${String(index).padStart(4, "0")}`,
       parent: null,
-      pos: { x: index * GALLERY_CELL + c.x, y: c.y, space: null },
+      pos: { x: c.x, y: c.y, space: null },
       rebase: null,
       name: "",
       locked: false,

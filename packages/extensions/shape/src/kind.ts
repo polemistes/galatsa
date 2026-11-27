@@ -120,13 +120,6 @@ export interface ShapeKind {
   /** How the outline's corners and ends are drawn (default "round" for both). */
   readonly join?: StrokeStyle["join"];
   readonly cap?: StrokeStyle["cap"];
-  /**
-   * How far the stroked outline can reach outside the body, in outline widths
-   * (default 0.5, exact for round joins and caps). Sharp miter joins reach
-   * further: 1/(2 sin(θ/2)) for the sharpest corner angle θ, so √2/2 for a
-   * rectangle.
-   */
-  readonly strokeReach?: number;
   /** Properties only this kind (or a few kinds) has. */
   readonly params?: readonly ShapeParam[];
   /**

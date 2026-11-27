@@ -485,3 +485,55 @@ export class PlacedPath implements Path {
     this.target.closePath();
   }
 }
+
+/**
+ * Canvas 2D's default miter limit: a miter longer than this many line widths
+ * is drawn beveled. The renderer does not change it.
+ */
+export const MITER_LIMIT = 10;
+
+/**
+ * How far a stroke of the polylines reaches outside them, in line widths:
+ * half a width along the line and at round or bevel joins and round or butt
+ * caps; √2/2 at square caps; and at each miter join, half the miter length,
+ * 1/(2 sin(θ/2)) for the angle θ between the two segments, unless the miter
+ * is longer than MITER_LIMIT widths and drawn beveled.
+ */
+export function strokeReach(
+  lines: readonly Polyline[],
+  join: "miter" | "round" | "bevel",
+  cap: "butt" | "round" | "square",
+): number {
+  let reach = 0.5;
+  for (const line of lines) {
+    const p = line.points;
+    const n = p.length / 2;
+    if (n < 2) continue;
+    if (cap === "square" && !line.closed) reach = Math.max(reach, Math.SQRT1_2);
+    if (join !== "miter") continue;
+    const at = (k: number): readonly [number, number] => {
+      const j = ((k % n) + n) % n;
+      return [p[2 * j]!, p[2 * j + 1]!];
+    };
+    for (let i = 0; i < n; i += 1) {
+      if (!line.closed && (i === 0 || i === n - 1)) continue;
+      // The nearest points before and after that are not on top of this one.
+      const [x, y] = at(i);
+      let back = i - 1;
+      let ahead = i + 1;
+      while (back > i - n && at(back)[0] === x && at(back)[1] === y) back -= 1;
+      while (ahead < i + n && at(ahead)[0] === x && at(ahead)[1] === y) ahead += 1;
+      if (!line.closed && (back < 0 || ahead > n - 1)) continue;
+      const [ax, ay] = at(back);
+      const [bx, by] = at(ahead);
+      const la = Math.hypot(ax - x, ay - y);
+      const lb = Math.hypot(bx - x, by - y);
+      if (la === 0 || lb === 0) continue;
+      const cos = ((ax - x) * (bx - x) + (ay - y) * (by - y)) / (la * lb);
+      const sinHalf = Math.sqrt(Math.max(0, (1 - Math.max(-1, Math.min(1, cos))) / 2));
+      const ratio = sinHalf > 0 ? 1 / sinHalf : Infinity;
+      if (ratio <= MITER_LIMIT) reach = Math.max(reach, ratio / 2);
+    }
+  }
+  return reach;
+}
