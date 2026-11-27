@@ -416,6 +416,17 @@ describe("flight path, random extreme cases", () => {
           failures.push(`not a view at ${k}: ${where()}`);
           break;
         }
+        // The same point measured from the goal is the same view, within
+        // 1/64 pixel.
+        const w = path.atFromEnd((path.length * (n - k)) / n);
+        const apart = Math.max(
+          Math.hypot(w.cx - v.cx, w.cy - v.cy) * Math.max(v.zoom, w.zoom),
+          Math.abs(Math.log(w.zoom / v.zoom)) * width,
+        );
+        if (!(apart <= 1 / 64)) {
+          failures.push(`atFromEnd ${apart} px from at at ${k}: ${where()}`);
+          break;
+        }
         if (dd > 0) {
           const share = ((v.cx - from.cx) * dx + (v.cy - from.cy) * dy) / dd;
           // In pixels at this view's zoom; 1/64 pixel is the model's budget.
