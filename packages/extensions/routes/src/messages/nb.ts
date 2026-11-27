@@ -6,6 +6,7 @@
 export default {
   close: "Lukk",
   cancel: "Avbryt",
+  failed: "Kunne ikke gjøre dette nå: {action}",
   panel: "Ruter",
   "toggle-panel": "Vis eller skjul ruter",
   route: "Rute",
@@ -65,6 +66,6 @@ export default {
   "element.untitled": "Element uten navn",
   "delete.title": "Slette stoppet?",
   "delete.used":
-    "{count, plural, one {Stoppet brukes i # rute. Slettes det, forsvinner det fra ruten.} other {Stoppet brukes i # ruter. Slettes det, forsvinner det fra alle rutene.}}",
+    "{count, plural, =0 {Stoppet brukes ikke lenger i noen rute.} one {Stoppet brukes i # rute. Slettes det, forsvinner det fra ruten.} other {Stoppet brukes i # ruter. Slettes det, forsvinner det fra alle rutene.}}",
   "delete.confirm": "Slett likevel",
 };

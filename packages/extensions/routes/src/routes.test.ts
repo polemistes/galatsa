@@ -29,6 +29,7 @@ import {
   routeShapes,
   routesExtension,
   routesUsing,
+  textChange,
   viewOfCamera,
   type AddedStop,
   type JumpEnvironment,
@@ -58,7 +59,7 @@ afterEach(() => {
   for (const editor of editors.splice(0)) editor.dispose();
 });
 
-function setup() {
+function setup(given?: Y.Doc) {
   const i18n = createI18n({ locale: "en", dev: false, storage: memoryLocaleStorage() });
   const loaded = loadExtensions(i18n, [
     shapeExtension,
@@ -67,8 +68,8 @@ function setup() {
   ]);
   if (loaded.problems.length > 0)
     throw new Error(loaded.problems.map((p) => `${p.extension}: ${p.detail}`).join("; "));
-  const doc = new Y.Doc();
-  initDocument(doc);
+  const doc = given ?? new Y.Doc();
+  if (!given) initDocument(doc);
   const frames: Array<() => void> = [];
   const editor = new Editor({
     doc,
@@ -299,7 +300,11 @@ describe("routes and shared stops", () => {
     expect(liveStops(readRoutes(t.doc))).toContain(b.stop);
     oneStep(t, ROUTES.deleteRoute, { route });
     expect(liveRoutes(readRoutes(t.doc))).toEqual([]);
-    expect(t.editor.isEnabled(ROUTES.renameRoute, { route, name: "x" })).toBe(false);
+    expect(t.editor.isEnabled(ROUTES.deleteRoute, { route })).toBe(false);
+    // A name typed while the route was deleted is still saved, in the removed
+    // route, which an undo of the delete brings back with it.
+    t.must(ROUTES.renameRoute, { route, name: "Kept" });
+    expect(readRoutes(t.doc).routes[route]!.name).toBe("Kept");
   });
 
   it("deletes a stop from every route that uses it, and one undo brings it back", () => {
@@ -506,5 +511,113 @@ describe("jumps", () => {
     advance(16);
     expect(pending).toHaveLength(0);
     expect(t.editor.camera.cx).toBe(-77);
+  });
+});
+
+describe("after the review", () => {
+  it("never splits an emoji in the notes, and undo takes the change back whole", () => {
+    const t = setup();
+    const s = t.must<AddedStop>(ROUTES.addStopFromView);
+    t.must(ROUTES.setStopNotes, { stop: s.stop, text: "Bra \u{1F44D} ja" });
+    oneStep(t, ROUTES.setStopNotes, { stop: s.stop, text: "Bra \u{1F44E} ja" });
+    expect(stopNotes(t.doc, s.stop).toString()).toBe("Bra \u{1F44E} ja");
+    t.editor.undo.undo();
+    expect(stopNotes(t.doc, s.stop).toString()).toBe("Bra \u{1F44D} ja");
+    // Pairs that share their first half, an emoji at either end, one doubled.
+    for (const [from, to] of [
+      ["\u{1F600}x", "\u{1F601}x"],
+      ["x\u{1F600}", "x\u{1F601}"],
+      ["\u{1F600}", "a\u{1F600}"],
+      ["a\u{1F600}b", "a\u{1F600}\u{1F600}b"],
+      ["a\u{1F600}\u{1F600}b", "a\u{1F600}b"],
+    ] as const) {
+      const { start, end } = textChange(from, to);
+      expect(start + end).toBeLessThanOrEqual(Math.min(from.length, to.length));
+      t.must(ROUTES.setStopNotes, { stop: s.stop, text: from });
+      t.must(ROUTES.setStopNotes, { stop: s.stop, text: to });
+      expect(stopNotes(t.doc, s.stop).toString()).toBe(to);
+    }
+  });
+
+  it("gives a visit a stop of its own without doubling it, also when two users do it at once", () => {
+    const a = setup();
+    const first = a.must<AddedStop>(ROUTES.addStopFromView);
+    a.editor.services.camera.set({ space: null, cx: 900, cy: 400, zoom: 1 });
+    const second = a.must<AddedStop>(ROUTES.addStopFromView);
+    const two = a.must<string>(ROUTES.addRoute);
+    a.must(ROUTES.addVisit, { stop: first.stop, route: two });
+    const docB = new Y.Doc();
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(a.doc));
+    const b = setup(docB);
+    const sync = () => {
+      Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc)));
+      Y.applyUpdate(a.doc, Y.encodeStateAsUpdate(b.doc, Y.encodeStateVector(a.doc)));
+    };
+    // Both make a stop of their own for the same visit.
+    const mine = a.must<AddedStop>(ROUTES.copyStopForRoute, {
+      route: first.route,
+      entry: first.entry,
+    });
+    expect(mine.entry).toBe(first.entry);
+    b.must(ROUTES.copyStopForRoute, { route: first.route, entry: first.entry });
+    sync();
+    for (const t of [a, b]) expect(t.steps(first.route)).toHaveLength(2);
+    expect(a.steps(first.route)).toEqual(b.steps(first.route));
+    // One makes a stop of its own while the other moves the visit.
+    a.must(ROUTES.copyStopForRoute, { route: first.route, entry: first.entry });
+    b.must(ROUTES.moveVisit, { route: first.route, entry: first.entry, index: 1 });
+    sync();
+    for (const t of [a, b]) {
+      expect(t.steps(first.route)).toHaveLength(2);
+      expect(t.steps(first.route)).toContain(second.stop);
+    }
+    expect(a.steps(first.route)).toEqual(b.steps(first.route));
+    // The other route keeps the shared stop.
+    expect(a.steps(two)).toEqual([first.stop]);
+  });
+
+  it("copies a stop's ext, refuses to jump to a deleted stop, and moves past the end without a step", () => {
+    const t = setup();
+    const a = t.must<AddedStop>(ROUTES.addStopFromView);
+    const b = t.must<AddedStop>(ROUTES.addStopFromView);
+    t.doc.transact(() => {
+      const record = t.doc.getMap("stops").get(a.stop) as Y.Map<unknown>;
+      (record.get("ext") as Y.Map<unknown>).set("x.hint", "kept");
+    });
+    const own = t.must<AddedStop>(ROUTES.copyStopForRoute, {
+      route: a.route,
+      entry: a.entry,
+    });
+    expect(readRoutes(t.doc).stops[own.stop]!.ext).toEqual({ "x.hint": "kept" });
+    const depth = t.editor.undo.undoStack.length;
+    t.must(ROUTES.moveVisit, { route: b.route, entry: b.entry, index: 5 });
+    expect(t.editor.undo.undoStack.length).toBe(depth);
+    t.must(ROUTES.deleteStop, { stop: b.stop });
+    expect(t.editor.isEnabled(ROUTES.goToStop, { stop: b.stop })).toBe(false);
+  });
+
+  it("saves a name and notes typed while the stop was deleted, in the removed stop", () => {
+    const t = setup();
+    const a = t.must<AddedStop>(ROUTES.addStopFromView);
+    t.must(ROUTES.deleteStop, { stop: a.stop });
+    t.must(ROUTES.renameStop, { stop: a.stop, name: "Typed" });
+    t.must(ROUTES.setStopNotes, { stop: a.stop, text: "Also typed" });
+    expect(readRoutes(t.doc).stops[a.stop]!.name).toBe("Typed");
+    expect(stopNotes(t.doc, a.stop).toString()).toBe("Also typed");
+  });
+
+  it("opens and closes the panel with Shift+R", () => {
+    const t = setup();
+    const key = {
+      code: "KeyR",
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      altGraph: false,
+    };
+    t.editor.keyDown({ ...key, key: "R", shiftKey: true });
+    expect(t.editor.services.panels.isOpen(ROUTES_PANEL)).toBe(true);
+    t.editor.keyDown({ ...key, key: "R", shiftKey: true });
+    expect(t.editor.services.panels.isOpen(ROUTES_PANEL)).toBe(false);
   });
 });

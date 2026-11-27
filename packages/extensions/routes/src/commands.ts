@@ -28,6 +28,7 @@ import {
   renameRoute,
   renameStop,
   setStopTransition,
+  setRouteEntryStop,
   setStopView,
   setVisibility,
   stopNotes,
@@ -38,6 +39,7 @@ import { defineCommand, type CommandContext } from "@galatsa/extension-api/editi
 import type { BundleKey } from "@galatsa/i18n";
 import { jumpTo, type JumpEnvironment } from "./jump.ts";
 import { routesMessages } from "./messages/index.ts";
+import { ROUTES_EXTENSION } from "./view.ts";
 import {
   entryOrder,
   indexAfter,
@@ -52,8 +54,7 @@ import {
 } from "./model.ts";
 import { choose, currentChoice } from "./state.ts";
 
-/** The extension's id, and its message namespace. */
-export const ROUTES_EXTENSION = "galatsa.routes";
+export { ROUTES_EXTENSION };
 
 /** Command ids. */
 export const ROUTES = {
@@ -161,8 +162,13 @@ const renameRouteCommand = defineCommand<RenameRouteArgs, void>({
   label: label("rename-route"),
   undoLabel: label("rename-route.step"),
   quick: true,
+  // Also a removed route: a name typed while another user deleted the route
+  // is saved, and the route stays (docs/adr/0001, section 6.5).
   enabled: (ctx, args) =>
-    isRecord(args) && isString(args.name) && isLiveRoute(readRoutes(ctx.doc), args.route),
+    isRecord(args) &&
+    isString(args.name) &&
+    isString(args.route) &&
+    Object.hasOwn(readRoutes(ctx.doc).routes, args.route),
   execute(ctx, { route, name }) {
     renameRoute(ctx.doc, route, name);
   },
@@ -332,8 +338,10 @@ const moveVisit = defineCommand<MoveVisitArgs, void>({
     const sr = readRoutes(ctx.doc);
     const steps = routeSteps(sr, route);
     const from = steps.findIndex((step) => step.entry === entry);
-    if (from === index) return;
-    moveRouteEntry(ctx.doc, route, entry, moveIndex(sr, route, entry, index));
+    // Past the end is the end: a move there from the end changes nothing.
+    const to = Math.min(index, Math.max(0, steps.length - 1));
+    if (from === to) return;
+    moveRouteEntry(ctx.doc, route, entry, moveIndex(sr, route, entry, to));
   },
 });
 
@@ -355,6 +363,42 @@ export interface StopArgs {
 
 const stopArgsOk = (ctx: CommandContext, args: unknown): boolean =>
   isRecord(args) && isLiveStop(readRoutes(ctx.doc), args.stop);
+
+/**
+ * A stop that exists, also one that is removed: a name or notes the user
+ * typed while another user deleted the stop are still saved, and, as for
+ * every edit made without knowing of a delete, the stop then stays
+ * (docs/adr/0001, section 6.5). The panel offers nothing else for a removed stop.
+ */
+const stopRecordOk = (ctx: CommandContext, args: unknown): boolean =>
+  isRecord(args) &&
+  isString(args.stop) &&
+  Object.hasOwn(readRoutes(ctx.doc).stops, args.stop);
+
+/** True for the first half of a UTF-16 surrogate pair. */
+const isHigh = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+/** True for the second half of a UTF-16 surrogate pair. */
+const isLow = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+
+/**
+ * The part of `old` that differs from `text`: the lengths of their common
+ * beginning and end, in UTF-16 code units (the units of a Y.Text), never
+ * splitting a surrogate pair (an emoji): half a pair would be stored as U+FFFD.
+ */
+export function textChange(old: string, text: string): { start: number; end: number } {
+  const max = Math.min(old.length, text.length);
+  let start = 0;
+  while (start < max && old.charCodeAt(start) === text.charCodeAt(start)) start++;
+  if (start > 0 && isHigh(old.charCodeAt(start - 1))) start--;
+  let end = 0;
+  while (
+    end < max - start &&
+    old.charCodeAt(old.length - 1 - end) === text.charCodeAt(text.length - 1 - end)
+  )
+    end++;
+  if (end > 0 && isLow(old.charCodeAt(old.length - end))) end--;
+  return { start, end };
+}
 
 /**
  * Deletes a stop. It disappears from every route that visits it, until an
@@ -382,7 +426,7 @@ const renameStopCommand = defineCommand<RenameStopArgs, void>({
   undoLabel: label("rename-stop.step"),
   quick: true,
   enabled: (ctx, args) =>
-    stopArgsOk(ctx, args) && isString((args as RenameStopArgs).name),
+    stopRecordOk(ctx, args) && isString((args as RenameStopArgs).name),
   execute(ctx, { stop, name }) {
     renameStop(ctx.doc, stop, name);
   },
@@ -403,7 +447,7 @@ const setStopNotes = defineCommand<NotesArgs, void>({
   label: label("set-stop-notes"),
   undoLabel: label("set-stop-notes.step"),
   quick: true,
-  enabled: (ctx, args) => stopArgsOk(ctx, args) && isString((args as NotesArgs).text),
+  enabled: (ctx, args) => stopRecordOk(ctx, args) && isString((args as NotesArgs).text),
   execute(ctx, { stop, text }) {
     const notes = stopNotes(ctx.doc, stop);
     const plain = (notes.toDelta() as TextRun[]).every((run) => isString(run.insert));
@@ -415,15 +459,7 @@ const setStopNotes = defineCommand<NotesArgs, void>({
         notes.insert(0, text);
         return;
       }
-      let start = 0;
-      const max = Math.min(old.length, text.length);
-      while (start < max && old[start] === text[start]) start++;
-      let end = 0;
-      while (
-        end < max - start &&
-        old[old.length - 1 - end] === text[text.length - 1 - end]
-      )
-        end++;
+      const { start, end } = textChange(old, text);
       if (old.length - start - end > 0) notes.delete(start, old.length - start - end);
       if (text.length - start - end > 0)
         notes.insert(start, text.slice(start, text.length - end));
@@ -445,8 +481,11 @@ const updateStopView = defineCommand<StopArgs, void>({
 
 /**
  * Gives one visit a stop of its own: a copy of the stop (view, name, notes,
- * what it shows and hides, transition) takes the visit's place, so a change
- * made for this route no longer changes the others (docs/adr/0001, section 6.3).
+ * what it shows and hides, transition, ext) takes the visit's place, so a
+ * change made for this route no longer changes the others (docs/adr/0001,
+ * section 6.3). The visit is pointed at the copy where it stands, so two users
+ * doing this at once, or one doing it while another moves the visit, never
+ * double it: one of the two writes wins (docs/adr/0013).
  */
 const copyStopForRoute = defineCommand<EntryArgs, AddedStop>({
   name: "copy-stop-for-route",
@@ -468,6 +507,7 @@ const copyStopForRoute = defineCommand<EntryArgs, AddedStop>({
       view: source.view,
       name: source.name,
       notes: source.notes.delta,
+      ext: source.ext,
     });
     for (const [element, change] of Object.entries(source.visibility))
       setVisibility(
@@ -478,17 +518,9 @@ const copyStopForRoute = defineCommand<EntryArgs, AddedStop>({
         change.ext ? { ext: change.ext } : {},
       );
     if (source.transition !== null) setStopTransition(ctx.doc, stop, source.transition);
-    const index = entryOrder(sr, route).indexOf(entry);
-    const ext = sr.routes[route]!.entries[entry]!.ext;
-    removeRouteEntry(ctx.doc, route, entry);
-    const added = insertRouteEntry(
-      ctx.doc,
-      route,
-      stop,
-      ext ? { index, ext } : { index },
-    );
-    choose(ctx.doc, { route, entry: added });
-    return { route, stop, entry: added };
+    setRouteEntryStop(ctx.doc, route, entry, stop);
+    choose(ctx.doc, { route, entry });
+    return { route, stop, entry };
   },
 });
 
@@ -543,10 +575,10 @@ const goToStop = defineCommand<GoToArgs, void>({
   label: label("go-to-stop"),
   quick: true,
   undoable: false,
-  enabled: (ctx, args) =>
-    isRecord(args) &&
-    isString(args.stop) &&
-    regionOf(ctx.doc, readRoutes(ctx.doc), args.stop) !== null,
+  enabled: (ctx, args) => {
+    if (!stopArgsOk(ctx, args)) return false;
+    return regionOf(ctx.doc, readRoutes(ctx.doc), (args as GoToArgs).stop) !== null;
+  },
   execute(ctx, { stop, animate, environment }) {
     const sr = readRoutes(ctx.doc);
     const region = regionOf(ctx.doc, sr, stop);
@@ -561,8 +593,9 @@ const goToStop = defineCommand<GoToArgs, void>({
 const togglePanel = defineCommand<unknown, void>({
   name: "toggle-panel",
   label: label("toggle-panel"),
-  // Alt and R ("rute", "route"); a plain letter would pick a tool.
-  shortcuts: ["Alt+r"],
+  // Shift and R ("rute", "route"): a plain letter picks a tool, and Alt with a
+  // letter opens the browser's menus in Firefox, depending on its language.
+  shortcuts: ["Shift+R"],
   quick: true,
   undoable: false,
   execute(ctx) {

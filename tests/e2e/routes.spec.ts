@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Routes and stops on the development page (docs/adr/0013-routes-and-stops.md),
-// through the routes panel with the mouse and the keyboard: Alt+R opens the
+// through the routes panel with the mouse and the keyboard: Shift+R opens the
 // panel; a stop from the view makes the first route; a stop from a selected
 // frame follows the frame when it is dragged, and a click on the stop jumps
 // the camera there; each action is one undo step that Ctrl+Z takes back; a
@@ -89,6 +89,7 @@ interface RouteState {
   /** Live routes' visits, as stop ids in playing order (removed stops left out). */
   routes: string[][];
   names: Record<string, string>;
+  notes: Record<string, string>;
   undoSteps: number;
 }
 
@@ -100,7 +101,7 @@ async function routes(page: Page): Promise<RouteState> {
       type Marks = Record<string, { seen: Record<string, string> }>;
       const stops = editor.doc.getMap("stops").toJSON() as Record<
         string,
-        { name: string; deleted: Marks }
+        { name: string; notes: string; deleted: Marks }
       >;
       const all = editor.doc.getMap("routes").toJSON() as Record<
         string,
@@ -127,6 +128,7 @@ async function routes(page: Page): Promise<RouteState> {
             .filter((s) => stops[s] !== undefined && !removed(s, stops[s].deleted)),
         ),
         names: Object.fromEntries(Object.entries(stops).map(([id, s]) => [id, s.name])),
+        notes: Object.fromEntries(Object.entries(stops).map(([id, s]) => [id, s.notes])),
         undoSteps: editor.undo.undoStack.length,
       };
     },
@@ -199,9 +201,9 @@ test("routes and stops through the panel, each action one undo step", async ({
     { w: box.width, h: box.height },
   );
 
-  // Alt+R opens the panel.
+  // Shift+R opens the panel.
   await surface.focus();
-  await page.keyboard.press("Alt+r");
+  await page.keyboard.press("Shift+R");
   const panel = page.getByRole("complementary").filter({ hasText: "Routes" });
   await expect(panel.getByRole("heading", { name: "Routes" })).toBeVisible();
   await expect(panel.getByText("No routes yet")).toBeVisible();
@@ -259,7 +261,6 @@ test("routes and stops through the panel, each action one undo step", async ({
   expect(moved.y).toBeCloseTo(200 + 60, 0);
 
   // A click on the stop flies the camera there: it ends centred on the moved frame.
-  await surface.focus();
   await steps.getByRole("button", { name: /Intro/ }).click();
   await expect
     .poll(
@@ -290,25 +291,46 @@ test("routes and stops through the panel, each action one undo step", async ({
   const name = panel.getByLabel("Stop name");
   await name.fill("Opening");
   await name.press("Enter");
-  await name.blur();
   await expect.poll(async () => (await routes(page)).names[frameStop]).toBe("Opening");
+  // Choosing a route in the list gives the keyboard back to the canvas:
+  // Ctrl+Z and Ctrl+Shift+Z work at once.
   await panel.getByLabel("Route", { exact: true }).selectOption({ index: 0 });
   await expect(steps.getByRole("listitem").nth(1)).toContainText("Opening");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(steps.getByRole("listitem").nth(1)).toContainText("Intro");
+  await page.keyboard.press("ControlOrMeta+Shift+Z");
+  await expect(steps.getByRole("listitem").nth(1)).toContainText("Opening");
 
-  // Deleting it warns that two routes use it; Cancel keeps it. (The keyboard
-  // goes back to the canvas, which the dialog gives the focus back to.)
-  await surface.focus();
+  // Deleting it warns that two routes use it. The dialog is modal for the
+  // keyboard: Tab stays in it, and Escape closes it after a click on its
+  // backdrop; Cancel and Escape keep the stop.
   await steps.getByRole("button", { name: /Opening/ }).click();
   await panel.getByRole("button", { name: "Delete stop" }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("used in 2 routes");
+  const inDialog = () =>
+    page.evaluate(() => document.activeElement?.closest('[role="alertdialog"]') !== null);
+  for (const key of ["Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab"]) {
+    await page.keyboard.press(key);
+    expect(await inDialog(), key).toBe(true);
+  }
+  await page.mouse.click(box.x + 5, box.y + 5);
+  expect(await inDialog()).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await panel.getByRole("button", { name: "Delete stop" }).click();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toHaveCount(0);
   expect((await routes(page)).routes).toEqual([[viewStop, frameStop], [frameStop]]);
 
-  // Deleting anyway takes it out of both routes, as one step.
+  // Notes typed and then, from the notes field, Delete stop and Delete anyway:
+  // the notes are saved (one step), the stop leaves both routes (one step),
+  // and Ctrl+Z, with no click on the canvas, brings it back to both.
   const before = (await routes(page)).undoSteps;
+  const notes = panel.getByLabel("Speaker notes");
+  await notes.click();
+  await notes.fill("Say hello \u{1F44B}");
   await panel.getByRole("button", { name: "Delete stop" }).click();
   await page
     .getByRole("alertdialog")
@@ -317,15 +339,44 @@ test("routes and stops through the panel, each action one undo step", async ({
   await expect(steps.getByRole("listitem")).toHaveCount(1);
   now = await routes(page);
   expect(now.routes).toEqual([[viewStop], []]);
-  expect(now.undoSteps).toBe(before + 1);
-
-  // Ctrl+Z brings it back to both: the dialog gave the focus back to the canvas.
+  expect(now.notes[frameStop]).toBe("Say hello \u{1F44B}");
+  expect(now.undoSteps).toBe(before + 2);
   await page.keyboard.press("ControlOrMeta+z");
   await expect(steps.getByRole("listitem")).toHaveCount(2);
-  expect((await routes(page)).routes).toEqual([[viewStop, frameStop], [frameStop]]);
+  now = await routes(page);
+  expect(now.routes).toEqual([[viewStop, frameStop], [frameStop]]);
+  expect(now.notes[frameStop]).toBe("Say hello \u{1F44B}");
 
-  // Alt+R closes the panel.
-  await page.keyboard.press("Alt+r");
+  // Another user's change does not overwrite a name being typed, and the
+  // name typed is saved over it.
+  const name2 = panel.getByLabel("Stop name");
+  await name2.click();
+  await name2.fill("Mine");
+  await withEditor(
+    page,
+    (editor, id) =>
+      editor.run("galatsa.routes/rename-stop", { stop: id, name: "Theirs" }),
+    frameStop,
+  );
+  await expect.poll(async () => (await routes(page)).names[frameStop]).toBe("Theirs");
+  await expect(name2).toHaveValue("Mine");
+  await name2.press("Enter");
+  await expect.poll(async () => (await routes(page)).names[frameStop]).toBe("Mine");
+  // Notes being typed when another user deletes the stop are saved.
+  await notes.click();
+  await notes.fill("Not lost");
+  await withEditor(
+    page,
+    (editor, id) => editor.run("galatsa.routes/delete-stop", { stop: id }),
+    frameStop,
+  );
+  await expect(notes).toHaveCount(0);
+  expect((await routes(page)).notes[frameStop]).toBe("Not lost");
+
+  // Shift+R closes the panel. (The field that had the focus went away with
+  // the stop another user deleted, so the canvas is given it first.)
+  await surface.focus();
+  await page.keyboard.press("Shift+R");
   await expect(panel).toHaveCount(0);
 
   expect(errors).toEqual([]);

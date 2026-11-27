@@ -3,6 +3,7 @@
 export default {
   close: "Close",
   cancel: "Cancel",
+  failed: "That could not be done now: {action}",
   panel: "Routes",
   "toggle-panel": "Show or hide routes",
   route: "Route",
@@ -62,6 +63,6 @@ export default {
   "element.untitled": "Unnamed element",
   "delete.title": "Delete the stop?",
   "delete.used":
-    "{count, plural, one {The stop is used in # route. If it is deleted, it disappears from the route.} other {The stop is used in # routes. If it is deleted, it disappears from all of them.}}",
+    "{count, plural, =0 {The stop is no longer used in any route.} one {The stop is used in # route. If it is deleted, it disappears from the route.} other {The stop is used in # routes. If it is deleted, it disappears from all of them.}}",
   "delete.confirm": "Delete anyway",
 };

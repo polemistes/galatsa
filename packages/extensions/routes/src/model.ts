@@ -10,8 +10,10 @@ import {
   FRAME_TYPE,
   MAX_ZOOM,
   MIN_ZOOM,
+  Problems,
   Resolver,
   compareOrdered,
+  envelopeField,
   isRemoved,
   liveRoutes,
   routeSteps,
@@ -27,7 +29,7 @@ import {
   type RouteStep,
   type StopId,
 } from "@galatsa/core";
-import { stopsAndRoutesOf, yLookup } from "@galatsa/core/ydoc";
+import { roots, stopsAndRoutesOf, yLookup } from "@galatsa/core/ydoc";
 import type { EditorServices } from "@galatsa/extension-api/editing";
 import type * as Y from "yjs";
 
@@ -37,6 +39,16 @@ export type { RouteStep };
 /** The stops and routes of a document, read now. */
 export function readRoutes(doc: Y.Doc): StopsAndRoutes {
   return stopsAndRoutesOf(doc);
+}
+
+/**
+ * An element's name as the user gave it ("" for none, or for no such
+ * element), read with the document's grammar.
+ */
+export function elementName(doc: Y.Doc, id: ElementId): string {
+  const record = roots(doc).elements.get(id);
+  if (record === undefined || typeof record.get !== "function") return "";
+  return envelopeField.name(record.get("name"), new Problems(0));
 }
 
 /** A stop that exists and is not removed. */

@@ -9,13 +9,21 @@
   of thumbnails is the editor shell's. See docs/adr/0013-routes-and-stops.md.
 -->
 <script lang="ts">
-  import type { ElementId, RouteEntryId, StopId } from "@galatsa/core";
-  import { roots } from "@galatsa/core/ydoc";
-  import { translator, type PanelProps } from "@galatsa/editor";
+  import type { RouteEntryId, StopId } from "@galatsa/core";
+  // Types only: the editor's Svelte binding for custom panels.
+  import type { PanelProps } from "@galatsa/editor";
   import { untrack } from "svelte";
-  import { ROUTES, ROUTES_PANEL, routesCommandEnabled } from "./commands.ts";
   import {
+    ROUTES,
+    ROUTES_COMMANDS,
+    ROUTES_PANEL,
+    routesCommandEnabled,
+  } from "./commands.ts";
+  import DraftField from "./DraftField.svelte";
+  import {
+    elementName,
     firstPlaces,
+    isLiveStop,
     liveRoutes,
     liveStops,
     readRoutes,
@@ -24,8 +32,9 @@
     type StopsAndRoutes,
   } from "./model.ts";
   import { choose, currentChoice, watchChoice } from "./state.ts";
+  import { translator } from "./translate.ts";
 
-  let { context, i18n }: PanelProps = $props();
+  let { context, i18n, focusCanvas }: PanelProps = $props();
 
   const t = $derived(translator(i18n));
   const doc = $derived(context.doc);
@@ -52,20 +61,13 @@
     };
   });
 
-  /** An element's name as the user gave it, or "". */
-  function elementName(id: ElementId): string {
-    const record = roots(doc).elements.get(id);
-    const name = record?.get("name");
-    return typeof name === "string" ? name : "";
-  }
-
   /** The stop's name, the name of its frame, or its place in a route. */
   function stopLabel(sr: StopsAndRoutes, stop: StopId, position: number): string {
     const record = sr.stops[stop];
     if (record === undefined) return "";
     if (record.name !== "") return record.name;
     if (record.view.kind === "frame") {
-      const name = elementName(record.view.frame);
+      const name = elementName(doc, record.view.frame);
       if (name !== "") return name;
     }
     return position > 0
@@ -109,7 +111,7 @@
         : Object.entries(stop.visibility).map(([id, change]) => ({
             id,
             action: change.action,
-            label: elementName(id) || t("galatsa.routes:element.untitled"),
+            label: elementName(doc, id) || t("galatsa.routes:element.untitled"),
           }));
     const notes =
       stop === null
@@ -140,16 +142,49 @@
     return routesCommandEnabled(context, id, args);
   }
 
+  /**
+   * Runs a command. One that cannot run, or fails, is told to the user in the
+   * editor's notice, never passed over in silence.
+   */
   function run(id: string, args?: unknown): void {
     try {
       context.run(id, args);
     } catch (error) {
       console.error(error);
+      const label = ROUTES_COMMANDS.get(id)?.label;
+      context.services.notices.show("galatsa.routes:failed", {
+        action: label === undefined ? id : i18n.t(label),
+      });
     }
   }
 
+  /**
+   * After an action with a button or a list (not typing in a text field),
+   * the canvas gets the keyboard back, so undo and its other keys work at
+   * once (docs/adr/0013).
+   */
+  function act(action: () => void): () => void {
+    return () => {
+      action();
+      focusCanvas();
+    };
+  }
+
   let existingStop = $state<string>("");
-  let deleting = $state<{ stop: StopId; count: number } | null>(null);
+  let deleting = $state<StopId | null>(null);
+  let dialog = $state<HTMLElement | null>(null);
+
+  /** How many routes use the stop being deleted, now: it follows other users' changes. */
+  const deletingCount = $derived.by(() => {
+    void version;
+    return deleting === null ? 0 : routesUsing(readRoutes(doc), deleting).length;
+  });
+
+  // A stop deleted meanwhile (by another user, or an undo) needs no question.
+  $effect(() => {
+    void version;
+    if (deleting !== null && !isLiveStop(readRoutes(doc), deleting)) closeDialog();
+  });
 
   function chooseRoute(route: string): void {
     choose(doc, { route, entry: null });
@@ -176,50 +211,86 @@
     );
   }
 
-  /** Deleting a stop that routes use asks first (the users' decision). */
-  /** Where the keyboard focus was before the dialog took it (the canvas, usually). */
-  let focusBefore: HTMLElement | null = null;
-
+  /** Deleting a stop that routes use asks first (the users' decision, E9). */
   function askDelete(stop: StopId): void {
-    const count = routesUsing(readRoutes(doc), stop).length;
-    if (count === 0) {
+    if (routesUsing(readRoutes(doc), stop).length === 0) {
       run(ROUTES.deleteStop, { stop });
+      focusCanvas();
       return;
     }
-    focusBefore =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    deleting = { stop, count };
+    deleting = stop;
   }
 
-  /** Closes the dialog and gives the focus back, so Ctrl+Z reaches the canvas again. */
+  /** Closes the dialog; the canvas gets the keyboard, so Ctrl+Z undoes at once. */
   function closeDialog(): void {
     deleting = null;
-    focusBefore?.focus({ preventScroll: true });
-    focusBefore = null;
+    focusCanvas();
   }
 
   function confirmDelete(): void {
     if (deleting === null) return;
-    const stop = deleting.stop;
-    closeDialog();
+    const stop = deleting;
     run(ROUTES.deleteStop, { stop });
+    closeDialog();
   }
 
-  function dialogKey(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      closeDialog();
-    }
+  /** The dialog's buttons, in order. */
+  function dialogButtons(): HTMLElement[] {
+    return dialog === null ? [] : [...dialog.querySelectorAll<HTMLElement>("button")];
   }
 
   /**
-   * A press on a button keeps the keyboard focus where it is (the canvas), so
-   * Ctrl+Z still undoes what the button did; a text field being edited keeps
-   * it too, so its change is not cut short.
+   * While the dialog is open it is modal for the keyboard: Tab and Shift+Tab
+   * go round its buttons, Escape closes it wherever the focus is, and no other
+   * key reaches the canvas or the panel behind it.
+   */
+  function windowKey(event: KeyboardEvent): void {
+    if (deleting === null) return;
+    const buttons = dialogButtons();
+    const inside =
+      dialog !== null && event.target instanceof Node && dialog.contains(event.target);
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeDialog();
+      return;
+    }
+    if (event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (buttons.length === 0) return;
+      const at = buttons.indexOf(document.activeElement as HTMLElement);
+      const step = event.shiftKey ? -1 : 1;
+      buttons[(at + step + buttons.length) % buttons.length]!.focus();
+      return;
+    }
+    if (!inside) {
+      event.preventDefault();
+      event.stopPropagation();
+      buttons[0]?.focus();
+    }
+  }
+
+  /** The focus may not leave the open dialog (a click behind it, a script). */
+  function windowFocus(event: FocusEvent): void {
+    if (deleting === null || dialog === null) return;
+    if (event.target instanceof Node && dialog.contains(event.target)) return;
+    dialogButtons()[0]?.focus();
+  }
+
+  /**
+   * A press on a button keeps the keyboard focus where it is, and a press on
+   * the dialog's backdrop keeps it in the dialog; a text field being edited
+   * lets it go, so that its change is saved.
    */
   function keepFocus(event: MouseEvent): void {
     const target = event.target;
-    if (!(target instanceof Element) || target.closest("button") === null) return;
+    if (!(target instanceof Element)) return;
+    if (target.classList.contains("backdrop")) {
+      event.preventDefault();
+      return;
+    }
+    if (target.closest("button") === null) return;
     const active = document.activeElement;
     if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)
       return;
@@ -233,6 +304,8 @@
   const selectionSize = $derived(context.services.selection.get().length);
 </script>
 
+<svelte:window onkeydowncapture={windowKey} onfocusin={windowFocus} />
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="panel" onmousedown={keepFocus}>
   <header>
@@ -242,7 +315,7 @@
       class="icon"
       aria-label={t("galatsa.routes:close")}
       title={t("galatsa.routes:close")}
-      onclick={() => context.services.panels.close(ROUTES_PANEL)}>×</button
+      onclick={act(() => context.services.panels.close(ROUTES_PANEL))}>×</button
     >
   </header>
 
@@ -254,7 +327,10 @@
       <select
         id="{uid}-route"
         value={model.route ?? ""}
-        onchange={(e) => chooseRoute(e.currentTarget.value)}
+        onchange={(e) => {
+          chooseRoute(e.currentTarget.value);
+          focusCanvas();
+        }}
       >
         {#each model.routes as route (route.id)}
           <option value={route.id}>{route.label}</option>
@@ -265,23 +341,24 @@
       {@const route = model.route}
       <div class="field">
         <label for="{uid}-route-name">{t("galatsa.routes:route.name")}</label>
-        <input
-          id="{uid}-route-name"
-          type="text"
-          value={model.routeName}
-          onchange={(e) =>
-            run(ROUTES.renameRoute, { route, name: e.currentTarget.value })}
-        />
+        {#key route}
+          <DraftField
+            id="{uid}-route-name"
+            target={route}
+            value={model.routeName}
+            oncommit={(id, name) => run(ROUTES.renameRoute, { route: id, name })}
+          />
+        {/key}
       </div>
     {/if}
   {/if}
   <div class="row">
-    <button type="button" onclick={() => run(ROUTES.addRoute)}
+    <button type="button" onclick={act(() => run(ROUTES.addRoute))}
       >{t("galatsa.routes:add-route")}</button
     >
     {#if model.route !== null}
       {@const route = model.route}
-      <button type="button" onclick={() => run(ROUTES.deleteRoute, { route })}
+      <button type="button" onclick={act(() => run(ROUTES.deleteRoute, { route }))}
         >{t("galatsa.routes:delete-route")}</button
       >
     {/if}
@@ -298,7 +375,7 @@
             type="button"
             class="step"
             aria-current={i === model.chosenIndex ? "step" : undefined}
-            onclick={() => goTo(s.entry, s.stop)}
+            onclick={act(() => goTo(s.entry, s.stop))}
           >
             <span class="number">{i + 1}</span>
             <span class="name">{s.label}</span>
@@ -309,7 +386,7 @@
             aria-label={t("galatsa.routes:move-up")}
             title={t("galatsa.routes:move-up")}
             disabled={i === 0}
-            onclick={() => move(s.entry, i - 1)}>↑</button
+            onclick={act(() => move(s.entry, i - 1))}>↑</button
           >
           <button
             type="button"
@@ -317,20 +394,20 @@
             aria-label={t("galatsa.routes:move-down")}
             title={t("galatsa.routes:move-down")}
             disabled={i === model.steps.length - 1}
-            onclick={() => move(s.entry, i + 1)}>↓</button
+            onclick={act(() => move(s.entry, i + 1))}>↓</button
           >
         </li>
       {/each}
     </ol>
   {/if}
   <div class="row">
-    <button type="button" onclick={() => run(ROUTES.addStopFromView)}
+    <button type="button" onclick={act(() => run(ROUTES.addStopFromView))}
       >{t("galatsa.routes:add-stop-from-view")}</button
     >
     <button
       type="button"
       disabled={selectionSize === 0 || !can(ROUTES.addStopsFromFrames)}
-      onclick={() => run(ROUTES.addStopsFromFrames)}
+      onclick={act(() => run(ROUTES.addStopsFromFrames))}
       >{t("galatsa.routes:add-stops-from-frames")}</button
     >
   </div>
@@ -338,14 +415,18 @@
     <div class="row">
       <div class="field grow">
         <label for="{uid}-existing">{t("galatsa.routes:existing")}</label>
-        <select id="{uid}-existing" bind:value={existingStop}>
+        <select
+          id="{uid}-existing"
+          bind:value={existingStop}
+          onchange={() => focusCanvas()}
+        >
           <option value=""></option>
           {#each model.existing as stop (stop.id)}
             <option value={stop.id}>{stop.label}</option>
           {/each}
         </select>
       </div>
-      <button type="button" disabled={existingStop === ""} onclick={addExisting}
+      <button type="button" disabled={existingStop === ""} onclick={act(addExisting)}
         >{t("galatsa.routes:add-visit")}</button
       >
     </div>
@@ -358,13 +439,14 @@
       <h3 id="{uid}-stop">{t("galatsa.routes:selected-stop")}</h3>
       <div class="field">
         <label for="{uid}-stop-name">{t("galatsa.routes:stop.name")}</label>
-        <input
-          id="{uid}-stop-name"
-          type="text"
-          value={model.stop.name}
-          onchange={(e) =>
-            run(ROUTES.renameStop, { stop: chosen.stop, name: e.currentTarget.value })}
-        />
+        {#key chosen.stop}
+          <DraftField
+            id="{uid}-stop-name"
+            target={chosen.stop}
+            value={model.stop.name}
+            oncommit={(stop, name) => run(ROUTES.renameStop, { stop, name })}
+          />
+        {/key}
       </div>
       <p class="hint">
         {t("galatsa.routes:used-in", {
@@ -373,19 +455,20 @@
           · {t("galatsa.routes:frame-stop")}{/if}
       </p>
       <div class="row">
-        <button type="button" onclick={() => goTo(chosen.entry, chosen.stop)}
+        <button type="button" onclick={act(() => goTo(chosen.entry, chosen.stop))}
           >{t("galatsa.routes:go-to-stop")}</button
         >
         <button
           type="button"
-          onclick={() => run(ROUTES.updateStopView, { stop: chosen.stop })}
+          onclick={act(() => run(ROUTES.updateStopView, { stop: chosen.stop }))}
           >{t("galatsa.routes:update-stop-view")}</button
         >
         {#if model.visits > 1}
           <button
             type="button"
-            onclick={() => run(ROUTES.copyStopForRoute, { route, entry: chosen.entry })}
-            >{t("galatsa.routes:copy-stop-for-route")}</button
+            onclick={act(() =>
+              run(ROUTES.copyStopForRoute, { route, entry: chosen.entry }),
+            )}>{t("galatsa.routes:copy-stop-for-route")}</button
           >
         {/if}
       </div>
@@ -395,20 +478,23 @@
         <button
           type="button"
           disabled={selectionSize === 0}
-          onclick={() => run(ROUTES.setVisibility, { stop: chosen.stop, action: "show" })}
-          >{t("galatsa.routes:show-here")}</button
+          onclick={act(() =>
+            run(ROUTES.setVisibility, { stop: chosen.stop, action: "show" }),
+          )}>{t("galatsa.routes:show-here")}</button
         >
         <button
           type="button"
           disabled={selectionSize === 0}
-          onclick={() => run(ROUTES.setVisibility, { stop: chosen.stop, action: "hide" })}
-          >{t("galatsa.routes:hide-here")}</button
+          onclick={act(() =>
+            run(ROUTES.setVisibility, { stop: chosen.stop, action: "hide" }),
+          )}>{t("galatsa.routes:hide-here")}</button
         >
         <button
           type="button"
           disabled={selectionSize === 0}
-          onclick={() => run(ROUTES.setVisibility, { stop: chosen.stop, action: null })}
-          >{t("galatsa.routes:clear-here")}</button
+          onclick={act(() =>
+            run(ROUTES.setVisibility, { stop: chosen.stop, action: null }),
+          )}>{t("galatsa.routes:clear-here")}</button
         >
       </div>
       {#if model.visibility.length === 0}
@@ -428,12 +514,13 @@
                 class="icon"
                 aria-label={t("galatsa.routes:visibility.remove")}
                 title={t("galatsa.routes:visibility.remove")}
-                onclick={() =>
+                onclick={act(() =>
                   run(ROUTES.setVisibility, {
                     stop: chosen.stop,
                     ids: [change.id],
                     action: null,
-                  })}>×</button
+                  }),
+                )}>×</button
               >
             </li>
           {/each}
@@ -442,18 +529,20 @@
 
       <div class="field">
         <label for="{uid}-notes">{t("galatsa.routes:notes")}</label>
-        <textarea
-          id="{uid}-notes"
-          rows="4"
-          value={model.notes}
-          onchange={(e) =>
-            run(ROUTES.setStopNotes, { stop: chosen.stop, text: e.currentTarget.value })}
-        ></textarea>
+        {#key chosen.stop}
+          <DraftField
+            id="{uid}-notes"
+            target={chosen.stop}
+            value={model.notes}
+            multiline
+            oncommit={(stop, text) => run(ROUTES.setStopNotes, { stop, text })}
+          />
+        {/key}
       </div>
       <div class="row">
         <button
           type="button"
-          onclick={() => run(ROUTES.removeVisit, { route, entry: chosen.entry })}
+          onclick={act(() => run(ROUTES.removeVisit, { route, entry: chosen.entry }))}
           >{t("galatsa.routes:remove-visit")}</button
         >
         <button type="button" class="danger" onclick={() => askDelete(chosen.stop)}
@@ -465,19 +554,20 @@
 </div>
 
 {#if deleting !== null}
-  <div class="backdrop">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="backdrop" onmousedown={keepFocus}>
     <div
+      bind:this={dialog}
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="{uid}-delete"
       aria-describedby="{uid}-delete-text"
       class="dialog"
       tabindex="-1"
-      onkeydown={dialogKey}
     >
       <h2 id="{uid}-delete">{t("galatsa.routes:delete.title")}</h2>
       <p id="{uid}-delete-text">
-        {t("galatsa.routes:delete.used", { count: deleting.count })}
+        {t("galatsa.routes:delete.used", { count: deletingCount })}
       </p>
       <div class="row end">
         <button type="button" use:focusOnMount onclick={closeDialog}
@@ -532,16 +622,11 @@
     flex: 1;
     min-width: 0;
   }
-  input,
-  select,
-  textarea {
+  select {
     font: inherit;
     padding: 4px 6px;
     border: 1px solid #cbd5e1;
     border-radius: 4px;
-  }
-  textarea {
-    resize: vertical;
   }
   .row {
     display: flex;

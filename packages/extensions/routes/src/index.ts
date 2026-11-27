@@ -4,29 +4,26 @@
 // extension against the same interface as the others. Commands over the
 // document's stop and route operations, a panel (Svelte) to work with them,
 // the route drawn on the canvas, and jumps to a stop along its transition.
-// It has nothing to draw in a viewer: playing routes is the player's. See
+// A viewer imports "@galatsa/extension-routes/view", which has only the
+// viewing part (its messages): playing routes is the player's. See
 // docs/adr/0013-routes-and-stops.md.
 
 // The editor's Svelte binding for custom panels (CustomPanelViews.svelte).
 import type { PanelProps } from "@galatsa/editor";
-import { EXTENSION_API_VERSION, messageKey } from "@galatsa/extension-api";
-import {
-  defineEditExtension,
-  defineViewExtension,
-  type EditExtension,
-} from "@galatsa/extension-api/editing";
-import { ROUTES_EXTENSION, routesCommands } from "./commands.ts";
-import { routesMessages } from "./messages/index.ts";
-import { routeOverlay } from "./overlay.ts";
+import { messageKey } from "@galatsa/extension-api";
+import { defineEditExtension, type EditExtension } from "@galatsa/extension-api/editing";
 import type { Component } from "svelte";
+import { routesCommands } from "./commands.ts";
+import { routeOverlay } from "./overlay.ts";
 import RoutesPanel from "./RoutesPanel.svelte";
+import { routesMessages, routesViewExtension } from "./view.ts";
 
 export {
   FRAME_STOP_PADDING,
   ROUTES,
-  ROUTES_EXTENSION,
   ROUTES_PANEL,
   routesCommandEnabled,
+  textChange,
   type AddedStop,
   type AddRouteArgs,
   type EntryArgs,
@@ -73,16 +70,9 @@ export {
   watchChoice,
   type RouteChoice,
 } from "./state.ts";
-export { routesMessages } from "./messages/index.ts";
+export { ROUTES_EXTENSION, routesMessages, routesViewExtension } from "./view.ts";
 
 const panelView: Component<PanelProps> = RoutesPanel;
-
-export const routesViewExtension = defineViewExtension({
-  id: ROUTES_EXTENSION,
-  version: "0.1.0",
-  api: EXTENSION_API_VERSION,
-  messages: [routesMessages],
-});
 
 export const routesExtension: EditExtension = defineEditExtension({
   view: routesViewExtension,
