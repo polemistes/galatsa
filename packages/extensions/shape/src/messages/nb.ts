@@ -36,6 +36,7 @@ export default {
   "param.bracket.square": "Hakeparentes",
   "param.bracket.round": "Rund parentes",
   "param.pointY": "Plassering av spissen",
+  "param.curl": "Krøllstørrelse",
   "kind.speech-bubble": "Snakkeboble",
   "param.tailX": "Halens spiss, vannrett",
   "param.tailY": "Halens spiss, loddrett",
