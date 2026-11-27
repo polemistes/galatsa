@@ -1,0 +1,10 @@
+{
+  // A browser library: the stage, the input and the presenter's views use the
+  // DOM. The core (src/core.ts) uses neither the DOM nor Node.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.mts", "src/**/*.cts"]
+}
