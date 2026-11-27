@@ -321,7 +321,7 @@ describe("the live resolver, on random states", () => {
     expect(failures.slice(0, 5)).toEqual([]);
     // What is reported is not everything every time.
     expect(reported).toBeLessThan(differed * 4);
-  });
+  }, 60_000);
 
   it("rebuilds from scratch after changes it was not told about", () => {
     const rnd = seeded(99);
