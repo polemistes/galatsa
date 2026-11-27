@@ -14,14 +14,22 @@ needs. From the repository root:
 
     env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a \\
         python3 tests/e2e/webkitgtk/camera_check.py
+
+The port of the web app's Vite server is E2E_WEB_PORT, or 5198; a server
+already listening there is used as it is.
 """
 
 import math
+import os
 import sys
 import time
 
-import editor_check as check
+# Importing editor_check would leave a bytecode cache in the repository.
+sys.dont_write_bytecode = True
 
+import editor_check as check  # noqa: E402
+
+check.PORT = int(os.environ.get("E2E_WEB_PORT", "5198"))
 check.URL = f"http://localhost:{check.PORT}/?lang=en&fresh&scene=empty"
 check.TITLE = "Galatsa camera check"
 check.PROBE = """

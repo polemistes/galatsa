@@ -2,10 +2,20 @@
 
 import { defineConfig, devices } from "@playwright/test";
 
-/** Port of the bench harness dev server (bench/index.html). */
-export const BENCH_PORT = 5199;
-/** Port of the web app's dev server (apps/web, the editor's development page). */
-export const WEB_PORT = 5198;
+/**
+ * A port from the environment, or the default. Several working copies can then
+ * run their tests at the same time without one using another's dev server
+ * (which an existing server on the port would be, outside CI).
+ */
+function port(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+/** Port of the bench harness dev server (bench/index.html); E2E_BENCH_PORT sets another. */
+export const BENCH_PORT = port("E2E_BENCH_PORT", 5199);
+/** Port of the web app's dev server (apps/web, the editor's development page); E2E_WEB_PORT sets another. */
+export const WEB_PORT = port("E2E_WEB_PORT", 5198);
 
 /**
  * Playwright's WebKit needs the libraries of the Ubuntu release it was built
