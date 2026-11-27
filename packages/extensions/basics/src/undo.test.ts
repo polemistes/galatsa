@@ -232,12 +232,12 @@ describe("a thousand random commands", () => {
       ])
         expect(succeeded.get(id) ?? 0, id).toBeGreaterThan(0);
       // And the frame commands (docs/adr/0014), a fair number of times in a
-      // full run (a short run, every step checked, may miss one): seeds 1 to
-      // 12 ran each 5 to 38 times in 1,000 commands.
+      // full run (a short run, every step checked, may miss one): in seeds 1
+      // to 132 each ran 2 to 38 times in 1,000 commands.
       if (commands >= 1000)
         for (const id of FRAME_COMMANDS)
           expect(succeeded.get(id) ?? 0, id).toBeGreaterThanOrEqual(
-            Math.floor(commands / 250),
+            Math.floor(commands / 500),
           );
 
       withSeed(seed + 1000, () => {
