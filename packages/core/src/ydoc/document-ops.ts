@@ -55,6 +55,7 @@ import {
   yLookup,
 } from "./snapshot.ts";
 import { trackWork } from "./track.ts";
+import { currentResolver } from "./live.ts";
 
 export interface TidySummary {
   /** Removed elements whose records were deleted. */
@@ -387,7 +388,7 @@ export function pasteFragment(
   const mapId = (id: string | null) => (id === null ? null : (ids.get(id) ?? id));
 
   // In front of everything the user sees in the target container.
-  const front = slotsOf(new Resolver(yLookup(doc)), parent).pop();
+  const front = slotsOf(currentResolver(doc), parent).pop();
   const rootKeys = keysBetween(front?.order ?? null, null, fragment.roots.length);
   const rootIndex = new Map(fragment.roots.map((id, i) => [id, i]));
   // Each root is created removed, with a mark that covers what is pasted inside it.

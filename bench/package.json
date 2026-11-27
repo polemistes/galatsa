@@ -25,7 +25,9 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@galatsa/core": "workspace:*"
+    "@galatsa/core": "workspace:*",
+    "@galatsa/extension-api": "workspace:*",
+    "@galatsa/renderer": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

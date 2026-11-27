@@ -10,3 +10,4 @@ export * from "./track.ts";
 export * from "./ops.ts";
 export * from "./sync.ts";
 export * from "./document-ops.ts";
+export * from "./live.ts";

@@ -72,6 +72,34 @@ export interface Deleter {
 }
 
 const NO_DELETERS: readonly Deleter[] = [];
+
+/** Steps a walk up the tree takes before it starts to look for a loop. */
+const LOOP_CHECK = 256;
+
+/**
+ * Watches one walk up the tree. Parents as resolved never form a loop, but a
+ * Resolver whose cache is kept up to date (the live resolver) could hold an
+ * inconsistent cache after a defect; this turns a walk that would never end
+ * into a detected loop. Costs nothing for the first steps.
+ */
+class Ascent {
+  #steps = 0;
+  #seen: Set<ElementId> | null = null;
+
+  /** True if the walk reached `id` before. */
+  again(id: ElementId): boolean {
+    if (++this.#steps <= LOOP_CHECK) return false;
+    this.#seen ??= new Set();
+    if (this.#seen.has(id)) return true;
+    this.#seen.add(id);
+    return false;
+  }
+}
+
+const LOOPED: unique symbol = Symbol("looped");
+
+/** Steps a walk down the tree takes before it starts to look for a loop. */
+const WALK_CHECK = 10_000;
 const NO_CHILDREN: readonly ElementId[] = [];
 const NO_REVISION: Revision = {};
 
@@ -113,9 +141,10 @@ export function withoutMarks(
 
 /**
  * Resolves one state of the document. Results are cached, so create a new
- * Resolver after the document changes. Everything is computed on demand: asking
- * about one element reads only that element and the containers above it, unless
- * the question is about children.
+ * Resolver after the document changes (or use the live resolver, which is kept
+ * up to date). Everything is computed on demand: asking about one element reads
+ * only that element and the containers above it, unless the question is about
+ * children.
  */
 export class Resolver {
   readonly #lookup: ElementLookup;
@@ -198,10 +227,69 @@ export class Resolver {
 
   /** True if `id` is `ancestor` or lies inside it (effective tree). */
   isWithin(id: ElementId | null, ancestor: ElementId): boolean {
-    for (let at: ElementId | null = id; at !== null; at = this.parentOf(at)) {
-      if (at === ancestor) return true;
+    return this.#ascend((ascent) => {
+      for (let at: ElementId | null = id; at !== null; at = this.parentOf(at)) {
+        if (ascent.again(at)) return LOOPED;
+        if (at === ancestor) return true;
+      }
+      return false;
+    });
+  }
+
+  /**
+   * Runs a walk up the tree. If it finds a loop (only an inconsistent cache can
+   * make one), `cacheLoop` is told, and the walk runs once more.
+   */
+  #ascend<T>(walk: (ascent: Ascent) => T | typeof LOOPED): T {
+    const first = walk(new Ascent());
+    if (first !== LOOPED) return first;
+    this.cacheLoop();
+    const second = walk(new Ascent());
+    if (second === LOOPED) throw new Error("The resolved parents form a loop");
+    return second;
+  }
+
+  /**
+   * Runs something that walks down the tree. If the walk finds a loop (only an
+   * inconsistent cache can make one), `cacheLoop` is told, and it runs once
+   * more from the start.
+   */
+  #descend<T>(run: () => T): T {
+    try {
+      return run();
+    } catch (error) {
+      if (error !== LOOPED) throw error;
     }
-    return false;
+    this.cacheLoop();
+    try {
+      return run();
+    } catch (error) {
+      if (error === LOOPED)
+        throw new Error("The resolved children form a loop", { cause: error });
+      throw error;
+    }
+  }
+
+  /**
+   * Called when a walk up the tree found a loop in the cached parents. A
+   * Resolver that is never updated cannot have one, so this throws; the live
+   * resolver drops its cache instead and resolves again.
+   */
+  protected cacheLoop(): void {
+    throw new Error("The resolved parents form a loop");
+  }
+
+  /** Drops everything cached, as if the Resolver were new. */
+  protected reset(): void {
+    this.#envelope.clear();
+    this.#parent.clear();
+    this.#children.clear();
+    this.#indexed = false;
+    this.#asked = 0;
+    this.#local.clear();
+    this.#simpleLocal.clear();
+    this.#deleters.clear();
+    this.#digest.clear();
   }
 
   #sortSiblings(list: ElementId[]): ElementId[] {
@@ -230,6 +318,17 @@ export class Resolver {
       this.#children.set(parent, this.#sortSiblings(list));
       return list;
     }
+    this.indexChildren();
+    return this.#children.get(parent) ?? NO_CHILDREN;
+  }
+
+  /**
+   * Builds the children of every container at once (and with it the effective
+   * parent of every element). `children` does this by itself when asked about a
+   * third container.
+   */
+  protected indexChildren(): void {
+    if (this.#indexed) return;
     const index = new Map<ElementId | null, ElementId[]>();
     for (const id of this.#lookup.ids()) {
       if (!this.get(id)) continue;
@@ -238,9 +337,106 @@ export class Resolver {
       if (!list) index.set(key, (list = []));
       list.push(id);
     }
+    this.#children.clear();
     for (const [key, list] of index) this.#children.set(key, this.#sortSiblings(list));
     this.#indexed = true;
-    return this.#children.get(parent) ?? NO_CHILDREN;
+  }
+
+  /**
+   * Drops everything cached about the given elements after the lookup's content
+   * changed, so that the next question reads them again. Only for a subclass that
+   * keeps one Resolver up to date (the live resolver): `ids` must hold every
+   * element whose resolution can differ from what is cached, which takes knowing
+   * what depends on what. Everybody else creates a new Resolver.
+   *
+   * With a full children index, the index is updated (each list that changes is
+   * replaced, never changed in place, so a list handed out earlier stays as it
+   * was); without one, children are looked up anew.
+   */
+  protected forget(forgotten: ReadonlySet<ElementId>): void {
+    const ids = new Set(forgotten);
+    const touched = new Set<ElementId | null>();
+    const drop = (id: ElementId) => {
+      const parent = this.#parent.get(id);
+      if (parent !== undefined) touched.add(parent);
+      this.#envelope.delete(id);
+      this.#parent.delete(id);
+      this.#local.delete(id);
+      this.#simpleLocal.delete(id);
+      this.#deleters.delete(id);
+      this.#digest.delete(id);
+    };
+    const breakers: ElementId[] = [];
+    for (const id of ids) {
+      if (this.#parent.get(id) === null) breakers.push(id);
+      drop(id);
+    }
+    // A parent cycle is resolved as a whole: the member that breaks it, asked
+    // about alone, would get its stored parent. So the other members of a cycle
+    // broken at an element in the set are forgotten with it.
+    for (const id of breakers) {
+      const members: ElementId[] = [];
+      const seen = new Set<ElementId>([id]);
+      let at = this.#validParent(id);
+      while (at !== null && !seen.has(at)) {
+        seen.add(at);
+        members.push(at);
+        at = this.#validParent(at);
+      }
+      if (at !== id) continue;
+      for (const member of members) {
+        if (ids.has(member)) continue;
+        ids.add(member);
+        drop(member);
+      }
+    }
+    if (!this.#indexed) {
+      this.#children.clear();
+      this.#asked = 0;
+      return;
+    }
+    const lists = new Map<ElementId | null, ElementId[]>();
+    for (const parent of touched) {
+      const list = this.#children.get(parent);
+      if (list)
+        lists.set(
+          parent,
+          list.filter((id) => !ids.has(id)),
+        );
+    }
+    const added = new Map<ElementId | null, ElementId[]>();
+    for (const id of ids) {
+      if (!this.get(id)) continue;
+      const parent = this.parentOf(id);
+      let list = added.get(parent);
+      if (!list) added.set(parent, (list = []));
+      list.push(id);
+    }
+    const key = (id: ElementId) => ({ id, order: this.get(id)?.order ?? "" });
+    for (const [parent, newcomers] of added) {
+      let list = lists.get(parent);
+      if (!list) lists.set(parent, (list = [...(this.#children.get(parent) ?? [])]));
+      if (newcomers.length > 8) {
+        list.push(...newcomers);
+        this.#sortSiblings(list);
+        continue;
+      }
+      for (const id of newcomers) {
+        const item = key(id);
+        let low = 0;
+        let high = list.length;
+        while (low < high) {
+          const mid = (low + high) >>> 1;
+          if (compareOrdered(key(list[mid]!), item) < 0) low = mid + 1;
+          else high = mid;
+        }
+        list.splice(low, 0, id);
+      }
+    }
+    for (const [parent, list] of lists) {
+      if (list.length > 0) this.#children.set(parent, list);
+      else this.#children.delete(parent);
+    }
   }
 
   /**
@@ -249,8 +445,17 @@ export class Resolver {
    */
   #walk(root: ElementId | null, enter: (id: ElementId) => boolean): void {
     const stack = [...this.children(root)].reverse();
+    // Each element is met once; one met twice means the cached children loop
+    // (see Ascent). Checked only in walks of many steps.
+    let steps = 0;
+    let seen: Set<ElementId> | null = null;
     while (stack.length > 0) {
       const id = stack.pop()!;
+      if (++steps > WALK_CHECK) {
+        seen ??= new Set();
+        if (seen.has(id)) throw LOOPED;
+        seen.add(id);
+      }
       if (!enter(id)) continue;
       const children = this.children(id);
       for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]!);
@@ -259,6 +464,10 @@ export class Resolver {
 
   /** Everything inside `id` in the effective tree, in drawing order. */
   descendants(id: ElementId): ElementId[] {
+    return this.#descend(() => this.#descendants(id));
+  }
+
+  #descendants(id: ElementId): ElementId[] {
     const out: ElementId[] = [];
     this.#walk(id, (child) => {
       out.push(child);
@@ -280,14 +489,18 @@ export class Resolver {
    * meanwhile) is never hidden by it.
    */
   deleters(id: ElementId): readonly Deleter[] {
-    const chain: ElementId[] = [];
-    for (
-      let at: ElementId | null = id;
-      at !== null && !this.#deleters.has(at);
-      at = this.parentOf(at)
-    ) {
-      chain.push(at);
-    }
+    const chain = this.#ascend((ascent) => {
+      const out: ElementId[] = [];
+      for (
+        let at: ElementId | null = id;
+        at !== null && !this.#deleters.has(at);
+        at = this.parentOf(at)
+      ) {
+        if (ascent.again(at)) return LOOPED;
+        out.push(at);
+      }
+      return out;
+    });
     for (let i = chain.length - 1; i >= 0; i--) {
       this.#deleters.set(chain[i]!, this.#computeDeleters(chain[i]!));
     }
@@ -336,6 +549,10 @@ export class Resolver {
    * survived an earlier removal), so they and what is inside them are left out.
    */
   coverage(id: ElementId): { [id: ElementId]: string } {
+    return this.#descend(() => this.#coverage(id));
+  }
+
+  #coverage(id: ElementId): { [id: ElementId]: string } {
     const seen: { [id: ElementId]: string } = {};
     const list = (element: ElementId) => {
       Object.defineProperty(seen, element, {
@@ -388,9 +605,14 @@ export class Resolver {
 
   /** Nearest effective ancestor that is not gone: the parent the user sees. */
   logicalParentOf(id: ElementId): ElementId | null {
-    let parent = this.parentOf(id);
-    while (parent !== null && this.isGone(parent)) parent = this.parentOf(parent);
-    return parent;
+    return this.#ascend((ascent) => {
+      let parent = this.parentOf(id);
+      while (parent !== null && this.isGone(parent)) {
+        if (ascent.again(parent)) return LOOPED;
+        parent = this.parentOf(parent);
+      }
+      return parent;
+    });
   }
 
   /**
@@ -398,6 +620,10 @@ export class Resolver {
    * containers are replaced by their own visible children, in their slot.
    */
   logicalChildren(parent: ElementId | null): ElementId[] {
+    return this.#descend(() => this.#logicalChildren(parent));
+  }
+
+  #logicalChildren(parent: ElementId | null): ElementId[] {
     const out: ElementId[] = [];
     this.#walk(parent, (id) => {
       if (this.isGone(id)) return this.isContainer(id);
@@ -412,22 +638,32 @@ export class Resolver {
    * itself if it is a direct child. Undefined if `id` is not inside `ancestor`.
    */
   slotIn(id: ElementId, ancestor: ElementId | null): ElementId | undefined {
-    let at: ElementId | null = id;
-    while (at !== null) {
-      const parent = this.parentOf(at);
-      if (parent === ancestor) return at;
-      at = parent;
-    }
-    return undefined;
+    return this.#ascend((ascent) => {
+      let at: ElementId | null = id;
+      while (at !== null) {
+        if (ascent.again(at)) return LOOPED;
+        const parent = this.parentOf(at);
+        if (parent === ancestor) return at;
+        at = parent;
+      }
+      return undefined;
+    });
   }
 
   /** Locked, or inside a locked container the user still sees (not gone). */
   isLocked(id: ElementId): boolean {
     if (this.get(id)?.locked) return true;
-    for (let at = this.logicalParentOf(id); at !== null; at = this.logicalParentOf(at)) {
-      if (this.get(at)?.locked) return true;
-    }
-    return false;
+    return this.#ascend((ascent) => {
+      for (
+        let at = this.logicalParentOf(id);
+        at !== null;
+        at = this.logicalParentOf(at)
+      ) {
+        if (ascent.again(at)) return LOOPED;
+        if (this.get(at)?.locked) return true;
+      }
+      return false;
+    });
   }
 
   /**
@@ -436,6 +672,10 @@ export class Resolver {
    * children of gone containers are, in the container's slot.
    */
   drawOrder(): ElementId[] {
+    return this.#descend(() => this.#drawOrder());
+  }
+
+  #drawOrder(): ElementId[] {
     const out: ElementId[] = [];
     this.#walk(null, (id) => {
       if (!this.isGone(id)) out.push(id);
@@ -514,10 +754,15 @@ export class Resolver {
 
   /** Effective ancestors from `id` (inclusive) to the root, root as null last. */
   #chain(id: ElementId | null): (ElementId | null)[] {
-    const out: (ElementId | null)[] = [];
-    for (let at: ElementId | null = id; at !== null; at = this.parentOf(at)) out.push(at);
-    out.push(null);
-    return out;
+    return this.#ascend((ascent) => {
+      const out: (ElementId | null)[] = [];
+      for (let at: ElementId | null = id; at !== null; at = this.parentOf(at)) {
+        if (ascent.again(at)) return LOOPED;
+        out.push(at);
+      }
+      out.push(null);
+      return out;
+    });
   }
 
   #offsetWith(
@@ -579,6 +824,10 @@ export class Resolver {
    * Gone elements other than containers have no bounds.
    */
   boundsIn(id: ElementId, space: ElementId | null): Rect | null {
+    return this.#descend(() => this.#boundsIn(id, space));
+  }
+
+  #boundsIn(id: ElementId, space: ElementId | null): Rect | null {
     if (!this.get(id)) return null;
     let result: Rect | null = null;
     const visit = (at: ElementId): boolean => {

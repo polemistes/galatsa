@@ -34,6 +34,21 @@ export interface ImageSource {
    * image is small on screen, is the engine's job.
    */
   getBlob(assetId: string): Blob;
+  /**
+   * Reduced-size versions of the image (JPEG), smallest first, without the
+   * original: halves of the original down to a long side of REDUCED_MIN_SIDE
+   * pixels, as a document stores them with each image so that opening it never
+   * decodes originals. Generated with the originals, before any run.
+   */
+  getReduced?(assetId: string): readonly ReducedImage[];
+}
+
+/** A reduced-size version of an image. */
+export interface ReducedImage {
+  /** Pixels. */
+  readonly width: number;
+  readonly height: number;
+  readonly blob: Blob;
 }
 
 export interface EngineSetup {

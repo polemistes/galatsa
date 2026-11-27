@@ -1,0 +1,10 @@
+{
+  // Browser library: DOM types (see tsconfig.base.json). Tests run in Node with a
+  // recording stand-in for the canvas, so nothing here may touch the DOM at import.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.mts", "src/**/*.cts"]
+}

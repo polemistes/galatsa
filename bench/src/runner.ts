@@ -103,6 +103,7 @@ export interface RunOptions {
   /** The scene's encoded images, from prepareImages(). */
   readonly images: ImageSource & {
     readonly encodedBytes: number;
+    readonly reducedBytes?: number;
     readonly generationMs: number;
   };
   /** Defaults to generateScene(). Must be the scene the images were made for. */
@@ -583,7 +584,11 @@ export async function runBenchmark(options: RunOptions): Promise<BenchResult> {
         hiddenDuringRun,
         resizedDuringRun,
       },
-      scene: { ...summarizeScene(scene), encodedImageBytes: images.encodedBytes },
+      scene: {
+        ...summarizeScene(scene),
+        encodedImageBytes: images.encodedBytes,
+        encodedReducedImageBytes: images.reducedBytes ?? 0,
+      },
       cameraRun: { frames: n, segments: run.segments },
       timings: {
         imageGenerationMs: images.generationMs,

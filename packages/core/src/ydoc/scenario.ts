@@ -41,6 +41,7 @@ import { fromSnapshot, inspectDocument, toSnapshot, yLookup } from "./snapshot.t
 import { forkDoc, syncDocs, syncInto } from "./sync.ts";
 import { seededBytes, seededRandom } from "./seeded.ts";
 import { createUndoManager } from "./track.ts";
+import { watchLiveResolver } from "./live-check.ts";
 
 /** The transaction origin the scenario's "editor binding" uses. */
 export const BINDING_ORIGIN = "scenario-binding";
@@ -416,6 +417,12 @@ export interface ScenarioOptions {
    * package has (writing a file, for example).
    */
   checkpoint?: (doc: Y.Doc) => void;
+  /**
+   * Gives every replica a live resolver, which the operations then use, and
+   * checks it after every batch of transactions against a new resolution of the whole
+   * document, and what it reported against what changed (default true).
+   */
+  live?: boolean;
 }
 
 export interface ScenarioResult {
@@ -524,9 +531,21 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
   );
   const oracle = new Oracle(replicas.length);
   let created = 0;
+  let moment = "start";
+  const unwatch =
+    options.live === false
+      ? []
+      : replicas.map((doc, i) =>
+          watchLiveResolver(
+            doc,
+            (message) => fail(`live resolver of replica ${i}: ${message}`),
+            () => moment,
+          ),
+        );
 
   const steps = options.steps ?? 80;
   for (let step = 0; step < steps; step++) {
+    moment = `step ${step}`;
     const r = int(replicas.length);
     const doc = replicas[r]!;
     const view = new Resolver(yLookup(doc));
@@ -791,6 +810,7 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
   }
 
   // --- Convergence -------------------------------------------------------------
+  moment = "the last syncs";
   for (const [a, b] of [
     [0, 1],
     [1, 2],
@@ -887,6 +907,7 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
   // Tidy up on one replica shows the same, rewrites nothing it keeps, and the
   // others follow.
   options.checkpoint?.(replicas[0]!);
+  moment = "the last tidy up";
   const itemsBefore = storedItems(replicas[0]!);
   tidyUp(replicas[0]!);
   oracle.tidied(snapshot, toSnapshot(replicas[0]!));
@@ -909,6 +930,7 @@ export function runScenario(seed: number, options: ScenarioOptions = {}): Scenar
   }
   for (const failure of oracle.failures.slice(0, 5)) fail(failure);
   for (const doc of replicas) options.checkpoint?.(doc);
+  for (const stop of unwatch) stop();
 
   return { replicas, snapshot: tidy, failures, steps: counts };
 }
