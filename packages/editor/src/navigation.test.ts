@@ -55,9 +55,12 @@ describe("navigation from the keyboard", () => {
     expect(editor.camera).toEqual({ space: null, cx: 500, cy: 400, zoom: 2 });
     editor.keyDown(key("=", { ctrlKey: true, code: "Equal" }));
     expect(editor.camera.zoom).toBe(4);
+    // US, with Shift: Ctrl and Shift and = give "+".
+    editor.keyDown(key("+", { ctrlKey: true, shiftKey: true, code: "Equal" }));
+    expect(editor.camera.zoom).toBe(8);
     // The numeric keypad.
     editor.keyDown(key("+", { ctrlKey: true, code: "NumpadAdd" }));
-    expect(editor.camera.zoom).toBe(8);
+    expect(editor.camera.zoom).toBe(16);
   });
 
   it("zooms out with Ctrl and minus on both keyboards, and back to actual size with Ctrl+0", () => {

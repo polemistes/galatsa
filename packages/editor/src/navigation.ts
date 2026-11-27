@@ -149,8 +149,9 @@ const zoomIn = defineCommand<unknown, void>({
   name: "zoom-in",
   label: label("nav.zoomIn"),
   // Mod++ is Ctrl and the + key on a Norwegian keyboard (and the keypad's +);
-  // on a US keyboard + needs Shift, and Ctrl and = is what browsers use.
-  shortcuts: ["Mod++", "Mod+="],
+  // on a US keyboard + needs Shift (Mod+Shift++), and Ctrl and = is what
+  // browsers use there.
+  shortcuts: ["Mod++", "Mod+=", "Mod+Shift++"],
   quick: true,
   undoable: false,
   execute: (ctx) => zoomBy(ctx, ZOOM_STEP),
