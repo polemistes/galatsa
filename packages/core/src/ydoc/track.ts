@@ -459,6 +459,11 @@ function samePoint(a: Point, b: Point): boolean {
  *    of a delete that hides it is kept back: the element keeps the place it had
  *    before the undo. An undo or redo made after receiving a delete leaves what
  *    the delete hides deleted, as an undo of a move of the element itself does.
+ *    And the other way: a change of container that would put a visible
+ *    element (or something in it) under another user's delete is kept back,
+ *    so an undo does not hide what the user sees by somebody else's delete
+ *    (docs/adr/0014: undoing a frame put around elements whose container was
+ *    deleted meanwhile).
  * 3. A change of container that would move something visible on the canvas,
  *    although the step writes no position that its place depends on, is done,
  *    but with a rebase that keeps the element where it was on the canvas. An
@@ -516,6 +521,40 @@ function settleStep(
   );
   if (revived.length > 0) {
     const keep = blame(revived, moved, (at) => [at, ...ancestorsOf(then, at)]);
+    doc.transact(() => {
+      for (const id of keep) {
+        moved.delete(id);
+        const map = elements.get(id) as Y.Map<unknown>;
+        const old = before.get(id)!;
+        for (const key of PLACE_KEYS) {
+          if (!Object.hasOwn(old, key)) continue;
+          const value = old[key];
+          if (value === undefined) map.delete(key);
+          else map.set(key, value);
+        }
+      }
+    }, origin);
+    now = new Resolver(lookup);
+  }
+
+  // 2b. Nothing visible goes into a delete: a change of container that would
+  // put an element (or something in it) under another user's delete that
+  // hides it is kept back too. Undoing a grouping or a frame put around
+  // elements, after another user deleted the container they were in (and
+  // they survived in the group or frame, which was worked on), would
+  // otherwise hide them for good: the undo's work on them is not recorded,
+  // since they are hidden when it is judged. The user's own removals written
+  // by this undo (the frame's creation taken back) are not counted
+  // (`withoutMarks`): what that hides goes by the user's own undo.
+  const hidden = [...candidates].filter(
+    (at) =>
+      now.get(at) !== undefined &&
+      then.get(at) !== undefined &&
+      !then.isDeleted(at) &&
+      now.isDeleted(at),
+  );
+  if (hidden.length > 0) {
+    const keep = blame(hidden, moved, (at) => [at, ...ancestorsOf(now, at)]);
     doc.transact(() => {
       for (const id of keep) {
         moved.delete(id);

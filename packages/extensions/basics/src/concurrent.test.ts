@@ -245,12 +245,94 @@ function withPositionsOf(after: DocumentSnapshot, before: DocumentSnapshot): Res
   for (const [id, element] of Object.entries(after.elements)) {
     const old = Object.hasOwn(before.elements, id) ? before.elements[id] : undefined;
     if (!old || JSON.stringify(old.pos) === JSON.stringify(element.pos)) continue;
-    elements[id] =
-      old.parent !== element.parent
-        ? { ...element, pos: old.pos, parent: old.parent, rebase: old.rebase }
-        : { ...element, pos: old.pos };
+    const placed =
+      old.parent !== element.parent ||
+      JSON.stringify(old.rebase ?? null) !== JSON.stringify(element.rebase ?? null);
+    elements[id] = placed
+      ? { ...element, pos: old.pos, parent: old.parent, rebase: old.rebase }
+      : { ...element, pos: old.pos };
   }
   return new Resolver(lookupFromRecord(elements));
+}
+
+/**
+ * Why an element may move on the canvas by more than the positions an undo
+ * wrote, where that is a known limitation of the model (docs/adr/0001
+ * section 13), or null. Rule 1 leaves such elements out, by name; every
+ * other move fails the test.
+ *
+ * - "cycle" (section 5.1, section 13 item 27): a container on the element's
+ *   way up is in a parent cycle, before or after the undo (an undo that
+ *   closes or ends one), which the resolver breaks at its smallest id; what
+ *   is under the break is placed through another chain of containers.
+ * - "converted" (section 13 item 16): the element, or a container on its way
+ *   up, has a position converted from another space by rule 3 of section 5.3,
+ *   before or after the undo: such positions are converted through offsets
+ *   that any change of container along the way can alter.
+ * - "nested" (section 13 item 26): the step changed the container of the
+ *   element and of a container above it.
+ */
+type Exemption = "cycle" | "converted" | "nested";
+
+function inCycle(snapshot: DocumentSnapshot, r: Resolver, id: ElementId): boolean {
+  // Up the stored parents: a stored parent that is a container and that the
+  // resolver does not take as the parent, because it lies inside the child.
+  const seen = new Set<ElementId>();
+  for (let at: ElementId | null = id; at !== null && !seen.has(at);) {
+    seen.add(at);
+    const stored: ElementId | null = snapshot.elements[at]?.parent ?? null;
+    if (stored === null) return false;
+    if (r.isContainer(stored) && r.parentOf(at) !== stored && r.isWithin(stored, at))
+      return true;
+    at = stored;
+  }
+  return false;
+}
+
+function chainOf(r: Resolver, id: ElementId): ElementId[] {
+  const out: ElementId[] = [];
+  for (
+    let at: ElementId | null = id;
+    at !== null && out.length < 4096;
+    at = r.parentOf(at)
+  )
+    out.push(at);
+  return out;
+}
+
+function exemption(
+  id: ElementId,
+  states: readonly { snapshot: DocumentSnapshot; r: Resolver }[],
+): Exemption | null {
+  if (states.some(({ snapshot, r }) => inCycle(snapshot, r, id))) return "cycle";
+  for (const { snapshot, r } of states)
+    if (chainOf(r, id).some((at) => converted(snapshot, r, at))) return "converted";
+  const [before, after] = states;
+  const changed = chainOf(after!.r, id).filter(
+    (at) =>
+      before!.snapshot.elements[at]?.parent !== after!.snapshot.elements[at]?.parent,
+  );
+  return changed.length > 1 ? "nested" : null;
+}
+
+/** How often rule 1 left an element out, and why (for a debugger or a print while investigating). */
+const exemptions: Record<Exemption, number> = { cycle: 0, converted: 0, nested: 0 };
+
+/** The keys that place an element, in a container and on the canvas. */
+const PLACE_KEYS = new Set(["pos", "parent", "rebase", "order"]);
+
+/** For each element, the place keys a step wrote, with their values before it. */
+function placeKeysOf(
+  own: readonly StepValue[],
+): Map<ElementId, Map<string, string | undefined>> {
+  const out = new Map<ElementId, Map<string, string | undefined>>();
+  for (const v of own) {
+    if (!PLACE_KEYS.has(v.key)) continue;
+    const keys = out.get(v.id) ?? new Map<string, string | undefined>();
+    keys.set(v.key, v.old);
+    out.set(v.id, keys);
+  }
+  return out;
 }
 
 /** Runs undo or redo for `me`, checking rules 1 to 4 against `other`. */
@@ -276,13 +358,51 @@ function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): b
   const snap1 = toSnapshot(me.doc);
   const r1 = new Resolver(lookupFromRecord(snap1.elements));
   const back = withPositionsOf(snap1, snap0);
+  const states = [
+    { snapshot: snap0, r: r0 },
+    { snapshot: snap1, r: r1 },
+  ];
   for (const id of seen) {
     if (r.isGone(id)) continue;
-    if (converted(snap0, r0, id) || converted(snap1, r1, id)) continue;
-    expect(
-      samePoint(r0.worldOrigin(id), back.worldOrigin(id)),
+    if (samePoint(r0.worldOrigin(id), back.worldOrigin(id))) continue;
+    const why = exemption(id, states);
+    if (why !== null) {
+      exemptions[why] += 1;
+      continue;
+    }
+    expect.fail(
       `${id} moved on the canvas by something other than a position the step wrote`,
-    ).toBe(true);
+    );
+  }
+  // 1b. An element whose container and position the step wrote ends where
+  // the step found it (its keys as they were before the step, the rest as
+  // now), or stays where it is (an undo finished with a rebase that keeps its
+  // place, docs/adr/0001 section 10). withPositionsOf says nothing about it.
+  for (const [id, keys] of placeKeysOf(own)) {
+    if (!keys.has("pos") || !keys.has("parent") || r.isGone(id) || !seen.includes(id))
+      continue;
+    const element = snap1.elements[id];
+    if (element === undefined) continue;
+    const restored = { ...element } as Record<string, unknown>;
+    for (const [key, old] of keys)
+      restored[key] = old === undefined ? null : JSON.parse(old);
+    const expected = new Resolver(
+      lookupFromRecord({
+        ...snap1.elements,
+        [id]: restored as unknown as typeof element,
+      }),
+    );
+    const now = r1.worldOrigin(id);
+    if (samePoint(now, expected.worldOrigin(id)) || samePoint(now, r0.worldOrigin(id)))
+      continue;
+    const why = exemption(id, [...states, { snapshot: snap1, r: expected }]);
+    if (why !== null) {
+      exemptions[why] += 1;
+      continue;
+    }
+    expect.fail(
+      `${id}, moved into or out of a container by the step, is not back in place`,
+    );
   }
   // 2. What the other user deleted stays deleted.
   for (const id of deleted)
@@ -294,10 +414,34 @@ function checkedHistory(me: BasicsSetup, other: BasicsSetup, command: string): b
     expect(by.has(mine), `${id} gone by ${[...by].join(",")}`).toBe(true);
   }
   // 4. The undo is done (when Yjs undid this very step and did not skip it),
-  // except what would bring back something deleted by someone else.
+  // except what would bring back something deleted by someone else, or hide
+  // what the user sees under someone else's delete: the undo manager keeps
+  // such a change of container back (docs/adr/0001 section 10; the second
+  // since docs/adr/0014).
+  // Judged on the state before the undo (its revisions), with the element
+  // placed as it was before the step.
+  const heldBack = new Set<ElementId>();
+  for (const [id, keys] of placeKeysOf(own)) {
+    const element = snap0.elements[id];
+    if (element === undefined) continue;
+    const restored = { ...element } as Record<string, unknown>;
+    for (const [key, old] of keys)
+      restored[key] = old === undefined ? null : JSON.parse(old);
+    const hypothetical = new Resolver(
+      lookupFromRecord({
+        ...snap0.elements,
+        [id]: restored as unknown as typeof element,
+      }),
+    );
+    const inside = [id, ...r0.descendants(id)].filter((at) => r0.get(at) !== undefined);
+    const revives = inside.some((at) => r0.isDeleted(at) && !hypothetical.isDeleted(at));
+    const hides = inside.some((at) => !r0.isDeleted(at) && hypothetical.isDeleted(at));
+    if (revives || hides) heldBack.add(id);
+  }
   if (stack.length === size - 1)
     for (const v of own) {
       if (r0.isDeleted(v.id) && r.isDeleted(v.id)) continue;
+      if (heldBack.has(v.id) && PLACE_KEYS.has(v.key)) continue;
       const item = entry(v.map, v.key);
       const now = item && !item.deleted ? json(item) : undefined;
       expect(now !== v.value || now === v.old, `${v.label} not taken back`).toBe(true);
