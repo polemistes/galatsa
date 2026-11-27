@@ -283,7 +283,7 @@ export class Editor {
     return () => this.#listeners.delete(listener);
   }
 
-  /** Rises with every change listeners are told of (for React's external stores). */
+  /** Rises with every change listeners are told of (for the interface's reactive stores). */
   get version(): number {
     return this.#version;
   }

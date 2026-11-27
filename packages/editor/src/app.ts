@@ -3,7 +3,7 @@
 // The editor program around the editor core: the storage layer (IndexedDB,
 // with checkpoints built in a worker), the recovery offers at start
 // (docs/adr/0006, section 7.1), opening a document, the editor over it, and
-// the React root for panels and the storage dialogs.
+// the Svelte interface for panels and the storage dialogs.
 
 import type { AssetId } from "@galatsa/core";
 import type { ContributionId, Mode } from "@galatsa/extension-api";
@@ -74,7 +74,7 @@ export interface EditorAppOptions {
   readonly openDefault: (storage: DocumentStorage) => Promise<OpenResult>;
   readonly defaultTool?: ContributionId;
   readonly mode?: Mode;
-  /** Draws the React root (the editor's `renderEditorUi`); left out in tests. */
+  /** Draws the interface (the editor's `renderEditorUi`); left out in tests. */
   readonly renderUi?: (app: EditorApp, container: HTMLElement) => () => void;
   /** Called when an editor is created over a document (after it is fitted). */
   readonly onEditor?: (editor: Editor) => void;

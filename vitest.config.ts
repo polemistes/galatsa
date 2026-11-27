@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { defineConfig } from "vitest/config";
-import { TEST_FILE_GLOB, workspaceSourceResolve } from "./vite.shared.ts";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { TEST_FILE_GLOB, workspaceConfig } from "./vite.shared.ts";
 
 /**
  * Workspace packages whose tests need a browser-like DOM, by folder, with the
@@ -26,35 +27,38 @@ const EXCLUDE = [
   "tests/e2e/**",
 ];
 
-export default defineConfig({
-  ...workspaceSourceResolve,
-  test: {
-    // One Vitest project per test environment. Each project inherits the settings
-    // above ("extends: true"), so workspace packages are read from source everywhere.
-    projects: [
-      {
-        extends: true,
-        test: {
-          name: "node",
-          // Every test file in the repository, in any folder, except the packages
-          // listed in DOM_TEST_PACKAGES.
-          include: [TEST_FILE_GLOB],
-          exclude: [
-            ...EXCLUDE,
-            ...Object.keys(DOM_TEST_PACKAGES).map((dir) => `${dir}/**`),
-          ],
-          environment: "node",
+export default defineConfig(
+  // Svelte components compile in tests too (the editor's interface).
+  workspaceConfig({
+    plugins: [svelte()],
+    test: {
+      // One Vitest project per test environment. Each project inherits the settings
+      // above ("extends: true"), so workspace packages are read from source everywhere.
+      projects: [
+        {
+          extends: true,
+          test: {
+            name: "node",
+            // Every test file in the repository, in any folder, except the packages
+            // listed in DOM_TEST_PACKAGES.
+            include: [TEST_FILE_GLOB],
+            exclude: [
+              ...EXCLUDE,
+              ...Object.keys(DOM_TEST_PACKAGES).map((dir) => `${dir}/**`),
+            ],
+            environment: "node",
+          },
         },
-      },
-      ...Object.entries(DOM_TEST_PACKAGES).map(([dir, environment]) => ({
-        extends: true,
-        test: {
-          name: dir,
-          include: [`${dir}/${TEST_FILE_GLOB}`],
-          exclude: EXCLUDE,
-          environment,
-        },
-      })),
-    ],
-  },
-});
+        ...Object.entries(DOM_TEST_PACKAGES).map(([dir, environment]) => ({
+          extends: true,
+          test: {
+            name: dir,
+            include: [`${dir}/${TEST_FILE_GLOB}`],
+            exclude: EXCLUDE,
+            environment,
+          },
+        })),
+      ],
+    },
+  }),
+);

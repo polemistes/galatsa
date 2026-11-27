@@ -47,6 +47,8 @@ export {
   type DocumentState,
 } from "./document.ts";
 export { EditorApp, type AppPhase, type AppState, type EditorAppOptions } from "./app.ts";
-export { EditorUi, renderEditorUi } from "./ui/EditorUi.tsx";
-export { Panels, type PanelProps } from "./ui/panels.tsx";
+export { renderEditorUi } from "./ui/mount.ts";
+export { svelteView, type PanelProps } from "./ui/panels.ts";
+export { Watched, translator, type Store } from "./ui/reactive.ts";
+export { default as EditorUi } from "./ui/EditorUi.svelte";
 export { editorMessages } from "./messages/index.ts";

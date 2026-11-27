@@ -171,7 +171,7 @@ test("the development page edits the sample scene with the mouse and the keyboar
   // The shape is still there; only the move was undone.
   expect((await probe(page)).shapes).toBe(start.shapes + 1);
 
-  // The save status is shown in the React root.
+  // The save status is shown in the Svelte interface over the canvas.
   await expect(page.locator(".galatsa-save-status")).not.toBeEmpty({ timeout: 15_000 });
   expect(errors).toEqual([]);
 });
