@@ -33,6 +33,7 @@ import {
 import type { ImportFile } from "./import.ts";
 import { openContextMenu, type MenuClipboard } from "./context-menu.ts";
 import { keyInput } from "./keymap.ts";
+import { editorPresenter } from "./present.ts";
 import { PointerTracker, type PointerAction, type PointerFacts } from "./pointers.ts";
 
 /** One wheel "line" in pixels, for wheels that report lines. */
@@ -176,6 +177,8 @@ export function mountEditor(
   editor.setCanvasFocus(() => {
     if (surface.isConnected) surface.focus({ preventScroll: true });
   });
+  // Presenting takes the whole page (docs/adr/0015).
+  editor.setPresenter(editorPresenter(editor, container.ownerDocument.body, i18n));
 
   const offList: Array<() => void> = [];
   const on = <K extends keyof HTMLElementEventMap>(
@@ -460,6 +463,7 @@ export function mountEditor(
   offList.push(stopMenu);
   offList.push(() => editor.contextMenu.close());
   offList.push(() => editor.setCanvasFocus(null));
+  offList.push(() => editor.setPresenter(null));
   // A middle click would start the browser's autoscroll.
   on("auxclick", (e) => e.preventDefault());
 

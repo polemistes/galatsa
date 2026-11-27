@@ -46,6 +46,10 @@ export default {
   "copy-stop-for-route": "Separate stop for this route",
   "copy-stop-for-route.step": "separate stop for a route",
   "go-to-stop": "Go to stop",
+  present: "Present",
+  "present-from-here": "Present from the chosen stop",
+  "present.hint":
+    "Present from the chosen stop, otherwise from the start (Shift+F5). F5 always starts from the first stop.",
   "selected-stop": "Selected stop",
   "used-in":
     "{count, plural, =0 {Not used in any route} one {Used in # route} other {Used in # routes}}",

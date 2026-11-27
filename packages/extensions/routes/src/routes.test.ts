@@ -22,6 +22,7 @@ import { initDocument } from "@galatsa/core/ydoc";
 import {
   ROUTES,
   ROUTES_PANEL,
+  choose,
   currentChoice,
   liveStops,
   readRoutes,
@@ -619,5 +620,89 @@ describe("after the review", () => {
     expect(t.editor.services.panels.isOpen(ROUTES_PANEL)).toBe(true);
     t.editor.keyDown({ ...key, key: "R", shiftKey: true });
     expect(t.editor.services.panels.isOpen(ROUTES_PANEL)).toBe(false);
+  });
+});
+
+describe("presenting", () => {
+  /** An editor with three stops in a route, and a page that notes what it is asked to present. */
+  function presenting() {
+    const t = setup();
+    const stops = [0, 1, 2].map((i) => {
+      t.editor.services.camera.set({ space: null, cx: 1000 * i, cy: 0, zoom: 1 });
+      return t.must<AddedStop>(ROUTES.addStopFromView);
+    });
+    const started: { route?: string | null; step?: number }[] = [];
+    let ended: () => void = () => {};
+    t.editor.setPresenter((request, onEnded) => {
+      started.push(request);
+      ended = onEnded;
+      return { exit: () => onEnded() };
+    });
+    return { ...t, stops, started, end: () => ended() };
+  }
+  const F5 = {
+    key: "F5",
+    code: "F5",
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    altGraph: false,
+    shiftKey: false,
+  };
+
+  it("presents the route shown from its first stop with F5, without an undo step", () => {
+    const t = presenting();
+    const route = t.stops[0]!.route;
+    const depth = t.editor.undo.undoStack.length;
+    expect(t.editor.keyDown(F5)).toMatchObject({
+      kind: "command",
+      command: ROUTES.present,
+    });
+    expect(t.started).toEqual([{ route, step: 0 }]);
+    expect(t.editor.undo.undoStack.length).toBe(depth);
+    // One presentation at a time: the command is greyed out while it runs.
+    expect(t.editor.isEnabled(ROUTES.present)).toBe(false);
+    expect(t.editor.isEnabled(ROUTES.presentFromHere)).toBe(false);
+    t.end();
+    expect(t.editor.isEnabled(ROUTES.present)).toBe(true);
+  });
+
+  it("presents from the chosen stop with Shift+F5", () => {
+    const t = presenting();
+    const route = t.stops[0]!.route;
+    choose(t.doc, { route, entry: t.stops[1]!.entry });
+    t.editor.keyDown({ ...F5, shiftKey: true });
+    expect(t.started).toEqual([{ route, step: 1 }]);
+    t.end();
+    // With no stop chosen: from the start.
+    choose(t.doc, { route, entry: null });
+    t.must(ROUTES.presentFromHere);
+    expect(t.started[1]).toEqual({ route, step: 0 });
+  });
+
+  it("presents a given route and step, and refuses a route that is not there", () => {
+    const t = presenting();
+    const other = t.must<string>(ROUTES.addRoute);
+    t.must(ROUTES.present, { route: t.stops[0]!.route, step: 2 });
+    expect(t.started).toEqual([{ route: t.stops[0]!.route, step: 2 }]);
+    t.end();
+    expect(t.editor.isEnabled(ROUTES.present, { route: "gone" })).toBe(false);
+    expect(t.editor.isEnabled(ROUTES.present, { step: 1.5 })).toBe(false);
+    // The route shown is the new, empty one: it is presented, with the camera free.
+    t.must(ROUTES.present);
+    expect(t.started[1]).toEqual({ route: other, step: 0 });
+  });
+
+  it("presents a document without routes, and says so when there is nowhere to present", () => {
+    const t = setup();
+    const started: unknown[] = [];
+    t.editor.setPresenter((request, onEnded) => {
+      started.push(request);
+      return { exit: () => onEnded() };
+    });
+    t.must(ROUTES.present);
+    expect(started).toEqual([{ route: null, step: 0 }]);
+    const bare = setup();
+    expect(bare.editor.run(ROUTES.present).ok).toBe(false);
   });
 });

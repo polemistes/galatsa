@@ -352,12 +352,18 @@ importers:
       '@galatsa/extension-select':
         specifier: workspace:*
         version: link:../extensions/select
+      '@galatsa/extension-transitions':
+        specifier: workspace:*
+        version: link:../extensions/transitions
       '@galatsa/format':
         specifier: workspace:*
         version: link:../format
       '@galatsa/i18n':
         specifier: workspace:*
         version: link:../i18n
+      '@galatsa/player':
+        specifier: workspace:*
+        version: link:../player
       '@galatsa/renderer':
         specifier: workspace:*
         version: link:../renderer

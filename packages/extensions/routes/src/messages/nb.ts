@@ -49,6 +49,10 @@ export default {
   "copy-stop-for-route": "Eget stopp for denne ruten",
   "copy-stop-for-route.step": "eget stopp for rute",
   "go-to-stop": "Gå til stoppet",
+  present: "Presenter",
+  "present-from-here": "Presenter fra valgt stopp",
+  "present.hint":
+    "Presenter fra valgt stopp, ellers fra starten (Shift+F5). F5 starter alltid fra første stopp.",
   "selected-stop": "Valgt stopp",
   "used-in":
     "{count, plural, =0 {Brukes ikke i noen rute} one {Brukes i # rute} other {Brukes i # ruter}}",

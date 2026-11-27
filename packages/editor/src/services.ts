@@ -23,6 +23,7 @@ import type { ContributionId, Mode } from "@galatsa/extension-api";
 import type {
   EditorServices,
   ElementPlacement,
+  PresentationRequest,
   PreviewChanges,
 } from "@galatsa/extension-api/editing";
 import type { MessageValues } from "@galatsa/i18n";
@@ -48,6 +49,10 @@ export interface ServiceHost {
   toScreen(point: Point): Point;
   /** Shows a message to the user. */
   notify(message: string, values?: MessageValues): void;
+  /** Starts presenting the document (docs/adr/0015); false if it did not start. */
+  present(request: PresentationRequest): boolean;
+  /** Whether a presentation is running. */
+  presenting(): boolean;
 }
 
 export type StateChange = "selection" | "camera" | "mode" | "panels";
@@ -224,6 +229,10 @@ export function createServices(host: ServiceHost, state: EditorState): EditorSer
     },
     notices: {
       show: (message, values) => host.notify(message, values),
+    },
+    presentation: {
+      start: (request) => host.present(request ?? {}),
+      active: () => host.presenting(),
     },
   };
 }

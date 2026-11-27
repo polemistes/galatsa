@@ -10,6 +10,7 @@ export {
   type FrameScheduler,
   type KeyResult,
   type PointerInput,
+  type Presenter,
   type ShortcutResult,
   type ShortcutTarget,
 } from "./editor.ts";
@@ -76,6 +77,7 @@ export {
   type LoadedExtensions,
 } from "./extensions.ts";
 export { mountEditor, wheelZoomFactor } from "./dom.ts";
+export { editorPresenter, presentEditor } from "./present.ts";
 export {
   FRAGMENT_MIME,
   MAX_CLIPBOARD_TEXT,
