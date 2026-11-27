@@ -37,6 +37,16 @@ class MapLookup implements ElementLookup {
   }
 }
 
+/** A live resolver that the test tells of changes, as the Yjs binding does. */
+class TestLive extends LiveResolver {
+  take(touched: ReadonlyMap<ElementId, ReadonlySet<string> | null>): ResolvedChanges {
+    return this.update(touched);
+  }
+  rebuildNow(): ResolvedChanges {
+    return this.rebuild();
+  }
+}
+
 const ROOT = "(root)";
 
 function state(r: Resolver) {
@@ -280,7 +290,7 @@ describe("the live resolver, on random states", () => {
     for (let seed = 1; seed <= 60 && failures.length === 0; seed++) {
       const rnd = seeded(seed * 7717);
       const lookup = randomDocument(rnd, 8 + Math.floor(rnd() * 25));
-      const live = new LiveResolver(lookup);
+      const live = new TestLive(lookup);
       let before = state(new Resolver(lookup));
       for (let step = 0; step < 150 && failures.length === 0; step++) {
         // One to three changes, taken in as one (one transaction).
@@ -291,7 +301,7 @@ describe("the live resolver, on random states", () => {
           if (key === null || keys === null) touched.set(id, null);
           else touched.set(id, new Set([...(keys ?? []), key]));
         }
-        const changes = live.update(touched);
+        const changes = live.take(touched);
         const after = state(new Resolver(lookup));
         const what = [...touched].map(
           ([id, keys]) => `${id} ${keys ? [...keys] : "record"}`,
@@ -312,9 +322,9 @@ describe("the live resolver, on random states", () => {
   it("rebuilds from scratch after changes it was not told about", () => {
     const rnd = seeded(99);
     const lookup = randomDocument(rnd, 30);
-    const live = new LiveResolver(lookup);
+    const live = new TestLive(lookup);
     for (let i = 0; i < 40; i++) mutate(rnd, lookup, new Resolver(lookup));
-    const changes = live.rebuild();
+    const changes = live.rebuildNow();
     const fresh = state(new Resolver(lookup));
     const now = state(live);
     expect(now.elements).toEqual(fresh.elements);
@@ -326,18 +336,101 @@ describe("the live resolver, on random states", () => {
 
   it("calls subscribers only when something changed, and not after they stop", () => {
     const lookup = randomDocument(seeded(3), 10);
-    const live = new LiveResolver(lookup);
+    const live = new TestLive(lookup);
     const calls: ResolvedChanges[] = [];
     const stop = live.subscribe((c) => calls.push(c));
     const e = { ...lookup.map.get("e1")! };
     lookup.map.set("e1", { ...e, rev: { w9: 1 } });
-    live.update(new Map([["e1", new Set(["rev"])]]));
+    live.take(new Map([["e1", new Set(["rev"])]]));
     lookup.map.set("e1", { ...e, pos: { ...e.pos, x: e.pos.x + 1 } });
-    live.update(new Map([["e1", new Set(["pos"])]]));
+    live.take(new Map([["e1", new Set(["pos"])]]));
     stop();
     lookup.map.set("e1", { ...e, pos: { ...e.pos, x: e.pos.x + 2 } });
-    live.update(new Map([["e1", new Set(["pos"])]]));
+    live.take(new Map([["e1", new Set(["pos"])]]));
     expect(calls.length).toBe(1);
     expect(calls[0]!.changed.has("e1")).toBe(true);
+  });
+});
+
+describe("the live resolver, when something goes wrong", () => {
+  const element = (
+    type: string,
+    parent: string | null,
+    order: string,
+    x = 0,
+  ): ElementEnvelope => ({
+    type,
+    parent,
+    order,
+    pos: { x, y: 0, space: parent },
+    locked: false,
+    size: { w: 10, h: 10 },
+  });
+  const sameAsNew = (live: Resolver, lookup: ElementLookup) => {
+    const fresh = state(new Resolver(lookup));
+    const now = state(live);
+    expect(now.elements).toEqual(fresh.elements);
+    expect(now.children).toEqual(fresh.children);
+    expect(now.order).toEqual(fresh.order);
+  };
+
+  it("resolves anew from nothing when an update fails half way", () => {
+    const lookup = new MapLookup();
+    lookup.map.set("F", element(FRAME_TYPE, null, "a0"));
+    lookup.map.set("X", element("x.shape/shape", "F", "a0"));
+    const live = new TestLive(lookup);
+    const errors: unknown[] = [];
+    live.onError((error) => errors.push(error));
+    lookup.map.set("X", element("x.shape/shape", "F", "a0", 50));
+    // The update fails while it reads X again (after dropping what it cached).
+    let calls = 0;
+    const get = lookup.get.bind(lookup);
+    lookup.get = (id) => {
+      if (id === "X" && ++calls === 1) throw new Error("lookup failed once");
+      return get(id);
+    };
+    const changes = live.take(new Map([["X", new Set(["pos"])]]));
+    expect(errors.map(String)).toEqual(["Error: lookup failed once"]);
+    expect(changes.changed.has("X")).toBe(true);
+    expect(live.children("F")).toEqual(["X"]);
+    sameAsNew(live, lookup);
+  });
+
+  it("finds a loop in its cache instead of walking it for ever, and resolves anew", () => {
+    // R holds X, X holds D. X is put into D without telling the live resolver
+    // that its parent changed: D's cached parent is still X.
+    const lookup = new MapLookup();
+    lookup.map.set("R", element(FRAME_TYPE, null, "a0"));
+    lookup.map.set("X", element(FRAME_TYPE, "R", "a0"));
+    lookup.map.set("D", element(FRAME_TYPE, "X", "a0"));
+    const live = new TestLive(lookup);
+    const errors: unknown[] = [];
+    live.onError((error) => errors.push(error));
+    lookup.map.set("X", element(FRAME_TYPE, "D", "a0", 20));
+    live.take(new Map([["X", new Set(["name"])]]));
+    expect(errors.map(String)).toEqual([
+      "Error: The live resolver found its cache inconsistent and resolved anew",
+    ]);
+    sameAsNew(live, lookup);
+  });
+
+  it("calls every subscriber, whatever the others do", () => {
+    const lookup = new MapLookup();
+    lookup.map.set("X", element("x.shape/shape", null, "a0"));
+    const live = new TestLive(lookup);
+    const errors: unknown[] = [];
+    live.onError(() => {
+      throw new Error("faulty handler");
+    });
+    live.onError((error) => errors.push(error));
+    live.subscribe(() => {
+      throw new Error("faulty subscriber");
+    });
+    const heard: string[][] = [];
+    live.subscribe((c) => heard.push([...c.changed]));
+    lookup.map.set("X", element("x.shape/shape", null, "a0", 9));
+    expect(() => live.take(new Map([["X", new Set(["pos"])]]))).not.toThrow();
+    expect(heard).toEqual([["X"]]);
+    expect(errors.map(String)).toEqual(["Error: faulty subscriber"]);
   });
 });

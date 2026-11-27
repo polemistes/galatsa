@@ -14,11 +14,11 @@ import { Resolver } from "../model/resolve.ts";
 import { FRAME_TYPE, type DocumentSnapshot, type Element } from "../model/types.ts";
 import { tidyUp } from "./document-ops.ts";
 import { watchLiveResolver } from "./live-check.ts";
-import { currentResolver, liveResolver } from "./live.ts";
+import { currentResolver, detachLiveResolver, liveResolver } from "./live.ts";
 import * as ops from "./ops.ts";
 import { fromSnapshot, toSnapshot, yLookup } from "./snapshot.ts";
 import { forkDoc, syncDocs, syncInto } from "./sync.ts";
-import { createUndoManager } from "./track.ts";
+import { createUndoManager, noteWork } from "./track.ts";
 
 const now = (): number =>
   (globalThis as unknown as { performance: { now(): number } }).performance.now();
@@ -197,6 +197,145 @@ describe("the live resolver of a Y.Doc", () => {
     });
     expect(currentResolver(doc)).toBe(live);
   });
+
+  it("can be detached from its document", () => {
+    const doc = base();
+    ops.addElement(doc, shape("X", null));
+    const live = liveResolver(doc);
+    detachLiveResolver(doc);
+    ops.moveElement(doc, "X", 40, 40);
+    expect(live.worldOrigin("X")).toEqual({ x: 5, y: 5 });
+    expect(currentResolver(doc)).not.toBe(live);
+    const again = liveResolver(doc);
+    expect(again).not.toBe(live);
+    expect(again.worldOrigin("X")).toEqual({ x: 40, y: 40 });
+  });
+});
+
+const elementsOf = (doc: Y.Doc) => doc.getMap("elements") as Y.Map<Y.Map<unknown>>;
+
+describe("the live resolver and transactions that others start or break", () => {
+  // The work tracker records work in a transaction of its own while the
+  // transaction with the work ends; here the recording brings back what a
+  // delete hid. The live resolver takes in both together.
+  it("takes in work recorded in a follow-up transaction", () => {
+    const doc = base();
+    ops.addElement(doc, frame("F", 100));
+    ops.addElement(doc, frame("G", 10, "F"));
+    ops.addElement(doc, shape("C", "G"));
+    ops.deleteElements(doc, ["F"]);
+    const reports = watch(doc, "doc");
+    const live = liveResolver(doc);
+    expect(live.isGone("C")).toBe(true);
+    const g = elementsOf(doc).get("G")!;
+    doc.transact(() => {
+      noteWork(doc, g, true);
+      g.set("name", "worked on");
+    });
+    expect(new Resolver(yLookup(doc)).isGone("C")).toBe(false);
+    expect(live.isGone("C")).toBe(false);
+    // One report for the edit and its recording.
+    expect(reports.length).toBe(1);
+    expect(reports[0]!.changed.has("C")).toBe(true);
+    // An operation that reads the live resolver then acts on what the user sees.
+    ops.deleteElements(doc, ["C"]);
+    expect(new Resolver(yLookup(doc)).isGone("C")).toBe(true);
+  });
+
+  it("takes in what another listener writes while a transaction ends", () => {
+    const doc = base();
+    ops.addElement(doc, frame("R", 10));
+    ops.addElement(doc, frame("X", 10, "R"));
+    ops.addElement(doc, frame("D", 10, "X"));
+    // Reacts to a move of X by putting X into D: a cycle, which resolution
+    // breaks. Registered before the live resolver.
+    doc.on("afterTransaction", (tr: Y.Transaction) => {
+      if (tr.origin === "trigger")
+        doc.transact(() => elementsOf(doc).get("X")!.set("parent", "D"), "follow");
+    });
+    watch(doc, "doc");
+    const live = liveResolver(doc);
+    ops.moveElement(doc, "X", 20, 20, { origin: "trigger" });
+    const fresh = new Resolver(yLookup(doc));
+    for (const id of ["R", "X", "D"]) {
+      expect(live.parentOf(id)).toBe(fresh.parentOf(id));
+      expect(live.worldOrigin(id)).toEqual(fresh.worldOrigin(id));
+    }
+  });
+
+  it("follows a transaction that throws half way, and nested ones", () => {
+    const doc = base();
+    ops.addElement(doc, frame("F", 1));
+    ops.addElement(doc, shape("X", "F", 1));
+    watch(doc, "doc");
+    expect(() =>
+      doc.transact(() => {
+        ops.moveElement(doc, "F", 40, 40);
+        doc.transact(() => ops.reparent(doc, "X", null));
+        throw new Error("half way");
+      }),
+    ).toThrow("half way");
+    expect(liveResolver(doc).parentOf("X")).toBe(null);
+    expect(liveResolver(doc).worldOrigin("F")).toEqual({ x: 40, y: 40 });
+  });
+
+  it("calls each subscriber on its own, and a subscriber that throws breaks nothing", () => {
+    const doc = base();
+    ops.addElement(doc, shape("X", null));
+    const live = liveResolver(doc);
+    const errors: unknown[] = [];
+    live.onError((error) => errors.push(error));
+    live.subscribe(() => {
+      throw new Error("faulty extension");
+    });
+    const heard: string[][] = [];
+    live.subscribe((c) => heard.push([...c.changed]));
+    // Created after the live resolver: its listeners come after the live
+    // resolver's.
+    const undo = createUndoManager(doc, { captureTimeout: 0 });
+    expect(() => ops.moveElement(doc, "X", 50, 50)).not.toThrow();
+    expect(live.worldOrigin("X")).toEqual({ x: 50, y: 50 });
+    expect(heard).toEqual([["X"]]);
+    expect(errors.map(String)).toEqual(["Error: faulty extension"]);
+    expect(undo.canUndo()).toBe(true);
+    undo.undo();
+    expect(live.worldOrigin("X")).toEqual({ x: 5, y: 5 });
+  });
+
+  it("is not left behind when another listener throws", () => {
+    const doc = base();
+    ops.addElement(doc, shape("X", null));
+    let fail = true;
+    doc.on("afterTransaction", () => {
+      if (fail) {
+        fail = false;
+        throw new Error("someone else's listener");
+      }
+    });
+    let failAll = false;
+    doc.on("afterAllTransactions", () => {
+      if (failAll) {
+        failAll = false;
+        throw new Error("someone else's listener, after all transactions");
+      }
+    });
+    const live = liveResolver(doc);
+    // Another replica moves X; its update arrives here.
+    const other = forkDoc(doc, 7);
+    ops.moveElement(other, "X", 50, 50);
+    expect(() =>
+      Y.applyUpdate(doc, Y.encodeStateAsUpdate(other, Y.encodeStateVector(doc))),
+    ).toThrow("someone else's listener");
+    expect(live.worldOrigin("X")).toEqual({ x: 50, y: 50 });
+    // A listener that keeps the live resolver from hearing of a batch at all:
+    // it takes the batch in when it is next asked for.
+    failAll = true;
+    expect(() => ops.moveElement(doc, "X", 60, 60)).toThrow("after all transactions");
+    expect(currentResolver(doc)).toBe(live);
+    expect(live.worldOrigin("X")).toEqual({ x: 60, y: 60 });
+    ops.addElement(doc, shape("Y", null));
+    expect(live.get("Y")).toBeDefined();
+  });
 });
 
 /** A document of `frames` frames with `per` shapes each, built in one load. */
@@ -239,10 +378,13 @@ describe("the live resolver in a document of 5000 elements in 50 frames", () => 
     const doc = largeDocument(50, 99);
     const live = liveResolver(doc);
     expect([...live.ids()].length).toBe(5000);
-    // Time spent in the live resolver itself, per transaction.
+    // Time spent in the live resolver itself, per batch (a move and the
+    // recording of the work).
     let spent = 0;
-    const update = live.update.bind(live);
-    live.update = (touched) => {
+    type Update = (touched: ReadonlyMap<string, ReadonlySet<string> | null>) => unknown;
+    const inner = live as unknown as { update: Update };
+    const update = inner.update.bind(live);
+    inner.update = (touched) => {
       const t = now();
       const changes = update(touched);
       spent += now() - t;

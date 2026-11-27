@@ -146,9 +146,12 @@ function removeFrom(
 
 /**
  * A Resolver that stays up to date. It reads the document through `lookup`,
- * which must always show the current state; after each change of that state,
- * `update` is told which records changed. Between updates it answers exactly
+ * which must always show the current state. Between changes it answers exactly
  * as a new Resolver over the same state would.
+ *
+ * Whoever owns the document tells it of each change, through `update` in a
+ * subclass (the Yjs binding, `liveResolver` in `@galatsa/core/ydoc`). Everybody
+ * else reads it and subscribes to what changed.
  */
 export class LiveResolver extends Resolver {
   readonly #resolved = new Map<ElementId, Resolved>();
@@ -157,60 +160,20 @@ export class LiveResolver extends Resolver {
   /** Elements by the space their stored position was written in. */
   readonly #spaceUsers = new Map<ElementId, Set<ElementId>>();
   readonly #listeners = new Set<(changes: ResolvedChanges) => void>();
+  readonly #errorHandlers = new Set<(error: unknown) => void>();
+  /** Set when the cache was found inconsistent: everything is resolved anew. */
+  #broken = false;
 
   constructor(lookup: ElementLookup) {
     super(lookup);
-    this.indexChildren();
-    for (const id of lookup.ids()) {
-      if (!this.get(id)) continue;
-      const resolved = this.#resolve(id);
-      this.#resolved.set(id, resolved);
-      this.#index(id, undefined, resolved);
-    }
+    this.#resolveAll();
   }
 
   /**
-   * Resolves everything anew, as if every record had changed, and reports what
-   * differs. For recovering when an update could not be taken in.
-   */
-  rebuild(): ResolvedChanges {
-    const touched = new Map<ElementId, null>();
-    for (const id of this.#resolved.keys()) touched.set(id, null);
-    for (const id of this.ids()) touched.set(id, null);
-    this.#storedChildren.clear();
-    this.#spaceUsers.clear();
-    const before = new Map(this.#resolved);
-    this.#resolved.clear();
-    this.forget(new Set(touched.keys()));
-    this.indexChildren();
-    for (const id of this.ids()) {
-      if (!this.get(id)) continue;
-      const resolved = this.#resolve(id);
-      this.#resolved.set(id, resolved);
-      this.#index(id, undefined, resolved);
-    }
-    const added = new Set<ElementId>();
-    const changed = new Set<ElementId>();
-    const removed = new Set<ElementId>();
-    for (const id of this.#resolved.keys()) (before.has(id) ? changed : added).add(id);
-    for (const id of before.keys()) if (!this.#resolved.has(id)) removed.add(id);
-    const changes: ResolvedChanges = {
-      added,
-      changed,
-      removed,
-      containers: new Set([
-        null,
-        ...[...this.#resolved.keys()].filter((id) => this.isContainer(id)),
-      ]),
-      drawOrder: true,
-    };
-    for (const listener of [...this.#listeners]) listener(changes);
-    return changes;
-  }
-
-  /**
-   * Calls `listener` after every update that concerned at least one element.
-   * Returns a function that stops it.
+   * Calls `listener` after every change of the document that concerned at
+   * least one element. Each subscriber is called on its own: one that throws
+   * does not keep the others from being called, and its error goes to the
+   * error handlers (`onError`). Returns a function that stops it.
    */
   subscribe(listener: (changes: ResolvedChanges) => void): () => void {
     this.#listeners.add(listener);
@@ -218,12 +181,125 @@ export class LiveResolver extends Resolver {
   }
 
   /**
+   * Calls `handler` with every error a subscriber threw, and every error that
+   * kept a change from being taken in (the live resolver then resolved the
+   * whole document anew, so it is still right). Without a handler, such errors
+   * go to `reportError` where the platform has one (browsers), and are dropped
+   * otherwise. Returns a function that stops it.
+   */
+  onError(handler: (error: unknown) => void): () => void {
+    this.#errorHandlers.add(handler);
+    return () => this.#errorHandlers.delete(handler);
+  }
+
+  #reportError(error: unknown): void {
+    if (this.#errorHandlers.size === 0) {
+      const report = (globalThis as { reportError?: (error: unknown) => void })
+        .reportError;
+      if (typeof report === "function") report(error);
+      return;
+    }
+    for (const handler of [...this.#errorHandlers]) {
+      try {
+        handler(error);
+      } catch {
+        // An error handler that fails has nowhere else to go.
+      }
+    }
+  }
+
+  #notify(changes: ResolvedChanges): void {
+    for (const listener of [...this.#listeners]) {
+      try {
+        listener(changes);
+      } catch (error) {
+        this.#reportError(error);
+      }
+    }
+  }
+
+  protected override cacheLoop(): void {
+    this.reset();
+    this.#broken = true;
+  }
+
+  /** Resolves every element from nothing, into the live resolver's own records. */
+  #resolveAll(): void {
+    this.reset();
+    this.#resolved.clear();
+    this.#storedChildren.clear();
+    this.#spaceUsers.clear();
+    this.#broken = false;
+    this.indexChildren();
+    for (const id of this.ids()) {
+      if (!this.get(id)) continue;
+      const resolved = this.#resolve(id);
+      this.#resolved.set(id, resolved);
+      this.#index(id, undefined, resolved);
+    }
+  }
+
+  /**
+   * Resolves everything anew from nothing (nothing that was cached is used),
+   * as if every record had changed, tells the subscribers, and returns the
+   * changes: every element now in the document as added or changed, every one
+   * gone from it as removed. For recovering when a change could not be taken in.
+   */
+  protected rebuild(): ResolvedChanges {
+    const before = new Set(this.#resolved.keys());
+    this.#resolveAll();
+    const added = new Set<ElementId>();
+    const changed = new Set<ElementId>();
+    const removed = new Set<ElementId>();
+    for (const id of this.#resolved.keys()) (before.has(id) ? changed : added).add(id);
+    for (const id of before) if (!this.#resolved.has(id)) removed.add(id);
+    const containers = new Set<ElementId | null>([null]);
+    for (const id of this.#resolved.keys()) if (this.isContainer(id)) containers.add(id);
+    const changes: ResolvedChanges = {
+      added,
+      changed,
+      removed,
+      containers,
+      drawOrder: true,
+    };
+    this.#notify(changes);
+    return changes;
+  }
+
+  /**
    * Takes in a change of the document. `touched` lists every element record
    * that changed, with the keys of the record that changed, or null if the
-   * record as a whole was added, replaced or removed. Returns what changed for
-   * those who draw, and tells the subscribers if anything did.
+   * record as a whole was added, replaced or removed. Tells the subscribers if
+   * anything changed for those who draw, and returns it. If the change cannot
+   * be taken in (an error, or a cache found inconsistent), everything is
+   * resolved anew instead (`rebuild`) and the error goes to the error handlers.
    */
-  update(touched: ReadonlyMap<ElementId, ReadonlySet<string> | null>): ResolvedChanges {
+  protected update(
+    touched: ReadonlyMap<ElementId, ReadonlySet<string> | null>,
+  ): ResolvedChanges {
+    let changes: ResolvedChanges;
+    try {
+      changes = this.#update(touched);
+    } catch (error) {
+      this.#reportError(error);
+      return this.rebuild();
+    }
+    if (this.#broken) {
+      this.#reportError(
+        new Error("The live resolver found its cache inconsistent and resolved anew"),
+      );
+      return this.rebuild();
+    }
+    const count =
+      changes.added.size +
+      changes.changed.size +
+      changes.removed.size +
+      changes.containers.size;
+    if (count > 0) this.#notify(changes);
+    return changes;
+  }
+
+  #update(touched: ReadonlyMap<ElementId, ReadonlySet<string> | null>): ResolvedChanges {
     // `invalid`: what the Resolver may have cached wrongly, to be forgotten.
     // `dirty`: what may resolve differently, to be resolved again and compared
     // (it holds `invalid`).
@@ -359,11 +435,7 @@ export class LiveResolver extends Resolver {
       if (container !== null && this.#resolved.has(container) && !added.has(container))
         changed.add(container);
     }
-    const changes: ResolvedChanges = { added, changed, removed, containers, drawOrder };
-    if (added.size + changed.size + removed.size + containers.size > 0) {
-      for (const listener of [...this.#listeners]) listener(changes);
-    }
-    return changes;
+    return { added, changed, removed, containers, drawOrder };
   }
 
   /** The given elements and everything below them by `children`. */
@@ -408,7 +480,11 @@ export class LiveResolver extends Resolver {
     resolved: (id: ElementId) => Resolved | undefined,
   ): void {
     let at = resolved(id)?.parent ?? null;
-    for (;;) {
+    for (let steps = 0; ; steps++) {
+      if (steps > this.#resolved.size) {
+        this.#broken = true;
+        return;
+      }
       containers.add(at);
       if (at === null) return;
       const holder = resolved(at);
@@ -426,7 +502,11 @@ export class LiveResolver extends Resolver {
     dirty: Set<ElementId>,
     resolved: (id: ElementId) => Resolved | undefined,
   ): void {
-    for (let at = resolved(id)?.parent ?? null; at !== null;) {
+    for (let at = resolved(id)?.parent ?? null, steps = 0; at !== null; steps++) {
+      if (steps > this.#resolved.size) {
+        this.#broken = true;
+        return;
+      }
       const holder = resolved(at);
       if (!holder?.derived) return;
       dirty.add(at);

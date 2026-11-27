@@ -100,12 +100,13 @@ function compare(
 }
 
 /**
- * Watches a document's live resolver. After every transaction it compares the
- * live resolver with a new Resolver of the whole document, and the state before
- * the transaction with the state after it: every element whose answers or
- * stored content changed must have been reported, and so must every container
- * whose children changed. `where` names the moment for failure messages.
- * Returns a function that stops watching.
+ * Watches a document's live resolver. After every batch of transactions (when
+ * the live resolver takes them in) it compares the live resolver with a new
+ * Resolver of the whole document, and the state before the batch with the
+ * state after it: every element whose answers or stored content changed must
+ * have been reported, once, and so must every container whose children
+ * changed. Errors the live resolver reports are failures too. `where` names the
+ * moment for failure messages. Returns a function that stops watching.
  */
 export function watchLiveResolver(
   doc: Y.Doc,
@@ -117,14 +118,17 @@ export function watchLiveResolver(
   let content = contents(doc);
   let reported: ResolvedChanges | null = null;
   const stop = live.subscribe((changes) => {
-    if (reported !== null) fail(`${where()}: two reports for one transaction`);
+    if (reported !== null) fail(`${where()}: two reports for one batch`);
     reported = changes;
   });
+  const stopErrors = live.onError((error) =>
+    fail(`${where()}: the live resolver reported an error: ${String(error)}`),
+  );
   let failed = 0;
   const report = (message: string) => {
     if (failed++ < 3) fail(`${where()}: ${message}`);
   };
-  const check = (tr: Y.Transaction) => {
+  const check = (_doc: Y.Doc, transactions: Y.Transaction[]) => {
     const changes: ResolvedChanges = reported ?? {
       added: new Set(),
       changed: new Set(),
@@ -135,7 +139,7 @@ export function watchLiveResolver(
     reported = null;
     const after = resolvedState(new Resolver(yLookup(doc)));
     const afterContent = contents(doc);
-    const origin = String(tr.origin);
+    const origin = transactions.map((tr) => String(tr.origin)).join(", ");
     compare(resolvedState(live), after, (m) => report(`(${origin}) ${m}`));
     for (const [id, text] of after.elements) {
       const was = before.elements.get(id);
@@ -177,9 +181,11 @@ export function watchLiveResolver(
     before = after;
     content = afterContent;
   };
-  doc.on("afterTransaction", check);
+  // After the live resolver's own listener, which was registered first.
+  doc.on("afterAllTransactions", check);
   return () => {
     stop();
-    doc.off("afterTransaction", check);
+    stopErrors();
+    doc.off("afterAllTransactions", check);
   };
 }
