@@ -382,7 +382,9 @@ export class CommandRegistry {
    * within a group (docs/adr/0016). `visible` is not asked here; it can
    * change with the selection, and the toolbar asks it when it draws.
    */
-  toolbar(mode: Mode): { readonly group: string; readonly commands: RegisteredCommand[] }[] {
+  toolbar(
+    mode: Mode,
+  ): { readonly group: string; readonly commands: RegisteredCommand[] }[] {
     const groups = new Map<string, RegisteredCommand[]>();
     for (const entry of this.#commands.values()) {
       const group = entry.definition.toolbar;

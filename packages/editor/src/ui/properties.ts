@@ -153,7 +153,8 @@ export class FieldGesture {
     this.#gesture ??= this.#editor.host.commands.beginGesture(this.#editor.environment());
     if (!this.#gesture.active) return;
     const changes: { [id: ElementId]: { data: { [key: string]: Json } } } = {};
-    for (const id of this.#field.ids) changes[id] = { data: { [this.#field.key]: value } };
+    for (const id of this.#field.ids)
+      changes[id] = { data: { [this.#field.key]: value } };
     this.#gesture.preview(changes);
   }
 
@@ -165,8 +166,13 @@ export class FieldGesture {
       gesture?.cancel();
       return null;
     }
-    const change: FieldChange = { ids: [...this.#field.ids], key: this.#field.key, value: final };
-    if (gesture === null || !gesture.active) return this.#editor.run(this.#field.command, change);
+    const change: FieldChange = {
+      ids: [...this.#field.ids],
+      key: this.#field.key,
+      value: final,
+    };
+    if (gesture === null || !gesture.active)
+      return this.#editor.run(this.#field.command, change);
     return gesture.commit(this.#field.command, change);
   }
 

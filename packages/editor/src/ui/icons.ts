@@ -9,6 +9,7 @@
 /** Each icon is one SVG path, in a 24 × 24 view box. */
 export const ICONS: { readonly [name: string]: string } = {
   select: "M5 3v16l4.5-4.5 3 6.5 2.5-1-3-6.5H18Z",
+  // i18n-ignore: an SVG path, not text
   text: "M5 6V4h14v2M12 4v16M9 20h6",
   rect: "M4 6h16v12H4Z",
   ellipse: "M3 12a9 6.5 0 1 0 18 0a9 6.5 0 1 0-18 0Z",

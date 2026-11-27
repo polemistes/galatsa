@@ -108,7 +108,8 @@ export function toolbarModel(editor: Editor): ToolbarModel {
 
   return {
     tools: [...tools].map(([key, buttons]) => ({ key: `tools:${key}`, buttons })),
-    history: historyButtons.length > 0 ? { key: "history", buttons: historyButtons } : null,
+    history:
+      historyButtons.length > 0 ? { key: "history", buttons: historyButtons } : null,
     commands,
   };
 }
@@ -168,7 +169,11 @@ export function shortcutText(
   const key = parts.pop() ?? "";
   const named = KEY_NAMES[key];
   const keyText = named !== undefined ? t(named) : key.toUpperCase();
-  if (platform.mac)
-    return parts.map((m) => MAC_MODIFIERS[m] ?? m).join("") + keyText;
+  if (platform.mac) {
+    // macOS writes its modifiers in the order ⌃⌥⇧⌘.
+    const order = ["Ctrl", "Alt", "Shift", "Mod", "Meta"];
+    const sorted = [...parts].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    return sorted.map((m) => MAC_MODIFIERS[m] ?? m).join("") + keyText;
+  }
   return [...parts.map((m) => t(MODIFIER_NAMES[m] ?? m)), keyText].join("+");
 }

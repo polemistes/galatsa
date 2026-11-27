@@ -20,11 +20,13 @@
   let { editor }: { editor: Editor } = $props();
 
   const t = $derived(translator(editor.i18n));
-  const model = $derived(new Watched(editorChanges(editor), () => propertiesModel(editor)));
+  const model = $derived(
+    new Watched(editorChanges(editor), () => propertiesModel(editor)),
+  );
   const sections = $derived(model.current);
 
-  /** The colour being dragged, per field. */
-  const gestures = new Map<string, FieldGesture>();
+  /** The colour being dragged (not shown, so not reactive state). */
+  let dragging: { readonly id: string; readonly gesture: FieldGesture } | null = null;
 
   function fieldId(type: string, field: PropertyField): string {
     return `galatsa-field-${type}-${field.key}`.replace(/[^A-Za-z0-9_-]/g, "-");
@@ -35,7 +37,8 @@
     if (typeof value !== "string") return "#000000";
     if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase();
     const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(value);
-    if (short !== null) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
+    if (short !== null)
+      return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
     return "#000000";
   }
 
@@ -46,25 +49,27 @@
     if (!Number.isFinite(value)) return;
     const control = field.control;
     if (control.kind !== "number") return;
-    const clamped = Math.min(control.max ?? Infinity, Math.max(control.min ?? -Infinity, value));
+    const clamped = Math.min(
+      control.max ?? Infinity,
+      Math.max(control.min ?? -Infinity, value),
+    );
     changeField(editor, field, clamped);
   }
 
   function previewColor(id: string, field: PropertyField, event: Event): void {
     const value = (event.currentTarget as HTMLInputElement).value;
-    let gesture = gestures.get(id);
-    if (gesture === undefined) {
-      gesture = new FieldGesture(editor, field);
-      gestures.set(id, gesture);
+    if (dragging?.id !== id) {
+      dragging?.gesture.cancel();
+      dragging = { id, gesture: new FieldGesture(editor, field) };
     }
-    gesture.preview(value);
+    dragging.gesture.preview(value);
   }
 
   function commitColor(id: string, field: PropertyField, event: Event): void {
     const value = (event.currentTarget as HTMLInputElement).value;
-    const gesture = gestures.get(id);
-    gestures.delete(id);
-    if (gesture !== undefined) gesture.commit(value);
+    const gesture = dragging?.id === id ? dragging.gesture : null;
+    dragging = null;
+    if (gesture !== null) gesture.commit(value);
     else changeField(editor, field, value);
   }
 
@@ -83,7 +88,9 @@
   function chosenIndex(field: PropertyField): string {
     if (field.mixed || field.control.kind !== "select") return "";
     const value = JSON.stringify(field.value);
-    const index = field.control.options.findIndex((o) => JSON.stringify(o.value) === value);
+    const index = field.control.options.findIndex(
+      (o) => JSON.stringify(o.value) === value,
+    );
     return index < 0 ? "" : String(index);
   }
 
@@ -103,7 +110,9 @@
         <h2>
           {t(section.label)}
           {#if section.ids.length > 1}
-            <span class="count">{t("editor:properties.count", { count: section.ids.length })}</span>
+            <span class="count"
+              >{t("editor:properties.count", { count: section.ids.length })}</span
+            >
           {/if}
         </h2>
         {#each section.fields as field (field.key)}
@@ -119,7 +128,9 @@
                   min={control.min}
                   max={control.max}
                   step={control.step ?? "any"}
-                  value={field.mixed || typeof field.value !== "number" ? "" : field.value}
+                  value={field.mixed || typeof field.value !== "number"
+                    ? ""
+                    : field.value}
                   placeholder={field.mixed ? t("editor:properties.mixed") : ""}
                   onchange={(event) => setNumber(field, event)}
                 />
@@ -149,7 +160,11 @@
                   <span class="mixed">{t("editor:properties.mixed")}</span>
                 {/if}
               {:else if control.kind === "select"}
-                <select {id} value={chosenIndex(field)} onchange={(event) => setChoice(field, event)}>
+                <select
+                  {id}
+                  value={chosenIndex(field)}
+                  onchange={(event) => setChoice(field, event)}
+                >
                   {#if chosenIndex(field) === ""}
                     <option value="" disabled>{t("editor:properties.mixed")}</option>
                   {/if}
@@ -168,15 +183,18 @@
               {:else if control.multiline}
                 <textarea
                   {id}
-                  value={field.mixed || typeof field.value !== "string" ? "" : field.value}
+                  value={field.mixed || typeof field.value !== "string"
+                    ? ""
+                    : field.value}
                   placeholder={field.mixed ? t("editor:properties.mixed") : ""}
-                  onchange={(event) => setText(field, event)}
-                ></textarea>
+                  onchange={(event) => setText(field, event)}></textarea>
               {:else}
                 <input
                   {id}
                   type="text"
-                  value={field.mixed || typeof field.value !== "string" ? "" : field.value}
+                  value={field.mixed || typeof field.value !== "string"
+                    ? ""
+                    : field.value}
                   placeholder={field.mixed ? t("editor:properties.mixed") : ""}
                   onchange={(event) => setText(field, event)}
                 />
