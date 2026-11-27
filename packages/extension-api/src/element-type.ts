@@ -12,8 +12,9 @@ import type { Label } from "./ids.ts";
 /**
  * Called by `read` for each part of the data that does not fit and was read as
  * a default: `path` names the key ("fontSize", "crop.w"), `problem` says what was
- * wrong. Reading the same data again must report the same things. A key that is
- * missing is not a problem: it reads as its default (section 3.8).
+ * wrong. Reading the same data again must report the same things. A missing
+ * optional key (every key a later layout added) is not a problem: it reads as
+ * its default (section 3.8).
  */
 export type DataReport = (path: string, problem: string) => void;
 
@@ -44,8 +45,10 @@ export interface ElementTypeView<M> {
   /**
    * Reads an element's data into the model. Total: it never throws, whatever
    * the data holds (a peer, an old version or a damaged file may have written
-   * it). A missing key reads as its default without a report; a key whose value
-   * does not fit reads as its default and is reported. `typeVersion` is at most
+   * it). A missing optional key reads as its default without a report, and
+   * every key a later layout added is optional, with a default that means what
+   * older layouts implied; a value that does not fit reads as its default and
+   * is reported. `typeVersion` is at most
    * this definition's; newer elements never reach `read` (they are drawn as
    * placeholders). Data that reads without reports is valid: the editor uses
    * this to check data before a command writes it. Pure, so the result may be
