@@ -40,12 +40,16 @@ export default {
   "notice.autosave-failed":
     "Your latest changes could not be saved. Galatsa keeps trying. Do not close the window until this message is gone.",
   "notice.storage-full":
-    "The storage is full, so your latest changes could not be saved. Free some space, or save the presentation as a file.",
+    "The storage is full, so Galatsa cannot save your changes automatically. You can go on working, and save the presentation as a file. Free some space to turn autosave back on.",
   "notice.autosave-newer-version":
     "Someone is editing this presentation with a newer version of Galatsa. This version can no longer save it.",
   "notice.save-failed": "“{name}” could not be saved. The file you had is unchanged.",
   "notice.save-verify-failed":
     "“{name}” was saved, but reading it back gave something else. Save again, or choose another place.",
+  "notice.save-downloaded":
+    "“{name}” was handed to the browser as a download. Galatsa cannot check that it arrived, so the presentation still counts as not saved to a file. Check your downloads folder.",
+  "notice.save-download-failed":
+    "The download of “{name}” could not be started. Your work is still kept in Galatsa.",
   "notice.save-too-large":
     "The presentation is too large to save as one file. Keep large media in files next to the presentation.",
   "notice.save-newer-version":
@@ -57,8 +61,16 @@ export default {
     "“{title}” was not closed properly. The last change was made {when, date, medium} at {when, time, short}. Do you want to continue where you left off?",
   "recovery.untitled": "Untitled presentation",
   "recovery.restore": "Restore",
-  "recovery.discard": "Discard",
   "recovery.later": "Not now",
+  "recovery.dismiss": "Keep it, but don’t ask again",
+  "recovery.dismiss.detail":
+    "“{title}” stays in Galatsa’s list of presentations with the restored work, and you will not be asked about it again.",
+  "recovery.discardChanges": "Discard the changes",
+  "recovery.discardChanges.detail":
+    "The changes made after “{name}” was last saved will be lost. The file itself stays as it is.",
+  "recovery.delete": "Delete the presentation",
+  "recovery.delete.detail":
+    "“{title}” has never been saved as a file. Deleting it removes the whole presentation from Galatsa, not only the latest changes. This cannot be undone.",
   "lastGood.offer":
     "Galatsa kept a copy of “{name}” from {when, date, medium} at {when, time, short}. Do you want to open the copy?",
   "lastGood.open": "Open the copy",

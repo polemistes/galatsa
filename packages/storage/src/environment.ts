@@ -24,8 +24,12 @@ export const systemScheduler: Scheduler = {
  * from sessions whose program stopped without closing them.
  */
 export interface Liveness {
-  /** Marks the session as running until the returned function is called. */
-  hold(sessionId: string): () => void;
+  /**
+   * Marks the session as running until the returned function is called.
+   * Resolves once the mark is in place, so that no other program can take the
+   * session for stopped after that.
+   */
+  hold(sessionId: string): Promise<() => void>;
   /** The sessions among `ids` that are running, or null if this cannot tell. */
   alive(ids: readonly string[]): Promise<ReadonlySet<string> | null>;
 }
@@ -55,8 +59,14 @@ export function webLocksLiveness(prefix = "galatsa-storage-session:"): Liveness 
     hold(sessionId) {
       let release = () => {};
       const held = new Promise<void>((resolve) => (release = resolve));
-      locks.request(prefix + sessionId, () => held).catch(() => {});
-      return () => release();
+      return new Promise((granted) => {
+        locks
+          .request(prefix + sessionId, () => {
+            granted(() => release());
+            return held;
+          })
+          .catch(() => granted(() => {}));
+      });
     },
     async alive(ids) {
       try {
@@ -78,9 +88,11 @@ export interface MemoryLiveness extends Liveness {
 export function memoryLiveness(): MemoryLiveness {
   const running = new Set<string>();
   return {
-    hold(sessionId) {
+    async hold(sessionId) {
       running.add(sessionId);
-      return () => running.delete(sessionId);
+      return () => {
+        running.delete(sessionId);
+      };
     },
     async alive(ids) {
       return new Set(ids.filter((id) => running.has(id)));

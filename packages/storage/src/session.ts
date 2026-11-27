@@ -6,10 +6,21 @@
 
 import type { AssetId } from "@galatsa/core";
 import { lineageOf, roots, toSnapshot } from "@galatsa/core/ydoc";
-import { assetIdOf, assetsToWrite, writeGalatsaFile } from "@galatsa/format";
+import {
+  FileFormatError,
+  assetIdOf,
+  assetsToWrite,
+  writeGalatsaFile,
+} from "@galatsa/format";
 import * as Y from "yjs";
 import { StorageError, type StorageBackend } from "./backend.ts";
-import { frameCheckpoint, loadCheckpoint, type CheckpointEncoder } from "./checkpoint.ts";
+import {
+  encodeCheckpointFile,
+  frameCheckpoint,
+  loadCheckpoint,
+  type CheckpointEncoder,
+  type EncodedCheckpoint,
+} from "./checkpoint.ts";
 import type {
   Channel,
   ChannelFactory,
@@ -55,11 +66,16 @@ export interface AutosaveTiming {
   checkpointBytes: number;
   /** ...and in any case no later than this after the first change since it. */
   checkpointMaxDelay: number;
+  /**
+   * How long the checkpoint encoder may take before the checkpoint is built on
+   * this thread instead (and the encoder is not used again in this session).
+   */
+  checkpointTimeout: number;
   /** First wait before trying a failed write again (doubles up to a minute). */
   retryDelay: number;
-  /** Heartbeats, where liveness cannot be asked. */
+  /** How often a running session writes a sign of life into its record. */
   heartbeatInterval: number;
-  /** A session without a heartbeat for this long counts as stopped. */
+  /** A session without a sign of life for this long counts as stopped. */
   staleAfter: number;
   /** How often a session updates when it last changed something. */
   changedAtResolution: number;
@@ -72,6 +88,7 @@ export const DEFAULT_TIMING: AutosaveTiming = {
   checkpointInterval: 30_000,
   checkpointBytes: 4 * 1024 * 1024,
   checkpointMaxDelay: 300_000,
+  checkpointTimeout: 60_000,
   retryDelay: 2000,
   heartbeatInterval: 30_000,
   staleAfter: 120_000,
@@ -85,10 +102,15 @@ export interface SessionStatus {
   pending: boolean;
   /** When a change last reached the store. */
   lastStoredAt: number | null;
-  /** There are changes since the document was opened or last saved to a file. */
+  /**
+   * There are changes since the document was opened or last saved to a file.
+   * A save by download does not clear it: nothing can confirm the file arrived.
+   */
   unsavedToFile: boolean;
   /** The file the document was opened from or saved to, if any. */
   fileName: string | null;
+  /** When the document was last handed to the browser as a download. */
+  downloadedAt: number | null;
   /** Why changes are not reaching the store, while that lasts. */
   problem: Notice | null;
 }
@@ -107,21 +129,60 @@ export interface SessionContext {
   lifecycle: boolean;
 }
 
+/**
+ * A channel that was opened before the document was read, so that no entry
+ * another tab stores while it is read can be missed. Messages wait until the
+ * session takes them.
+ */
+export interface OpenChannel {
+  channel: Channel;
+  take(listener: (message: ChannelMessage) => void): void;
+}
+
+export function openChannel(
+  factory: ChannelFactory | null,
+  backend: StorageBackend,
+  slot: string,
+): OpenChannel | null {
+  if (!factory) return null;
+  const channel = factory(`galatsa-storage:${backend.name}:${slot}`);
+  const waiting: ChannelMessage[] = [];
+  let target: ((message: ChannelMessage) => void) | null = null;
+  channel.listen((message) => (target ? target(message) : waiting.push(message)));
+  return {
+    channel,
+    take(listener) {
+      target = listener;
+      for (const message of waiting.splice(0)) listener(message);
+    },
+  };
+}
+
 /** Where a session starts: a document loaded from (or just written to) a slot. */
 export interface SessionStart {
   slot: string;
   doc: Y.Doc;
-  /** The checkpoint the document was loaded from. */
+  /** The checkpoint the document was loaded from; 0 if none could be written. */
   generation: number;
   /** The journal entries that checkpoint holds. */
   baseIncludes: string[];
   /** Every journal entry whose content is in the document. */
   absorbed: Set<string>;
+  /** Damaged journal entries, removed after the next checkpoint. */
+  skipped?: Set<string>;
   info: SlotInfo;
   /** True if the document is not what its file holds (changes were restored). */
   unsavedToFile: boolean;
   /** True if the stored copy should be rewritten soon (it had damage). */
   needsCheckpoint: boolean;
+  /** Asset bytes already in memory (from the file it was opened from). */
+  assets?: ReadonlyMap<AssetId, Uint8Array>;
+  /** Of those, the ones not yet in the store. */
+  unstoredAssets?: ReadonlySet<AssetId>;
+  /** The channel to other tabs, opened before the document was read. */
+  channel?: OpenChannel | null;
+  /** Why the store could not take the document, if it could not. */
+  problem?: Notice | null;
 }
 
 function sameBytes(a: Uint8Array | undefined, b: Uint8Array): boolean {
@@ -154,6 +215,23 @@ export function applyStored(doc: Y.Doc, updates: readonly Uint8Array[]): number 
 }
 
 /**
+ * Drops the updates Yjs holds back because something they build on is missing
+ * (after a damaged journal entry). Yjs would carry them into every encoded
+ * state, and a state with such updates is not a complete document: the file
+ * reader rejects it, and every later checkpoint would lose its merge identity.
+ * Returns true if anything was dropped. What was dropped is still in the
+ * journal entries it came from, and in the checkpoints of a session that had
+ * what it builds on.
+ */
+export function dropPending(doc: Y.Doc): boolean {
+  const store = doc.store;
+  if (store.pendingStructs === null && store.pendingDs === null) return false;
+  store.pendingStructs = null;
+  store.pendingDs = null;
+  return true;
+}
+
+/**
  * An open document. The document (`doc`) has work tracking attached; whoever
  * edits it should get the live resolver with `liveResolver(doc)` and an undo
  * manager with `createUndoManager(doc)`. Every change to it, from any origin
@@ -172,7 +250,7 @@ export class StorageSession {
   #firstPendingAt = 0;
   #seq = 0;
   #absorbed: Set<string>;
-  #skipped = new Set<string>();
+  #skipped: Set<string>;
   #generation: number;
   #baseIncludes: string[];
   #journalBytes = 0;
@@ -180,18 +258,26 @@ export class StorageSession {
   #dirtySince: number | null = null;
   #lastChangeAt = 0;
   #lastCheckpointAt: number;
-  #queue: Promise<unknown> = Promise.resolve();
+  /** Journal entries, session records and assets: short writes, in order. */
+  #journalQueue: Promise<unknown> = Promise.resolve();
+  /** Checkpoints and merges: long work that never holds up the journal. */
+  #checkpointQueue: Promise<unknown> = Promise.resolve();
   #saves: Promise<unknown> = Promise.resolve();
   #flushTimer: unknown = null;
   #checkpointTimer: unknown = null;
   #retryTimer: unknown = null;
   #heartbeatTimer: unknown = null;
   #retryDelay: number;
+  #encoderBroken = false;
   #status: SessionStatus;
   #listeners = new Set<(status: SessionStatus) => void>();
   #closed = false;
   #release: () => void = () => {};
-  #channel: Channel | null = null;
+  #open: OpenChannel | null;
+  #startProblem: Notice | null;
+  /** Asset bytes this session has seen, so a save works when the store does not. */
+  #assets = new Map<AssetId, Uint8Array>();
+  #unstoredAssets = new Set<AssetId>();
   #detach: (() => void)[] = [];
 
   /** Use DocumentStorage to open sessions. */
@@ -204,10 +290,15 @@ export class StorageSession {
     this.#generation = start.generation;
     this.#baseIncludes = start.baseIncludes;
     this.#absorbed = start.absorbed;
+    this.#skipped = start.skipped ?? new Set();
+    this.#open = start.channel ?? null;
+    this.#startProblem = start.problem ?? null;
+    for (const [assetId, bytes] of start.assets ?? []) this.#assets.set(assetId, bytes);
+    for (const assetId of start.unstoredAssets ?? []) this.#unstoredAssets.add(assetId);
     this.#retryDelay = ctx.timing.retryDelay;
     const now = ctx.scheduler.now();
     this.#lastCheckpointAt = now;
-    if (start.needsCheckpoint) this.#dirtySince = now;
+    if (start.needsCheckpoint || start.generation === 0) this.#dirtySince = now;
     this.#record = {
       startedAt: now,
       heartbeatAt: now,
@@ -220,6 +311,7 @@ export class StorageSession {
       lastStoredAt: null,
       unsavedToFile: start.unsavedToFile,
       fileName: start.info.fileName,
+      downloadedAt: null,
       problem: null,
     };
     const onUpdate = (update: Uint8Array, origin: unknown) =>
@@ -228,20 +320,45 @@ export class StorageSession {
     this.#detach.push(() => this.doc.off("update", onUpdate));
   }
 
-  /** Writes the session record and starts listening to other tabs. */
+  /**
+   * Marks the session as running, writes its record and starts listening to
+   * other tabs. Never fails because of the store: a store that cannot be
+   * written to shows as the status's problem, and writing is tried again.
+   */
   async start(): Promise<void> {
-    await this.#ctx.backend.write(
-      keys.session(this.slot, this.id),
-      encodeJson(this.#record),
-    );
-    this.#release = this.#ctx.liveness?.hold(this.id) ?? (() => {});
-    if (!this.#ctx.liveness) this.#scheduleHeartbeat();
-    const channels = this.#ctx.channels;
-    if (channels) {
-      this.#channel = channels(`galatsa-storage:${this.#ctx.backend.name}:${this.slot}`);
-      this.#channel.listen((message) => this.#onMessage(message));
+    // Running before the record exists, so that no other program can take
+    // the record for one of a stopped session.
+    try {
+      this.#release = (await this.#ctx.liveness?.hold(this.id)) ?? (() => {});
+    } catch {
+      // Heartbeats tell instead.
     }
+    let problem = this.#startProblem;
+    try {
+      await this.#ctx.backend.write(
+        keys.session(this.slot, this.id),
+        encodeJson(this.#record),
+      );
+      // The document may have been deleted elsewhere while it was opened:
+      // then the first thing stored must be a whole checkpoint.
+      const stored = await this.#ctx.backend.list(keys.checkpoints(this.slot));
+      if (stored.length === 0) {
+        this.#generation = 0;
+        this.#dirtySince ??= this.#ctx.scheduler.now();
+      }
+    } catch (error) {
+      problem ??= autosaveProblem(error);
+    }
+    this.#scheduleHeartbeat();
+    this.#open ??= openChannel(this.#ctx.channels, this.#ctx.backend, this.slot);
+    this.#open?.take((message) => this.#onMessage(message));
     this.#attachLifecycle();
+    if (problem) {
+      this.#setStatus({ problem });
+      this.#scheduleRetry();
+    } else if (this.#generation === 0 || this.#unstoredAssets.size > 0) {
+      this.#scheduleRetry();
+    }
   }
 
   get status(): SessionStatus {
@@ -260,7 +377,7 @@ export class StorageSession {
 
   /** Stores the changes made so far in the journal now. Resolves to false if that failed. */
   flush(): Promise<boolean> {
-    return this.#enqueue(() => this.#flushNow());
+    return this.#onJournal(() => this.#flushNow());
   }
 
   /**
@@ -269,37 +386,53 @@ export class StorageSession {
    * in memory and are written later.
    */
   checkpoint(): Promise<void> {
-    return this.#enqueue(async () => {
-      if (!(await this.#flushNow())) {
-        throw (
-          this.#status.problem?.cause ??
-          new StorageError("failed", "The journal could not be written")
-        );
-      }
-      await this.#checkpointNow();
-    });
+    return this.#onCheckpoints(() => this.#flushAndCheckpoint());
   }
 
   /**
    * Stores an asset's bytes (an image, a video) and returns its id. The caller
    * then describes it in the document (`addAsset`) in the command that uses it.
+   * The bytes are also kept in memory for the session, so that saving to a
+   * file works even if the store cannot be read; if the store cannot take them
+   * now, they are written later.
    */
   async putAsset(bytes: Uint8Array): Promise<AssetId> {
     const id = await assetIdOf(bytes);
-    await this.#ctx.backend.create(keys.asset(this.slot, id), bytes);
+    this.#assets.set(id, bytes);
+    try {
+      await this.#ctx.backend.create(keys.asset(this.slot, id), bytes);
+    } catch (error) {
+      this.#unstoredAssets.add(id);
+      this.#fail(error);
+    }
     return id;
   }
 
   /** An asset's bytes, or undefined if they are missing or damaged. */
   async getAsset(id: AssetId): Promise<Uint8Array | undefined> {
-    return readAsset(this.#ctx.backend, this.slot, id);
+    let bytes: Uint8Array | undefined;
+    try {
+      bytes = await readAsset(this.#ctx.backend, this.slot, id);
+    } catch {
+      bytes = undefined;
+    }
+    if (bytes) {
+      this.#assets.set(id, bytes);
+      return bytes;
+    }
+    return this.#assets.get(id);
   }
 
   /**
    * Saves the document, with its assets, to a file the user chose. The file is
    * replaced atomically (see FileTarget), and read back to check it where that
    * is possible. A save that fails leaves the old file as it was; the document
-   * stays safe in the store either way.
+   * stays safe in the store either way. Before saving, it brings in what other
+   * tabs have stored. It works with what is in memory when the store cannot be
+   * used, so saving as a file is always a way out.
+   *
+   * A target that cannot read back (a download) gives the notice
+   * "save-downloaded", and the document still counts as not saved to a file.
    */
   saveToFile(
     target: FileTarget,
@@ -307,9 +440,15 @@ export class StorageSession {
   ): Promise<SaveResult> {
     const run = async (): Promise<SaveResult> => {
       await this.flush();
+      try {
+        await this.#onCheckpoints(() => this.#mergeStored());
+      } catch {
+        // The store cannot be read: save what this session has.
+      }
       const changes = this.#changes;
       let bytes: Uint8Array;
       let notices: Notice[];
+      const download = !target.canRead;
       try {
         const assets = new Map<AssetId, Uint8Array>();
         for (const id of assetsToWrite(toSnapshot(this.doc))) {
@@ -325,25 +464,34 @@ export class StorageSession {
         notices = fileNotices(written.warnings);
         await target.write(bytes);
       } catch (error) {
-        return { ok: false, problem: saveProblem(error, target.name) };
+        return { ok: false, problem: saveProblem(error, target.name, download) };
       }
-      if (target.canRead) {
-        let back: Uint8Array | undefined;
-        try {
-          back = await target.read();
-        } catch {
-          back = undefined;
-        }
-        if (!sameBytes(back, bytes)) {
-          return {
-            ok: false,
-            problem: notice("save-verify-failed", { name: target.name }),
-          };
-        }
+      if (download) {
+        // Nothing confirms that the file exists: still unsaved.
+        const now = this.#ctx.scheduler.now();
+        this.#info = { ...this.#info, fileName: target.name };
+        await this.#onJournal(() => this.#writeInfo(false));
+        this.#setStatus({ fileName: target.name, downloadedAt: now });
+        return {
+          ok: true,
+          notices: [notice("save-downloaded", { name: target.name }), ...notices],
+        };
+      }
+      let back: Uint8Array | undefined;
+      try {
+        back = await target.read();
+      } catch {
+        back = undefined;
+      }
+      if (!sameBytes(back, bytes)) {
+        return {
+          ok: false,
+          problem: notice("save-verify-failed", { name: target.name }),
+        };
       }
       const now = this.#ctx.scheduler.now();
       this.#info = { ...this.#info, fileName: target.name, savedToFileAt: now };
-      await this.#enqueue(async () => {
+      await this.#onJournal(async () => {
         await this.#writeInfo(false);
         if (this.#changes === changes) {
           this.#record = { ...this.#record, unsaved: false };
@@ -387,7 +535,7 @@ export class StorageSession {
       ]) {
         if (timer !== null) this.#ctx.scheduler.clearTimeout(timer);
       }
-      this.#channel?.close();
+      this.#open?.channel.close();
     }
     if (clean) {
       await this.#ctx.backend.remove([keys.session(this.slot, this.id)]).catch(() => {});
@@ -422,9 +570,15 @@ export class StorageSession {
     }
   }
 
-  #enqueue<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.#queue.then(task, task);
-    this.#queue = run.catch(() => {});
+  #onJournal<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#journalQueue.then(task, task);
+    this.#journalQueue = run.catch(() => {});
+    return run;
+  }
+
+  #onCheckpoints<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#checkpointQueue.then(task, task);
+    this.#checkpointQueue = run.catch(() => {});
     return run;
   }
 
@@ -488,7 +642,7 @@ export class StorageSession {
         const again = this.#checkpointDue();
         if (again === null) return;
         if (again > this.#ctx.scheduler.now()) this.#scheduleCheckpoint();
-        else void this.#enqueue(() => this.#checkpointNow()).catch(() => {});
+        else void this.checkpoint().catch(() => {});
       },
     );
   }
@@ -499,18 +653,18 @@ export class StorageSession {
     this.#retryDelay = Math.min(this.#retryDelay * 2, 60_000);
     this.#retryTimer = this.#ctx.scheduler.setTimeout(() => {
       this.#retryTimer = null;
-      void this.#enqueue(async () => {
-        if (await this.#flushNow()) await this.#checkpointNow();
-      }).catch(() => {});
+      void this.checkpoint().catch(() => {});
     }, delay);
   }
 
   #scheduleHeartbeat(): void {
+    // Written also where locks tell running sessions apart: if asking the
+    // locks fails, the heartbeats must be there to fall back on.
     this.#heartbeatTimer = this.#ctx.scheduler.setTimeout(() => {
       this.#heartbeatTimer = null;
       if (this.#closed) return;
       this.#record = { ...this.#record, heartbeatAt: this.#ctx.scheduler.now() };
-      void this.#enqueue(() => this.#writeRecord());
+      void this.#onJournal(() => this.#writeRecord());
       this.#scheduleHeartbeat();
     }, this.#ctx.timing.heartbeatInterval);
   }
@@ -538,12 +692,32 @@ export class StorageSession {
 
   // --- Journal --------------------------------------------------------------
 
+  async #storeAssets(): Promise<void> {
+    for (const id of [...this.#unstoredAssets]) {
+      const bytes = this.#assets.get(id);
+      if (bytes) await this.#ctx.backend.create(keys.asset(this.slot, id), bytes);
+      this.#unstoredAssets.delete(id);
+    }
+  }
+
   async #flushNow(): Promise<boolean> {
     if (this.#flushTimer !== null) {
       this.#ctx.scheduler.clearTimeout(this.#flushTimer);
       this.#flushTimer = null;
     }
+    try {
+      await this.#storeAssets();
+    } catch (error) {
+      this.#fail(error);
+      return false;
+    }
     if (this.#pending.length === 0) return true;
+    if (this.#generation === 0) {
+      // No checkpoint yet: entries would have nothing to apply to. The next
+      // checkpoint holds these changes; it is written first.
+      this.#scheduleRetry();
+      return false;
+    }
     const taken = this.#pending.length;
     const update =
       taken === 1 ? this.#pending[0]! : Y.mergeUpdates(this.#pending.slice(0, taken));
@@ -567,7 +741,7 @@ export class StorageSession {
     this.#absorbed.add(key);
     this.#journalBytes += bytes.length;
     this.#retryDelay = this.#ctx.timing.retryDelay;
-    this.#channel?.post({ session: this.id, key, update });
+    this.#open?.channel.post({ session: this.id, key, update });
     this.#setStatus({
       saving: false,
       pending: this.#pending.length > 0,
@@ -620,8 +794,8 @@ export class StorageSession {
 
   /**
    * Brings in what other sessions stored: the newest readable checkpoint newer
-   * than the one this session is based on, and every journal entry not yet in
-   * the document.
+   * than the one this session is based on, and every intact journal entry not
+   * yet in the document. Damaged entries are noted, never taken as held.
    */
   async #mergeStored(): Promise<{
     generations: number[];
@@ -668,7 +842,50 @@ export class StorageSession {
       this.#absorbed.add(key);
     }
     applyStored(this.doc, updates);
+    dropPending(this.doc);
     return { generations, base, baseIncludes, journal: new Set(journal) };
+  }
+
+  /** The encoder, with a time limit; this thread when it fails or hangs. */
+  async #encode(state: Uint8Array): Promise<EncodedCheckpoint> {
+    const local = () => encodeCheckpointFile(state, this.#ctx.generator);
+    if (this.#encoderBroken) return local();
+    let timer: unknown = null;
+    const timeout = new Promise<null>((resolve) => {
+      timer = this.#ctx.scheduler.setTimeout(
+        () => resolve(null),
+        this.#ctx.timing.checkpointTimeout,
+      );
+    });
+    try {
+      const result = await Promise.race([
+        this.#ctx.encoder(state).then(
+          (encoded) => encoded,
+          (error: unknown) => {
+            if (error instanceof FileFormatError) throw error;
+            return null;
+          },
+        ),
+        timeout,
+      ]);
+      if (result) return result;
+      this.#encoderBroken = true;
+      return local();
+    } finally {
+      if (timer !== null) this.#ctx.scheduler.clearTimeout(timer);
+    }
+  }
+
+  /** Flushes the journal, then writes a checkpoint (one first if there is none). */
+  async #flushAndCheckpoint(): Promise<void> {
+    if (this.#generation === 0) await this.#checkpointNow();
+    if (!(await this.flush())) {
+      throw (
+        this.#status.problem?.cause ??
+        new StorageError("failed", "The journal could not be written")
+      );
+    }
+    await this.#checkpointNow();
   }
 
   async #checkpointNow(): Promise<void> {
@@ -689,9 +906,12 @@ export class StorageSession {
         this.#generation = merged.base;
         this.#baseIncludes = merged.baseIncludes;
         const held = new Set(merged.baseIncludes);
+        const damaged = [...this.#skipped].filter((key) => merged.journal.has(key));
         if (
           this.#dirtySince === null &&
+          top > 0 &&
           top === merged.base &&
+          damaged.length === 0 &&
           [...merged.journal].every((key) => held.has(key))
         ) {
           break;
@@ -700,7 +920,7 @@ export class StorageSession {
         const state = Y.encodeStateAsUpdate(this.doc);
         const includes = [...this.#absorbed].sort();
         const changes = this.#changes;
-        const encoded = await this.#ctx.encoder(state);
+        const encoded = await this.#encode(state);
         const generation = top + 1;
         const key = keys.checkpoint(this.slot, generation);
         const bytes = frameCheckpoint(
@@ -714,14 +934,9 @@ export class StorageSession {
           encoded,
           state,
         );
+        // Only one session can create a generation; the one that loses merges
+        // the winner's checkpoint and tries again.
         if (!(await backend.create(key, bytes))) continue;
-        // A session that listed long ago can create a generation that others
-        // have since passed and removed. Such a checkpoint is stale: take it back.
-        const after = (await backend.list(keys.checkpoints(this.slot))).map(generationOf);
-        if (after.some((g) => g > generation)) {
-          await backend.remove([key]);
-          continue;
-        }
         const back = await backend.read(key);
         this.#generation = generation;
         this.#baseIncludes = includes;
@@ -729,18 +944,21 @@ export class StorageSession {
         this.#lastCheckpointAt = this.#ctx.scheduler.now();
         this.#dirtySince = this.#changes === changes ? null : this.#lastCheckpointAt;
         if (!sameBytes(back, bytes)) {
+          // Nothing is removed: the store does not keep what it is given.
           throw new StorageError(
             "failed",
             "A checkpoint read back differs from what was written",
           );
         }
         // The previous base and what it holds stay: they are the last good copy
-        // should this checkpoint be damaged later.
+        // should this checkpoint be damaged later. Damaged entries hold nothing
+        // that can be used, and go.
         const stale = merged.generations
           .filter((g) => g < generation && g !== merged.base)
           .map((g) => keys.checkpoint(this.slot, g));
-        await backend.remove([...stale, ...merged.baseIncludes]);
+        await backend.remove([...stale, ...merged.baseIncludes, ...damaged]);
         for (const entry of merged.baseIncludes) this.#absorbed.delete(entry);
+        for (const entry of damaged) this.#skipped.delete(entry);
         await this.#writeInfo();
         break;
       }

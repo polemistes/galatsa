@@ -40,12 +40,16 @@ export default {
   "notice.autosave-failed":
     "De siste endringene dine kunne ikke lagres. Galatsa prøver igjen. Ikke lukk vinduet før denne meldingen er borte.",
   "notice.storage-full":
-    "Lageret er fullt, så de siste endringene dine kunne ikke lagres. Frigjør plass, eller lagre presentasjonen som fil.",
+    "Lageret er fullt, så Galatsa kan ikke lagre endringene dine automatisk. Du kan arbeide videre og lagre presentasjonen som fil. Frigjør plass for å slå på automatisk lagring igjen.",
   "notice.autosave-newer-version":
     "Noen redigerer denne presentasjonen med en nyere versjon av Galatsa. Denne versjonen kan ikke lenger lagre den.",
   "notice.save-failed": "«{name}» kunne ikke lagres. Fila du hadde, er uendret.",
   "notice.save-verify-failed":
     "«{name}» ble lagret, men da den ble lest tilbake, var innholdet et annet. Lagre igjen, eller velg et annet sted.",
+  "notice.save-downloaded":
+    "«{name}» er gitt til nettleseren som en nedlasting. Galatsa kan ikke kontrollere at den kom fram, så presentasjonen regnes fortsatt som ikke lagret i fil. Se etter i mappen for nedlastinger.",
+  "notice.save-download-failed":
+    "Nedlastingen av «{name}» kunne ikke startes. Arbeidet ditt er fortsatt tatt vare på i Galatsa.",
   "notice.save-too-large":
     "Presentasjonen er for stor til å lagres som én fil. Legg store mediefiler i egne filer ved siden av presentasjonen.",
   "notice.save-newer-version":
@@ -57,8 +61,16 @@ export default {
     "«{title}» ble ikke lukket som vanlig. Siste endring ble gjort {when, date, medium} klokka {when, time, short}. Vil du fortsette der du slapp?",
   "recovery.untitled": "Presentasjon uten navn",
   "recovery.restore": "Hent tilbake",
-  "recovery.discard": "Forkast",
   "recovery.later": "Ikke nå",
+  "recovery.dismiss": "Behold, men ikke spør igjen",
+  "recovery.dismiss.detail":
+    "«{title}» blir liggende i Galatsas liste over presentasjoner med arbeidet som er hentet tilbake, og du blir ikke spurt om den igjen.",
+  "recovery.discardChanges": "Forkast endringene",
+  "recovery.discardChanges.detail":
+    "Endringene som er gjort etter at «{name}» sist ble lagret, går tapt. Selve fila blir som den er.",
+  "recovery.delete": "Slett presentasjonen",
+  "recovery.delete.detail":
+    "«{title}» er aldri lagret som fil. Å slette den fjerner hele presentasjonen fra Galatsa, ikke bare de siste endringene. Dette kan ikke angres.",
   "lastGood.offer":
     "Galatsa tok vare på en kopi av «{name}» fra {when, date, medium} klokka {when, time, short}. Vil du åpne kopien?",
   "lastGood.open": "Åpne kopien",

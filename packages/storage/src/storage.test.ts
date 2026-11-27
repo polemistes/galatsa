@@ -69,9 +69,11 @@ describe("storing and reopening", () => {
 
     // A pause after enough time: a checkpoint, and the journal it replaces
     // stays until the next one (the last good copy needs it).
-    expect(checkpointKeys(m, slot)).toHaveLength(1);
+    // A new document has two checkpoints from the start: a last good copy.
+    expect(checkpointKeys(m, slot)).toHaveLength(2);
     await p.scheduler.advance(30_000);
     expect(checkpointKeys(m, slot)).toHaveLength(2);
+    expect(checkpointKeys(m, slot).at(-1)).toBe(keys.checkpoint(slot, 3));
     const before = journalKeys(m, slot).length;
     expect(before).toBeGreaterThan(0);
     addBox(session.doc);
@@ -121,9 +123,11 @@ describe("storing and reopening", () => {
     const p2 = program(m);
     const reopened = opened(await p2.storage.openFile(file));
     expect([...(await reopened.getAsset(id))!]).toEqual([...bytes]);
+    await reopened.close();
     // A damaged asset in the store is not handed out.
     m.store.data.set(keys.asset(reopened.slot, id), new Uint8Array([9, 9]));
-    expect(await reopened.getAsset(id)).toBeUndefined();
+    const fresh = opened(await program(m).storage.open(reopened.slot));
+    expect(await fresh.getAsset(id)).toBeUndefined();
   });
 });
 
@@ -511,7 +515,7 @@ describe("dismissing and discarding", () => {
     addBox(session.doc);
     await session.flush();
     const p2 = program(m);
-    expect(await p2.storage.discard(session.slot)).toBe(false);
+    expect(await p2.storage.deleteDocument(session.slot)).toBe(false);
     p1.crash(session);
     expect(await p2.storage.recoverable()).toHaveLength(1);
     await p2.storage.dismiss(session.slot);
@@ -519,8 +523,31 @@ describe("dismissing and discarding", () => {
     expect(await p2.storage.list()).toHaveLength(1);
     const exported = await p2.storage.exportFile(session.slot);
     expect((await readGalatsaFile(exported!)).snapshot).toEqual(toSnapshot(session.doc));
-    expect(await p2.storage.discard(session.slot)).toBe(true);
+    // Never saved to a file: discarding the changes would delete it all.
+    expect(await p2.storage.discardChanges(session.slot)).toBe("no-file");
+    expect(await p2.storage.list()).toHaveLength(1);
+    expect(await p2.storage.deleteDocument(session.slot)).toBe(true);
     expect(await p2.storage.list()).toEqual([]);
     expect(m.store.data.size).toBe(0);
+  });
+
+  it("discards the changes of a document that has a file, and the file stays", async () => {
+    const m = machine();
+    const p1 = program(m);
+    const session = await p1.storage.create();
+    addBox(session.doc);
+    const file = memoryFile("talk.galatsa");
+    expect((await session.saveToFile(file)).ok).toBe(true);
+    const saved = file.bytes!.slice();
+    addBox(session.doc, 5, 5);
+    await session.flush();
+    const p2 = program(m);
+    expect(await p2.storage.discardChanges(session.slot)).toBe("open");
+    p1.crash(session);
+    const [offer] = await p2.storage.recoverable();
+    expect(offer?.fileName).toBe("talk.galatsa");
+    expect(await p2.storage.discardChanges(offer!.slot)).toBe("discarded");
+    expect(await p2.storage.list()).toEqual([]);
+    expect([...file.bytes!]).toEqual([...saved]);
   });
 });

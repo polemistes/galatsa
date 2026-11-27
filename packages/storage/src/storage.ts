@@ -10,6 +10,7 @@ import * as Y from "yjs";
 import type { StorageBackend } from "./backend.ts";
 import {
   encodeCheckpoint,
+  encodeCheckpointFile,
   frameCheckpoint,
   loadCheckpoint,
   type CheckpointEncoder,
@@ -36,21 +37,32 @@ import {
   type SessionRecord,
   type SlotInfo,
 } from "./layout.ts";
-import { fileNotices, notice, openProblem, type Notice } from "./notices.ts";
+import {
+  autosaveProblem,
+  fileNotices,
+  notice,
+  openProblem,
+  type Notice,
+} from "./notices.ts";
 import {
   DEFAULT_TIMING,
   StorageSession,
   applyStored,
+  dropPending,
+  openChannel,
   readAsset,
   type AutosaveTiming,
+  type OpenChannel,
   type SessionContext,
+  type SessionStart,
 } from "./session.ts";
 
 export interface StorageOptions {
   backend: StorageBackend;
   /**
    * How running sessions are told from stopped ones. Default: the Web Locks API
-   * where there is one. Null: heartbeats in the session records.
+   * where there is one. Null: heartbeats in the session records only. Sessions
+   * always write heartbeats, which count wherever the locks cannot be asked.
    */
   liveness?: Liveness | null;
   /** A channel between tabs. Default: BroadcastChannel where there is one. Null: none. */
@@ -73,10 +85,11 @@ export interface StoredDocument {
   createdAt: number;
   /** When it last changed, as far as the store knows. */
   changedAt: number;
-  /** The file it was opened from or last saved to. */
+  /** The file it was opened from, last saved to or last downloaded as. */
   fileName: string | null;
+  /** When it was last saved to that file (a download does not count). */
   savedToFileAt: number | null;
-  /** A running session has it open (in this or another tab). */
+  /** A running session has it open (in this or another tab), or it cannot be told. */
   open: boolean;
   /** A session stored changes that are not saved to its file. */
   unsaved: boolean;
@@ -97,13 +110,28 @@ export type OpenResult =
       lastGood: StoredDocument[];
     };
 
+/** What `discardChanges` did. */
+export type DiscardResult =
+  /** The stored copy and its changes are gone; the file is as it was last saved. */
+  | "discarded"
+  /** Nothing: the document was never saved to a file, so discarding would delete it. */
+  | "no-file"
+  /** Nothing: a running session has it open (or that cannot be told). */
+  | "open";
+
 interface Loaded {
   doc: Y.Doc;
   checkpoint: LoadedCheckpoint;
   absorbed: Set<string>;
+  skipped: Set<string>;
   info: SlotInfo;
   notices: Notice[];
   damaged: boolean;
+}
+
+interface Survey {
+  document: StoredDocument;
+  sessions: { id: string; record: SessionRecord | null; alive: boolean }[];
 }
 
 /**
@@ -112,9 +140,14 @@ interface Loaded {
  * - `create` starts a new document, `openFile` opens a file the user chose,
  *   `open` opens a document the store holds.
  * - At start, `recoverable` lists work that sessions left behind when their
- *   program stopped; `open` restores it, `dismiss` stops offering it.
+ *   program stopped; `open` restores it, `dismiss` stops offering it,
+ *   `discardChanges` drops it (only for a document that has a file), and
+ *   `deleteDocument` removes a stored document altogether.
  * - When a file cannot be opened, the result says why and lists the copies the
  *   store kept of a file with that name (`lastGood`).
+ *
+ * Nothing here fails because the store is full or gone: documents open with a
+ * notice saying so, and saving to a file still works.
  */
 export class DocumentStorage {
   readonly backend: StorageBackend;
@@ -136,12 +169,15 @@ export class DocumentStorage {
     };
   }
 
-  /** Starts a new, empty document. */
+  /**
+   * Starts a new, empty document. If the store cannot take it, the session's
+   * status says so, and the store is tried again.
+   */
   async create(init: { title?: string } = {}): Promise<StorageSession> {
     const doc = new Y.Doc();
     initDocument(doc, init.title === undefined ? {} : { title: init.title });
-    const { slot, info } = await this.#newSlot(doc, null, new Map());
-    return this.#start(slot, info, doc, 1, [], new Set(), false, false);
+    const slot = await this.#newSlot(doc, null, new Map());
+    return this.#start(slot.start);
   }
 
   /**
@@ -161,18 +197,11 @@ export class DocumentStorage {
         lastGood: await this.#lastGood(name),
       };
     }
-    const { slot, info } = await this.#newSlot(read.doc, name, read.assets);
-    const session = await this.#start(
-      slot,
-      info,
-      read.doc,
-      1,
-      [],
-      new Set(),
-      false,
-      false,
-    );
-    return { ok: true, session, notices: fileNotices(read.warnings) };
+    const slot = await this.#newSlot(read.doc, name, read.assets);
+    const session = await this.#start(slot.start);
+    const notices = fileNotices(read.warnings);
+    if (session.status.problem) notices.push(session.status.problem);
+    return { ok: true, session, notices };
   }
 
   /** Reads a file the user chose and opens it (see importFile). */
@@ -192,43 +221,55 @@ export class DocumentStorage {
 
   /**
    * Opens a stored document: the newest checkpoint that reads, and every change
-   * journaled since. Restores recovered work, and stops offering it.
+   * journaled since. Restores recovered work, and stops offering it. Works
+   * while the store cannot be written to (the result has a notice about it).
    */
   async open(slot: string): Promise<OpenResult> {
+    // Listen to other tabs before reading, so that no entry stored meanwhile
+    // is missed.
+    const channel = openChannel(this.#ctx.channels, this.backend, slot);
     let loaded: Loaded | Notice;
     try {
       loaded = await this.#load(slot);
     } catch (error) {
+      channel?.channel.close();
       return {
         ok: false,
         problem: notice("storage-unavailable", undefined, error),
         lastGood: [],
       };
     }
-    if (!("doc" in loaded)) return { ok: false, problem: loaded, lastGood: [] };
-    const stopped = await this.#stoppedSessions(slot);
+    if (!("doc" in loaded)) {
+      channel?.channel.close();
+      return { ok: false, problem: loaded, lastGood: [] };
+    }
+    const stopped = await this.#stoppedSessions(slot).catch(() => []);
     const info = loaded.info;
     const unsavedToFile =
       stopped.some((s) => s.record?.unsaved) ||
       (info.fileName !== null &&
         (info.savedToFileAt === null || info.changedAt > info.savedToFileAt));
-    const session = await this.#start(
+    const session = await this.#start({
       slot,
+      doc: loaded.doc,
+      generation: loaded.checkpoint.header.generation,
+      baseIncludes: loaded.checkpoint.header.includes,
+      absorbed: loaded.absorbed,
+      skipped: loaded.skipped,
       info,
-      loaded.doc,
-      loaded.checkpoint.header.generation,
-      loaded.checkpoint.header.includes,
-      loaded.absorbed,
       unsavedToFile,
-      loaded.damaged,
-    );
+      needsCheckpoint: loaded.damaged,
+      channel,
+    });
     if (stopped.length > 0) {
       await this.backend
         .remove(stopped.map((s) => keys.session(slot, s.id)))
         .catch(() => {});
     }
     if (loaded.damaged) await session.checkpoint().catch(() => {});
-    return { ok: true, session, notices: loaded.notices };
+    const notices = [...loaded.notices];
+    if (session.status.problem) notices.push(session.status.problem);
+    return { ok: true, session, notices };
   }
 
   /** Every document the store holds, most recently changed first. */
@@ -239,14 +280,14 @@ export class DocumentStorage {
   /**
    * Documents whose sessions stopped without closing and had changes not saved
    * to a file, most recent first. Records of stopped sessions without such
-   * changes are cleared.
+   * changes are cleared. A session that cannot be told stopped is not offered.
    */
   async recoverable(): Promise<RecoveryOffer[]> {
     const offers: RecoveryOffer[] = [];
     for (const entry of await this.#survey()) {
       const stopped = entry.sessions.filter((s) => !s.alive);
       const unsaved = stopped.filter((s) => s.record?.unsaved);
-      const quiet = stopped.filter((s) => !s.record?.unsaved);
+      const quiet = stopped.filter((s) => s.record && !s.record.unsaved);
       if (quiet.length > 0) {
         await this.backend
           .remove(quiet.map((s) => keys.session(entry.document.slot, s.id)))
@@ -259,28 +300,37 @@ export class DocumentStorage {
     return offers;
   }
 
-  /** Stops offering a document's stopped sessions for recovery. Keeps the document. */
+  /**
+   * Stops offering a document for recovery, for good. The document stays in the
+   * store, with the recovered work, and is listed by `list()`.
+   */
   async dismiss(slot: string): Promise<void> {
     const stopped = await this.#stoppedSessions(slot);
     await this.backend.remove(stopped.map((s) => keys.session(slot, s.id)));
   }
 
   /**
-   * Deletes a stored document and everything kept of it. Refuses (returns false)
-   * while a running session has it open.
+   * Drops the changes a document has that are not in its file: the stored copy
+   * goes, and the program opens the file again. Only for a document that has a
+   * file (`fileName`); for one that was never saved to a file this would delete
+   * the whole presentation, so it does nothing and says "no-file"
+   * (`deleteDocument` is the way, after the user has been told). Does nothing
+   * while a running session has the document open.
    */
-  async discard(slot: string): Promise<boolean> {
-    const all = await this.backend.list(keys.slot(slot));
-    const sessions = groupKeys(all).get(slot)?.sessions ?? [];
-    const records = await Promise.all(
-      sessions.map(async (id) =>
-        decodeSession(await this.backend.read(keys.session(slot, id))),
-      ),
-    );
-    const alive = await this.#alive(sessions, records);
-    if (alive.size > 0) return false;
-    await this.backend.remove(all);
-    return true;
+  async discardChanges(slot: string): Promise<DiscardResult> {
+    const info = decodeInfo(await this.backend.read(keys.info(slot)));
+    if (info.fileName === null || info.savedToFileAt === null) return "no-file";
+    return (await this.#removeSlot(slot)) ? "discarded" : "open";
+  }
+
+  /**
+   * Deletes a stored document and everything kept of it, including every copy
+   * of a presentation that was never saved to a file. Returns false (and
+   * deletes nothing) while a running session has it open, or while that cannot
+   * be told.
+   */
+  async deleteDocument(slot: string): Promise<boolean> {
+    return this.#removeSlot(slot);
   }
 
   /**
@@ -294,7 +344,7 @@ export class DocumentStorage {
     try {
       const assets = new Map<AssetId, Uint8Array>();
       for (const id of assetsToWrite(toSnapshot(loaded.doc))) {
-        const bytes = await readAsset(this.backend, slot, id);
+        const bytes = await readAsset(this.backend, slot, id).catch(() => undefined);
         if (bytes) assets.set(id, bytes);
       }
       return writeGalatsaFile(loaded.doc, (id) => assets.get(id), {
@@ -307,11 +357,16 @@ export class DocumentStorage {
 
   // --- Internals ------------------------------------------------------------
 
+  /**
+   * Writes a new slot: its assets, its description and two checkpoints, so that
+   * a last good copy exists from the start. Never fails because of the store;
+   * whatever could not be written is written later by the session.
+   */
   async #newSlot(
     doc: Y.Doc,
     fileName: string | null,
     assets: ReadonlyMap<AssetId, Uint8Array>,
-  ): Promise<{ slot: string; info: SlotInfo }> {
+  ): Promise<{ start: SessionStart }> {
     trackWork(doc);
     const slot = randomId();
     const now = this.#ctx.scheduler.now();
@@ -324,47 +379,64 @@ export class DocumentStorage {
       fileName,
       savedToFileAt: fileName === null ? null : now,
     };
-    for (const [id, bytes] of assets)
-      await this.backend.create(keys.asset(slot, id), bytes);
-    await this.backend.write(keys.info(slot), encodeJson(info));
-    // The slot exists once its first checkpoint does.
+    let problem: Notice | null = null;
+    const unstored = new Set<AssetId>();
+    for (const [id, bytes] of assets) {
+      try {
+        await this.backend.create(keys.asset(slot, id), bytes);
+      } catch (error) {
+        unstored.add(id);
+        problem ??= autosaveProblem(error);
+      }
+    }
+    await this.backend.write(keys.info(slot), encodeJson(info)).catch(() => {});
+    // The first checkpoints are built here, on this thread: a worker that does
+    // not answer must not keep a document from opening.
     const state = Y.encodeStateAsUpdate(doc);
-    const encoded = await this.#ctx.encoder(state);
-    const header = { generation: 1, base: 0, session: "", includes: [], createdAt: now };
-    await this.backend.create(
-      keys.checkpoint(slot, 1),
-      frameCheckpoint(header, encoded, state),
-    );
-    return { slot, info };
-  }
-
-  async #start(
-    slot: string,
-    info: SlotInfo,
-    doc: Y.Doc,
-    generation: number,
-    baseIncludes: string[],
-    absorbed: Set<string>,
-    unsavedToFile: boolean,
-    needsCheckpoint: boolean,
-  ): Promise<StorageSession> {
-    // Every change must be recorded as work from the first one (ADR 0001,
-    // section 5.5). Loading attached it already; this makes sure.
-    trackWork(doc);
-    const session = new StorageSession(
-      this.#ctx,
-      {
+    const encoded = encodeCheckpointFile(state, this.#ctx.generator);
+    let generation = 0;
+    try {
+      for (const g of [1, 2]) {
+        const header = {
+          generation: g,
+          base: g - 1,
+          session: "",
+          includes: [],
+          createdAt: now,
+        };
+        await this.backend.create(
+          keys.checkpoint(slot, g),
+          frameCheckpoint(header, encoded, state),
+        );
+        generation = g;
+      }
+    } catch (error) {
+      problem ??= autosaveProblem(error);
+    }
+    return {
+      start: {
         slot,
         doc,
         generation,
-        baseIncludes,
-        absorbed,
+        baseIncludes: [],
+        absorbed: new Set(),
         info,
-        unsavedToFile,
-        needsCheckpoint,
+        unsavedToFile: false,
+        needsCheckpoint: generation < 2,
+        assets,
+        unstoredAssets: unstored,
+        problem,
       },
-      randomId(),
-    );
+    };
+  }
+
+  async #start(
+    start: SessionStart & { channel?: OpenChannel | null },
+  ): Promise<StorageSession> {
+    // Every change must be recorded as work from the first one (ADR 0001,
+    // section 5.5). Loading attached it already; this makes sure.
+    trackWork(start.doc);
+    const session = new StorageSession(this.#ctx, start, randomId());
     await session.start();
     return session;
   }
@@ -404,6 +476,7 @@ export class DocumentStorage {
         checkpoint: rebuilt,
         // The journal belongs to the lost Yjs history and cannot be applied.
         absorbed: new Set(grouped.journal),
+        skipped: new Set(),
         info,
         notices,
         damaged: true,
@@ -412,76 +485,84 @@ export class DocumentStorage {
     if (rebuilt) rebuilt.doc.destroy();
     const doc = checkpoint.doc;
     const absorbed = new Set(checkpoint.header.includes);
+    const skipped = new Set<string>();
     const updates: Uint8Array[] = [];
-    let lost = 0;
     for (const key of grouped.journal) {
       if (absorbed.has(key)) continue;
       const bytes = await backend.read(key);
       const frame = bytes ? decodeFrame(bytes, FRAME_KIND.journal) : null;
       if (!frame) {
-        if (bytes) lost++;
+        if (bytes) skipped.add(key);
         continue;
       }
       updates.push(frame.payload);
       absorbed.add(key);
     }
-    lost += applyStored(doc, updates);
+    applyStored(doc, updates);
+    // What builds on a damaged entry cannot be shown, and must not travel
+    // into the next checkpoint.
+    const incomplete = dropPending(doc);
     if (damaged > 0) notices.push(notice("restored-previous-copy"));
-    if (lost > 0) notices.push(notice("changes-lost", { count: lost }));
-    if (doc.store.pendingStructs !== null || doc.store.pendingDs !== null) {
-      notices.push(notice("changes-incomplete"));
-    }
+    if (skipped.size > 0) notices.push(notice("changes-lost", { count: skipped.size }));
+    if (incomplete) notices.push(notice("changes-incomplete"));
     notices.push(...fileNotices(checkpoint.warnings));
     return {
       doc,
       checkpoint,
       absorbed,
+      skipped,
       info,
       notices,
-      damaged: damaged > 0 || lost > 0,
+      damaged: damaged > 0 || skipped.size > 0 || incomplete,
     };
   }
 
+  /**
+   * The sessions among `ids` that are running, or cannot be told stopped. The
+   * locks are asked first; where they cannot answer, heartbeats decide, which
+   * every session writes. A record that cannot be read counts as running.
+   */
   async #alive(
     ids: readonly string[],
     records: readonly (SessionRecord | null)[],
   ): Promise<ReadonlySet<string>> {
-    const asked = this.#ctx.liveness ? await this.#ctx.liveness.alive(ids) : null;
+    let asked: ReadonlySet<string> | null = null;
+    try {
+      asked = this.#ctx.liveness ? await this.#ctx.liveness.alive(ids) : null;
+    } catch {
+      asked = null;
+    }
     if (asked) return asked;
     const now = this.#ctx.scheduler.now();
     const staleAfter = this.#ctx.timing.staleAfter;
     return new Set(
       ids.filter((_id, i) => {
         const record = records[i];
-        return (
-          record !== null && record !== undefined && now - record.heartbeatAt < staleAfter
-        );
+        return !record || now - record.heartbeatAt < staleAfter;
       }),
     );
   }
 
-  async #survey(): Promise<
-    {
-      document: StoredDocument;
-      sessions: { id: string; record: SessionRecord | null; alive: boolean }[];
-    }[]
-  > {
+  async #sessionsOf(
+    slot: string,
+    ids: readonly string[],
+  ): Promise<{ id: string; record: SessionRecord | null; alive: boolean }[]> {
+    const records = await Promise.all(
+      ids.map(async (id) =>
+        decodeSession(await this.backend.read(keys.session(slot, id))),
+      ),
+    );
+    const alive = await this.#alive(ids, records);
+    return ids.map((id, i) => ({ id, record: records[i] ?? null, alive: alive.has(id) }));
+  }
+
+  async #survey(): Promise<Survey[]> {
     const grouped = groupKeys(await this.backend.list(DOC_PREFIX));
-    const out = [];
+    const out: Survey[] = [];
     for (const entry of grouped.values()) {
       if (entry.checkpoints.length === 0) continue;
       const info = decodeInfo(await this.backend.read(keys.info(entry.slot)));
-      const records = await Promise.all(
-        entry.sessions.map(async (id) =>
-          decodeSession(await this.backend.read(keys.session(entry.slot, id))),
-        ),
-      );
-      const alive = await this.#alive(entry.sessions, records);
-      const sessions = entry.sessions.map((id, i) => ({
-        id,
-        record: records[i] ?? null,
-        alive: alive.has(id),
-      }));
+      const sessions = await this.#sessionsOf(entry.slot, entry.sessions);
       let changedAt = info.changedAt;
       for (const s of sessions) {
         if (s.record?.changedAt !== null && s.record?.changedAt !== undefined) {
@@ -509,17 +590,18 @@ export class DocumentStorage {
   async #stoppedSessions(
     slot: string,
   ): Promise<{ id: string; record: SessionRecord | null }[]> {
-    const sessions =
+    const ids =
       groupKeys(await this.backend.list(keys.sessions(slot))).get(slot)?.sessions ?? [];
-    const records = await Promise.all(
-      sessions.map(async (id) =>
-        decodeSession(await this.backend.read(keys.session(slot, id))),
-      ),
-    );
-    const alive = await this.#alive(sessions, records);
-    return sessions
-      .map((id, i) => ({ id, record: records[i] ?? null }))
-      .filter((s) => !alive.has(s.id));
+    return (await this.#sessionsOf(slot, ids)).filter((s) => !s.alive);
+  }
+
+  /** Removes a slot, unless a session has it open or that cannot be told. */
+  async #removeSlot(slot: string): Promise<boolean> {
+    const all = await this.backend.list(keys.slot(slot));
+    const ids = groupKeys(all).get(slot)?.sessions ?? [];
+    if ((await this.#sessionsOf(slot, ids)).some((s) => s.alive)) return false;
+    await this.backend.remove(all);
+    return true;
   }
 
   async #lastGood(name: string | null): Promise<StoredDocument[]> {

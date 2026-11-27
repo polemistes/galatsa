@@ -36,6 +36,8 @@ export type NoticeCode =
   | "autosave-newer-version"
   | "save-failed"
   | "save-verify-failed"
+  | "save-downloaded"
+  | "save-download-failed"
   | "save-too-large"
   | "save-newer-version"
   | "save-no-merge-state";
@@ -75,6 +77,8 @@ const SEVERITY: Record<NoticeCode, Severity> = {
   "autosave-newer-version": "error",
   "save-failed": "error",
   "save-verify-failed": "error",
+  "save-downloaded": "warning",
+  "save-download-failed": "error",
   "save-too-large": "error",
   "save-newer-version": "error",
   "save-no-merge-state": "warning",
@@ -113,14 +117,14 @@ export function openProblem(error: unknown, name?: string): Notice {
 }
 
 /** The notice for a failed save to a file. */
-export function saveProblem(error: unknown, name?: string): Notice {
+export function saveProblem(error: unknown, name?: string, download = false): Notice {
   const values = { name: name ?? "" };
   if (error instanceof FileFormatError) {
     if (error.code === "too-large") return notice("save-too-large", values, error);
     if (error.code === "newer-version")
       return notice("save-newer-version", values, error);
   }
-  return notice("save-failed", values, error);
+  return notice(download ? "save-download-failed" : "save-failed", values, error);
 }
 
 /** The notice for a failed write to the working store. */
