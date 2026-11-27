@@ -66,6 +66,15 @@ export interface SceneQuery {
   placement(id: ElementId): ElementPlacement | null;
   /** Elements drawn in the current view, back to front: candidates for snapping and guides. */
   visible(): readonly ElementId[];
+  /**
+   * Offset from the origin of space `to` to the origin of space `from` (each a
+   * container, or null for the root), as the user sees them now: a point at p
+   * in `from` is at p + offset in `to`. Computed through the two spaces'
+   * lowest common ancestor, so it stays exact far from the root
+   * (docs/adr/0001, section 7.3). With `ToolPointerEvent.local`, it places
+   * points precisely in any container.
+   */
+  offset(from: ElementId | null, to: ElementId | null): Point;
 }
 
 /** The text being edited in place, and its selection. */

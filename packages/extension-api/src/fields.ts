@@ -56,7 +56,7 @@ export interface FieldDefinition<S> {
    */
   get(source: S): Json;
   /**
-   * Whether the field applies to this source (since 1.3). An element type with
+   * Whether the field applies to this source (since 1.4). An element type with
    * several variants (the shape type's kinds) lists every field once and says
    * here which elements each one is for: corner rounding only for kinds with
    * corners. The editor shows a field for a selection only when it applies to

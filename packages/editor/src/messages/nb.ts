@@ -38,4 +38,13 @@ export default {
   "paste.damaged":
     "Innholdet på utklippstavlen kunne ikke limes inn fordi det er skadet eller ufullstendig.",
   "panels.label": "Paneler",
+  "nav.zoomIn": "Zoom inn",
+  "nav.zoomOut": "Zoom ut",
+  "nav.actualSize": "Faktisk størrelse",
+  "nav.viewAll": "Vis alt",
+  "nav.viewSelection": "Vis utvalget",
+  "nav.panLeft": "Flytt utsnittet til venstre",
+  "nav.panRight": "Flytt utsnittet til høyre",
+  "nav.panUp": "Flytt utsnittet opp",
+  "nav.panDown": "Flytt utsnittet ned",
 };

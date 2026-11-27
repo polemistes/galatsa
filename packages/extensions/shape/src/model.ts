@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The data of a shape element and how it is read. The keys and value ranges
-// here are part of the file format (docs/adr/0009-shapes.md, "Data"): change
+// here are part of the file format (docs/adr/0010-shapes.md, "Data"): change
 // them only by adding optional keys whose default means what older data meant.
 //
 // Growth rule. Values are read in two ways. Reading for drawing is lenient

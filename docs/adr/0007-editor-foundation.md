@@ -30,7 +30,7 @@ Tools draw previews (a rubber band, the outline of a shape being drawn) through 
 
 The overlay is in screen space so that its contract does not depend on where the camera is anchored. The editor draws the selection outline from the renderer's screen rectangles (`screenBounds`) directly. A tool still draws in root space, as its pointer events give it; the editor hands it a drawing context that projects root space onto the screen (`projectedContext`), with a projection (`Editor.projection(space)`: screen = point × scale + offset) computed from the offset between that space and the camera's own space, as the renderer computes its own maps, never through root coordinates. So when the camera is anchored in a frame's space for deep zoom, the overlay interface stays as it is, and a tool or the selection can be projected from the frame's space exactly.
 
-**Precision of `ToolPointerEvent.world`.** Pointer events give tools a position in root space (0005 section 5). Under a camera anchored in a frame far from the root and zoomed deep, root coordinates cannot resolve a screen pixel (0001 section 7). The camera controls must decide how tools get precise positions then (a position in the camera's space alongside, say); the overlay already does not depend on it.
+**Precision of `ToolPointerEvent.world`.** Pointer events give tools a position in root space (0005 section 5). Under a camera anchored in a frame far from the root and zoomed deep, root coordinates cannot resolve a screen pixel (0001 section 7). Settled with the camera controls ([0009](0009-camera.md)): pointer events also carry the position in the camera's own space (`local`), and the scene query gives offsets between spaces; the overlay does not depend on it.
 
 ### Editor services
 
@@ -50,8 +50,8 @@ A `ToolController` holds the current tool and gives it a `ToolSession`. A sessio
 
 `mountEditor` turns DOM events into the editor's plain input (`PointerInput`, `KeyInput`), so the core runs without a page and is tested in Node over a context that draws nothing:
 
-- Pointer events cover mouse, pen, touch and trackpad clicks. The first pointer that goes down belongs to the tool until it goes up (with pointer capture); further pointers are ignored for now.
-- Just enough camera to reach things: the middle button drags the canvas, the wheel scrolls it, and the wheel with Ctrl or Cmd, which is also what browsers send for a trackpad pinch, zooms about the pointer within the zoom limits of the document model. The camera controls proper (touch gestures, keyboard, zoom anchored in frames) are later work.
+- Pointer events cover mouse, pen, touch and trackpad clicks. The first pointer that goes down belongs to the tool until it goes up (with pointer capture); a second finger turns a touch into a pinch of the canvas ([0009](0009-camera.md)), and other further pointers are ignored.
+- The camera: the middle button drags the canvas, the wheel scrolls it, and the wheel with Ctrl or Cmd, which is also what browsers send for a trackpad pinch, zooms about the pointer. The camera controls (anchoring in frames, Space with a drag, two fingers, Safari's gesture events, the keyboard) are in [0009](0009-camera.md).
 - Keys go to the editor while the canvas has focus; it takes focus when clicked.
 
 ### The keyboard map
@@ -85,7 +85,7 @@ The user interface around the canvas is Svelte 5, with runes, chosen by the proj
 
 ### The development page
 
-`apps/web` is for now a development page: it starts `EditorApp` with the sketches of the element types (and the basics and the selection tool, which the editor always loads first, so they keep their shortcuts when a sketch claims the same one; the conflict is shown; the selection sketch is left out, [0008](0008-selection.md); the shape sketch is replaced by the shape extension, [0009](0009-shapes.md)). It opens the sample scene: the benchmark scene of `bench/` (2,000 elements in ten clusters) as a document of the examples' element types, imported through the storage layer as a file. The benchmark's images are 2 to 12 megapixels and take half a minute to generate, so each gets a small generated picture of the same proportions instead. The page remembers the stored copy and opens it again; `?fresh` makes a new one, `?scene=empty` starts an empty document, `?lang=nb|en` chooses the language and `?mode=advanced` the mode. `window.galatsaDev` gives tests and the console the running editor. `shapes.html` is a second page, the shape gallery of [0009](0009-shapes.md). The page depends on `@galatsa/bench` for the scene; when the page becomes the installable web app, the sample scene goes behind a development switch.
+`apps/web` is for now a development page: it starts `EditorApp` with the sketches of the element types (and the basics and the selection tool, which the editor always loads first, so they keep their shortcuts when a sketch claims the same one; the conflict is shown; the selection sketch is left out, [0008](0008-selection.md); the shape sketch is replaced by the shape extension, [0010](0010-shapes.md)). It opens the sample scene: the benchmark scene of `bench/` (2,000 elements in ten clusters) as a document of the examples' element types, imported through the storage layer as a file. The benchmark's images are 2 to 12 megapixels and take half a minute to generate, so each gets a small generated picture of the same proportions instead. The page remembers the stored copy and opens it again; `?fresh` makes a new one, `?scene=empty` starts an empty document, `?lang=nb|en` chooses the language and `?mode=advanced` the mode. `window.galatsaDev` gives tests and the console the running editor. `shapes.html` is a second page, the shape gallery of [0010](0010-shapes.md). The page depends on `@galatsa/bench` for the scene; when the page becomes the installable web app, the sample scene goes behind a development switch.
 
 Images are drawn from the storage session's asset bytes, one stored version each (the original), until reduced versions are stored with the document.
 
@@ -98,8 +98,7 @@ Images are drawn from the storage session's asset bytes, one stored version each
 ## Known limitations
 
 - In-place text editing is not built; the text sketch's tool inserts a text box, and asking to edit it does nothing.
-- The camera is the minimum: no touch gestures, no keyboard camera, no anchoring in frames.
-- Only the first pointer is used; multi-touch is later.
+- Only the first pointer is the tool's; a second finger moves the camera ([0009](0009-camera.md)).
 - Field panels are not drawn.
 - The development page's sample scene is regenerated per `?fresh`, and every copy stays in the store until deleted (0006 section 11, item 4).
 - Opening another document (a restored offer) disposes the editor of the one before but does not close its storage session, and a second click on a recovery choice while the first is still running can open the default document twice.

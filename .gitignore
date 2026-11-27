@@ -16,6 +16,7 @@ coverage/
 *.tsbuildinfo
 
 # Tests and tools
+__pycache__/
 playwright-report/
 test-results/
 blob-report/
