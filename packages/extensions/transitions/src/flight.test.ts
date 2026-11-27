@@ -52,8 +52,16 @@ function finite(view: CameraView): boolean {
 /**
  * Samples the path at n + 1 evenly spaced lengths and checks that consecutive
  * views are as far apart in the metric as the lengths say: no jumps, no stalls.
+ * `slack` is an absolute tolerance in metric units, for cameras whose rounding
+ * (the precision budget of the model, 1/64 pixel) is larger than 1e-6 of a step.
  */
-function checkSteps(from: CameraView, to: CameraView, n = 2000, width = W): CameraView[] {
+function checkSteps(
+  from: CameraView,
+  to: CameraView,
+  n = 2000,
+  slack = 1e-12,
+  width = W,
+): CameraView[] {
   const path = flightPath(from, to, width);
   const views: CameraView[] = [];
   for (let i = 0; i <= n; i++) views.push(path.at((path.length * i) / n));
@@ -64,7 +72,7 @@ function checkSteps(from: CameraView, to: CameraView, n = 2000, width = W): Came
     expect(a.zoom).toBeGreaterThan(0);
     const step = distance(a, b, width);
     expect(Math.abs(step - path.length / n), `step ${i}`).toBeLessThan(
-      1e-6 * (path.length / n) + 1e-12,
+      1e-6 * (path.length / n) + slack,
     );
   }
   return views;
@@ -277,18 +285,24 @@ describe("flight path", () => {
         expect(pixels).toBeLessThanOrEqual(((path.length / 3000) * W * 1.05) / RHO);
       }
     }
-    // A wide move between the zoom limits of the model.
+    // A wide move from the smallest zoom of the model to the largest zoom the
+    // precision budget allows a million units from the origin (2^46 / 10^6).
+    // One pixel on screen is about rho / 1000 in the metric, so a slack of
+    // 5e-5 is well within 1/64 pixel.
     checkSteps(
       { space: null, cx: -1e6, cy: 0, zoom: 2 ** -32 },
-      { space: null, cx: 1e6, cy: 1, zoom: 2 ** 32 },
+      { space: null, cx: 1e6, cy: 1, zoom: 2 ** 26 },
       3000,
+      5e-5,
     );
   });
 
   it("stays precise far from the origin of its space", () => {
     const from: CameraView = { space: null, cx: 2 ** 40, cy: 0, zoom: 32 };
     const to: CameraView = { space: null, cx: 2 ** 40 + 100, cy: 50, zoom: 16 };
-    const views = checkSteps(from, to, 1000);
+    // Within the precision budget (2^40 * 32 = 2^45), rounding is up to 1/128
+    // pixel per coordinate.
+    const views = checkSteps(from, to, 1000, 5e-5);
     for (const view of views) {
       expect(view.cx).toBeGreaterThanOrEqual(2 ** 40);
       expect(view.cx).toBeLessThanOrEqual(2 ** 40 + 100);

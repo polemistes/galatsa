@@ -29,15 +29,30 @@ export interface ComfortSettings {
    * the two views, a transition should cross-fade instead of flying.
    */
   readonly maxFlightDistance: number;
+  /**
+   * Above this duration in milliseconds, at normal speed (before
+   * durationScale), a transition should cross-fade instead of flying. It
+   * catches flights that are within both limits above but long because they
+   * combine a large zoom with a long distance; and because it is measured
+   * before durationScale, slowing transitions down does not turn flights into
+   * cross-fades.
+   */
+  readonly maxFlightDuration: number;
   /** Multiplies durations; 1 is normal, above 1 slower. */
   readonly durationScale: number;
 }
 
-/** Calm defaults, used until the user changes them. */
+/**
+ * Calm defaults, used until the user changes them. At the speed of the
+ * built-in flight, a zoom by 64, a pan of 4 screen widths and the duration
+ * limit are each about four seconds of flight. See section 7 of
+ * docs/adr/0005-extension-interface.md.
+ */
 export const DEFAULT_COMFORT: ComfortSettings = {
   reducedMotion: false,
   maxFlightZoomRatio: 64,
-  maxFlightDistance: 8,
+  maxFlightDistance: 4,
+  maxFlightDuration: 4000,
   durationScale: 1,
 };
 
