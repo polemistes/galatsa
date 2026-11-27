@@ -26,12 +26,17 @@ export function paragraphRanges(text: string): ParagraphRange[] {
     out.push({ start, end: nl, terminated: true });
     start = nl + 1;
   }
-  if (start < text.length || out.length === 0) out.push({ start, end: text.length, terminated: false });
+  if (start < text.length || out.length === 0)
+    out.push({ start, end: text.length, terminated: false });
   return out;
 }
 
 /** The paragraphs that a range touches (a caret touches the one it is in). */
-export function paragraphsIn(text: string, index: number, length: number): ParagraphRange[] {
+export function paragraphsIn(
+  text: string,
+  index: number,
+  length: number,
+): ParagraphRange[] {
   const all = paragraphRanges(text);
   if (length <= 0) {
     const p = all.find((r) => r.start <= index && index <= r.end);
@@ -60,11 +65,19 @@ function charRuns(text: string, index: number, length: number): Array<[number, n
 }
 
 /** Whether every character (not "\n") in the range has `key` set to true; false for none. */
-export function allHave(ytext: Y.Text, index: number, length: number, key: string): boolean {
+export function allHave(
+  ytext: Y.Text,
+  index: number,
+  length: number,
+  key: string,
+): boolean {
   let at = 0;
   let any = false;
   const end = index + length;
-  for (const op of ytext.toDelta() as Array<{ insert: unknown; attributes?: Record<string, unknown> }>) {
+  for (const op of ytext.toDelta() as Array<{
+    insert: unknown;
+    attributes?: Record<string, unknown>;
+  }>) {
     const s = typeof op.insert === "string" ? op.insert : "￼";
     for (let i = 0; i < s.length; i++, at++) {
       if (at < index || at >= end || s[i] === "\n") continue;
@@ -82,11 +95,15 @@ export function formatChars(
   length: number,
   attributes: Record<string, unknown>,
 ): void {
-  for (const [at, n] of charRuns(ytext.toString(), index, length)) ytext.format(at, n, attributes);
+  for (const [at, n] of charRuns(ytext.toString(), index, length))
+    ytext.format(at, n, attributes);
 }
 
 /** The word around a caret, or null when the caret is not in or next to a word. */
-export function wordAt(text: string, index: number): { index: number; length: number } | null {
+export function wordAt(
+  text: string,
+  index: number,
+): { index: number; length: number } | null {
   const words = new Intl.Segmenter(undefined, { granularity: "word" });
   for (const s of words.segment(text)) {
     const end = s.index + s.segment.length;
@@ -100,19 +117,30 @@ export function wordAt(text: string, index: number): { index: number; length: nu
 function listsOf(ytext: Y.Text): Map<number, ListKind | null> {
   const out = new Map<number, ListKind | null>();
   let at = 0;
-  for (const op of ytext.toDelta() as Array<{ insert: unknown; attributes?: Record<string, unknown> }>) {
+  for (const op of ytext.toDelta() as Array<{
+    insert: unknown;
+    attributes?: Record<string, unknown>;
+  }>) {
     const s = typeof op.insert === "string" ? op.insert : "￼";
     const list = op.attributes?.["list"];
     for (let i = 0; i < s.length; i++, at++)
-      if (s[i] === "\n") out.set(at, list === "bullet" || list === "ordered" ? list : null);
+      if (s[i] === "\n")
+        out.set(at, list === "bullet" || list === "ordered" ? list : null);
   }
   return out;
 }
 
 /** Whether every paragraph given is a list of `kind`. */
-export function allLists(ytext: Y.Text, paragraphs: readonly ParagraphRange[], kind: ListKind): boolean {
+export function allLists(
+  ytext: Y.Text,
+  paragraphs: readonly ParagraphRange[],
+  kind: ListKind,
+): boolean {
   const lists = listsOf(ytext);
-  return paragraphs.length > 0 && paragraphs.every((p) => p.terminated && lists.get(p.end) === kind);
+  return (
+    paragraphs.length > 0 &&
+    paragraphs.every((p) => p.terminated && lists.get(p.end) === kind)
+  );
 }
 
 /**

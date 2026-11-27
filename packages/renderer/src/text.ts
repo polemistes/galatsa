@@ -153,7 +153,10 @@ export function plainText(content: TextContent): string {
 /** Line height of a style, in world units. */
 export function lineHeightOf(style: TextStyle): number {
   const k = style.lineHeight;
-  return style.fontSize * (k !== undefined && Number.isFinite(k) && k > 0 ? k : DEFAULT_LINE_HEIGHT);
+  return (
+    style.fontSize *
+    (k !== undefined && Number.isFinite(k) && k > 0 ? k : DEFAULT_LINE_HEIGHT)
+  );
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -285,7 +288,15 @@ export function layoutText(
             text: last.text + piece.text,
             width: last.width + pw,
           };
-        else fragments.push({ text: piece.text, x, width: pw, prefix: piece.prefix, family, color: piece.color });
+        else
+          fragments.push({
+            text: piece.text,
+            x,
+            width: pw,
+            prefix: piece.prefix,
+            family,
+            color: piece.color,
+          });
         x += pw;
       }
       const top = lines.length * lh;

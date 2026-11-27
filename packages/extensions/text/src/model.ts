@@ -59,7 +59,9 @@ export function isTextColor(value: unknown): value is string {
 }
 
 export function isFontSize(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= MAX_SIZE;
+  return (
+    typeof value === "number" && Number.isFinite(value) && value > 0 && value <= MAX_SIZE
+  );
 }
 
 function isText(value: unknown): value is YTextValue {
@@ -78,7 +80,8 @@ function own(data: ElementData, key: string): DataValue | undefined {
 /** Reads a text box's data; total, as an element type's reader must be. */
 export function readText(data: ElementData, report: DataReport): TextModel {
   const text = own(data, "text");
-  if (text !== undefined && !isText(text)) report("text", "must be shared text, read as empty");
+  if (text !== undefined && !isText(text))
+    report("text", "must be shared text, read as empty");
   const family = own(data, "fontFamily");
   if (family !== undefined && !(typeof family === "string" && NAME_PATTERN.test(family)))
     report("fontFamily", "must be a family name, read as sans");
@@ -86,7 +89,8 @@ export function readText(data: ElementData, report: DataReport): TextModel {
   if (size !== undefined && !isFontSize(size))
     report("fontSize", `must be a number above 0, read as ${DEFAULT_SIZE}`);
   const color = own(data, "color");
-  if (color !== undefined && !isTextColor(color)) report("color", "must be #rrggbb or #rrggbbaa");
+  if (color !== undefined && !isTextColor(color))
+    report("color", "must be #rrggbb or #rrggbbaa");
   const align = own(data, "align");
   if (align !== undefined && !(typeof align === "string" && NAME_PATTERN.test(align)))
     report("align", "must be an alignment, read as left");
@@ -101,7 +105,9 @@ export function readText(data: ElementData, report: DataReport): TextModel {
 
 /** The alignment drawn: an unknown one as left. */
 export function drawnAlign(model: TextModel): Align {
-  return (ALIGNS as readonly string[]).includes(model.align) ? (model.align as Align) : "left";
+  return (ALIGNS as readonly string[]).includes(model.align)
+    ? (model.align as Align)
+    : "left";
 }
 
 /** Whether a value is one this version writes for a style key. */
@@ -132,7 +138,10 @@ export function newTextData(options: {
 }): ElementData {
   const content = (options.text ?? "").replace(/\r\n?/g, "\n");
   return {
-    text: { $y: "text", delta: [{ insert: content.endsWith("\n") ? content : `${content}\n` }] },
+    text: {
+      $y: "text",
+      delta: [{ insert: content.endsWith("\n") ? content : `${content}\n` }],
+    },
     fontFamily: options.fontFamily ?? "sans",
     fontSize: options.fontSize ?? DEFAULT_SIZE,
     color: (options.color ?? DEFAULT_COLOR).toLowerCase(),

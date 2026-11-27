@@ -13,7 +13,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./fonts.css": "./src/fonts.css"
+    "./fonts.css": {
+      "@galatsa/source": "./src/fonts.css",
+      "default": "./src/fonts.css"
+    }
   },
   "sideEffects": [
     "**/*.css"

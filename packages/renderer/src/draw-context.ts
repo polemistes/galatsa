@@ -37,7 +37,10 @@ import {
 import { intersection, localBoundsOf, translate, type Matrix } from "./transform.ts";
 
 /** The last stretch of each fragment drawn (CanvasDrawContext.#fit). */
-const fits = new WeakMap<LayoutFragment, { readonly px: number; readonly ratio: number }>();
+const fits = new WeakMap<
+  LayoutFragment,
+  { readonly px: number; readonly ratio: number }
+>();
 
 /** Elements smaller than this many device pixels get detail "box". */
 export const BOX_BELOW_PX = 4;
@@ -231,7 +234,13 @@ export class CanvasDrawContext implements DrawContext {
   layoutText(content: TextContent, style: TextStyle, width: number): TextLayout {
     const env = this.#env;
     if (!(style.fontSize > 0) || !Number.isFinite(style.fontSize))
-      return new RichTextLayout({ lines: [], width, height: 0, fontSize: 0, color: style.color });
+      return new RichTextLayout({
+        lines: [],
+        width,
+        height: 0,
+        fontSize: 0,
+        color: style.color,
+      });
     return env.layouts.get(content, style, width, () =>
       env.textEngine
         ? env.textEngine.layout(content, style, width)
@@ -297,7 +306,9 @@ export class CanvasDrawContext implements DrawContext {
   #fit(f: LayoutFragment, drawPx: number, s: number, k: number): number {
     const known = fits.get(f);
     if (known !== undefined && known.px === drawPx) return known.ratio;
-    const ctx = this.#env.state.ctx as Partial<{ measureText(t: string): { width: number } }>;
+    const ctx = this.#env.state.ctx as Partial<{
+      measureText(t: string): { width: number };
+    }>;
     let ratio = 1;
     if (typeof ctx.measureText === "function" && f.width > 0) {
       // measureText is at drawPx (the font just set); the matrix scales it by k.
@@ -335,7 +346,12 @@ export class CanvasDrawContext implements DrawContext {
       state.setAlpha(alpha * 0.35);
       for (const line of layout.lines)
         if (line.width > 0)
-          ctx.fillRect(line.x, line.top + line.height * 0.3, line.width, line.height * 0.4);
+          ctx.fillRect(
+            line.x,
+            line.top + line.height * 0.3,
+            line.width,
+            line.height * 0.4,
+          );
     }
     state.setAlpha(alpha);
   }

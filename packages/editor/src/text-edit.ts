@@ -22,8 +22,17 @@
 //   deleted.
 
 import type { ElementId, LiveResolver } from "@galatsa/core";
-import { dataMap, edit, resizeElement, type DocumentUndoManager } from "@galatsa/core/ydoc";
-import type { CommandOutcome, EditorHost, TextEditTarget } from "@galatsa/extension-api/editing";
+import {
+  dataMap,
+  edit,
+  resizeElement,
+  type DocumentUndoManager,
+} from "@galatsa/core/ydoc";
+import type {
+  CommandOutcome,
+  EditorHost,
+  TextEditTarget,
+} from "@galatsa/extension-api/editing";
 import type { ContributionId, Shortcut } from "@galatsa/extension-api";
 import { BASICS } from "@galatsa/extension-basics";
 import {
@@ -42,7 +51,10 @@ import type { EditorScene } from "./scene-source.ts";
 export const TEXT_ORIGIN = "galatsa:text-binding";
 
 /** Starts an editing element (the renderer's beginTextEdit, or a test's stand-in). */
-export type TextSessionFactory = (id: ElementId, options: TextEditOptions) => TextEditSession;
+export type TextSessionFactory = (
+  id: ElementId,
+  options: TextEditOptions,
+) => TextEditSession;
 
 type Attributes = Record<string, unknown>;
 
@@ -52,7 +64,10 @@ interface Op {
 }
 
 /** The attributes of each character of a Y.Text. */
-function attributesAt(ytext: Y.Text): { text: string; attrs: (Attributes | undefined)[] } {
+function attributesAt(ytext: Y.Text): {
+  text: string;
+  attrs: (Attributes | undefined)[];
+} {
   let text = "";
   const attrs: (Attributes | undefined)[] = [];
   for (const op of ytext.toDelta() as Op[]) {
@@ -72,7 +87,8 @@ function charAttributes(attrs: Attributes | undefined): Attributes {
 
 function paragraphAttributes(attrs: Attributes | undefined): Attributes {
   const out: Attributes = {};
-  for (const key of PARAGRAPH_ATTRIBUTES) if (attrs?.[key] !== undefined) out[key] = attrs[key];
+  for (const key of PARAGRAPH_ATTRIBUTES)
+    if (attrs?.[key] !== undefined) out[key] = attrs[key];
   return out;
 }
 
@@ -114,8 +130,12 @@ export function applyTextEdit(ytext: Y.Text, change: TextEdit): number {
   if (change.text === "") return index;
   // Formatting after the deletion: the character before, in the paragraph.
   const after = attributesAt(ytext);
-  const before = index > 0 && after.text[index - 1] !== "\n" ? after.attrs[index - 1] : undefined;
-  const next = after.text[index] !== undefined && after.text[index] !== "\n" ? after.attrs[index] : undefined;
+  const before =
+    index > 0 && after.text[index - 1] !== "\n" ? after.attrs[index - 1] : undefined;
+  const next =
+    after.text[index] !== undefined && after.text[index] !== "\n"
+      ? after.attrs[index]
+      : undefined;
   const chars = charAttributes(before ?? next);
   const end = after.text.indexOf("\n", index);
   const paragraph = paragraphAttributes(end < 0 ? undefined : after.attrs[end]);
@@ -178,7 +198,9 @@ export function mapSelection(
 }
 
 /** Where a change starts and ends: the caret after an undo or redo. */
-function changeEnd(delta: ReadonlyArray<{ retain?: number; insert?: unknown; delete?: number }>): number {
+function changeEnd(
+  delta: ReadonlyArray<{ retain?: number; insert?: unknown; delete?: number }>,
+): number {
   let at = 0;
   let end = 0;
   for (const op of delta) {
@@ -270,7 +292,9 @@ export class TextEditController {
   }
 
   /** Where editing would happen for an element, or null if it cannot be edited in place. */
-  targetOf(id: ElementId): { target: TextEditTarget; extension: string; ytext: Y.Text } | null {
+  targetOf(
+    id: ElementId,
+  ): { target: TextEditTarget; extension: string; ytext: Y.Text } | null {
     const host = this.#host.host;
     const record = this.#host.scene.element(id);
     const live = this.#host.live;
@@ -357,7 +381,10 @@ export class TextEditController {
       extension,
       target,
       observer,
-      began: { steps: undo.undoStack.length, top: undo.undoStack[undo.undoStack.length - 1] },
+      began: {
+        steps: undo.undoStack.length,
+        top: undo.undoStack[undo.undoStack.length - 1],
+      },
       fresh: options.fresh ?? null,
       caret: null,
     };
@@ -418,7 +445,9 @@ export class TextEditController {
   documentChanged(ids: ReadonlySet<ElementId> | readonly ElementId[]): void {
     const active = this.#active;
     if (active === null) return;
-    const has = Array.isArray(ids) ? ids.includes(active.id) : (ids as ReadonlySet<ElementId>).has(active.id);
+    const has = Array.isArray(ids)
+      ? ids.includes(active.id)
+      : (ids as ReadonlySet<ElementId>).has(active.id);
     if (!has) return;
     const found = this.targetOf(active.id);
     if (found === null || found.ytext !== active.ytext) {

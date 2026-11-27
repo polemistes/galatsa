@@ -371,6 +371,9 @@ importers:
       '@galatsa/extension-examples':
         specifier: workspace:*
         version: link:../extensions/examples
+      '@galatsa/extension-text':
+        specifier: workspace:*
+        version: link:../extensions/text
       svelte-check:
         specifier: 4.7.8
         version: 4.7.8(picomatch@4.0.7)(svelte@5.57.3(@typescript-eslint/types@8.72.2))(typescript@6.0.3)

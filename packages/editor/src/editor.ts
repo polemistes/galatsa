@@ -212,7 +212,8 @@ export class Editor {
     readonly top: unknown;
   } | null = null;
   /** The last press of the tool's pointer, for double clicks. */
-  #lastPress: { readonly t: number; readonly x: number; readonly y: number } | null = null;
+  #lastPress: { readonly t: number; readonly x: number; readonly y: number } | null =
+    null;
   /** A press that started text editing: its moves and release are not the tool's. */
   #swallow = false;
 
@@ -751,7 +752,9 @@ export class Editor {
     this.#lastPress = { t: now, x: e.x, y: e.y };
     if (last === null || now - last.t > DOUBLE_CLICK_MS) return false;
     if (Math.hypot(e.x - last.x, e.y - last.y) > DOUBLE_CLICK_PX) return false;
-    const hit = this.renderer.hitTest(e.x, e.y, { accept: (id) => !this.live.isLocked(id) });
+    const hit = this.renderer.hitTest(e.x, e.y, {
+      accept: (id) => !this.live.isLocked(id),
+    });
     if (hit === null || !this.textEdit.canEdit(hit)) return false;
     this.#lastPress = null;
     if (!this.editText(hit, { x: e.x, y: e.y })) return false;

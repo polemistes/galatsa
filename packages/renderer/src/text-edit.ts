@@ -119,7 +119,8 @@ export function diffText(before: string, after: string): TextEdit | null {
   let end = 0;
   while (
     end < max - start &&
-    before.charCodeAt(before.length - 1 - end) === after.charCodeAt(after.length - 1 - end)
+    before.charCodeAt(before.length - 1 - end) ===
+      after.charCodeAt(after.length - 1 - end)
   )
     end++;
   return {
@@ -166,7 +167,11 @@ function graphemeStep(text: string, index: number, forward: boolean): number {
 function wordStep(text: string, index: number, forward: boolean): number {
   const bounds: Array<{ start: number; end: number; word: boolean }> = [];
   for (const s of words.segment(text))
-    bounds.push({ start: s.index, end: s.index + s.segment.length, word: s.isWordLike === true });
+    bounds.push({
+      start: s.index,
+      end: s.index + s.segment.length,
+      word: s.isWordLike === true,
+    });
   if (forward) {
     let seen = false;
     for (const b of bounds) {
@@ -379,7 +384,10 @@ export class DomTextEditSession implements TextEditSession {
       const length = (block.textContent ?? "").length;
       if (index <= at + length || b === blocks.length - 1) {
         let rest = Math.max(0, Math.min(length, index - at));
-        const walker = this.element.ownerDocument.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+        const walker = this.element.ownerDocument.createTreeWalker(
+          block,
+          NodeFilter.SHOW_TEXT,
+        );
         let last: Text | null = null;
         for (let t = walker.nextNode(); t !== null; t = walker.nextNode()) {
           const text = t as Text;
@@ -423,7 +431,10 @@ export class DomTextEditSession implements TextEditSession {
   /** Puts the caret at a point of the drawing area; false if the browser cannot tell. */
   #caretFromPoint(x: number, y: number): boolean {
     const doc = this.element.ownerDocument as Document & {
-      caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null;
+      caretPositionFromPoint?(
+        x: number,
+        y: number,
+      ): { offsetNode: Node; offset: number } | null;
       caretRangeFromPoint?(x: number, y: number): Range | null;
     };
     const rect = this.#container.getBoundingClientRect();
@@ -453,7 +464,9 @@ export class DomTextEditSession implements TextEditSession {
     listener: (event: HTMLElementEventMap[K]) => void,
   ): void {
     this.element.addEventListener(type, listener as EventListener);
-    this.#off.push(() => this.element.removeEventListener(type, listener as EventListener));
+    this.#off.push(() =>
+      this.element.removeEventListener(type, listener as EventListener),
+    );
   }
 
   #edit(edit: TextEdit): void {
@@ -473,7 +486,8 @@ export class DomTextEditSession implements TextEditSession {
     if (r !== undefined) {
       const a = this.indexOf(r.startContainer, r.startOffset);
       const b = this.indexOf(r.endContainer, r.endOffset);
-      if (a !== null && b !== null) return { index: Math.min(a, b), length: Math.abs(b - a) };
+      if (a !== null && b !== null)
+        return { index: Math.min(a, b), length: Math.abs(b - a) };
     }
     return this.#current();
   }
@@ -502,7 +516,10 @@ export class DomTextEditSession implements TextEditSession {
   #clampDeletion(range: TextSelection): TextSelection {
     const max = this.#maxIndex();
     const index = Math.min(range.index, max);
-    return { index, length: Math.max(0, Math.min(range.index + range.length, max) - index) };
+    return {
+      index,
+      length: Math.max(0, Math.min(range.index + range.length, max) - index),
+    };
   }
 
   #listen(): void {

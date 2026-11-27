@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// i18n-ignore-file: styles and element structure for laying text out; no text users read.
 
 // The browser's text layout (docs/adr/0011-text.md): rich text is laid out in
 // a hidden element at REFERENCE_SIZE, and the lines, their baselines and where
@@ -151,7 +152,8 @@ export function ensureEditStyles(doc: Document): void {
 /** The fonts a text needs, as CSS font strings at the reference size. */
 export function fontsOf(rich: RichText, style: TextStyle, family: string): string[] {
   const prefixes = new Set<string>([fontPrefix(style)]);
-  for (const p of rich.paragraphs) for (const run of p.runs) prefixes.add(fontPrefix(style, run));
+  for (const p of rich.paragraphs)
+    for (const run of p.runs) prefixes.add(fontPrefix(style, run));
   return [...prefixes].map((prefix) => `${prefix}${REFERENCE_SIZE}px ${family}`);
 }
 
@@ -175,7 +177,13 @@ function clustersOf(block: HTMLElement, paragraph: Paragraph): Cluster[] {
     const node = spans[r]?.firstChild;
     if (!(node instanceof Text)) return;
     for (const { segment, index } of graphemes.segment(run.text))
-      out.push({ node, start: index, end: index + segment.length, run: r, text: segment });
+      out.push({
+        node,
+        start: index,
+        end: index + segment.length,
+        run: r,
+        text: segment,
+      });
   });
   return out;
 }
@@ -217,7 +225,10 @@ export class DomTextEngine {
     const family = cssFamily(this.#families, style.fontFamily);
     let all = "";
     for (const p of rich.paragraphs) all += paragraphText(p);
-    const ready = this.#fonts.ready(fontsOf(rich, style, family), all.slice(0, 4096) || " ");
+    const ready = this.#fonts.ready(
+      fontsOf(rich, style, family),
+      all.slice(0, 4096) || " ",
+    );
     const root = this.#element();
     styleTextRoot(root, style, width, this.#families);
     fillTextRoot(root, rich, style, true);
@@ -236,7 +247,8 @@ export class DomTextEngine {
       const block = blocks[p]!;
       const box = block.getBoundingClientRect();
       const probe = block.querySelector<HTMLElement>("[data-probe]");
-      const baseline0 = (probe?.getBoundingClientRect().bottom ?? box.top + lh * 0.8) - origin.top;
+      const baseline0 =
+        (probe?.getBoundingClientRect().bottom ?? box.top + lh * 0.8) - origin.top;
       const clusters = clustersOf(block, paragraph);
       // Line starts, by binary search on the clusters' tops.
       const tops: number[] = [];

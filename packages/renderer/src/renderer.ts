@@ -13,12 +13,7 @@ import { ImageCache, type ImageCacheOptions, type ImageSource } from "./images.t
 import { RecordedPath, paintPath } from "./path.ts";
 import type { SceneAssets, SceneSource } from "./scene.ts";
 import { SceneTree, type Container, type SceneNode } from "./scene-tree.ts";
-import {
-  bundledFaces,
-  documentFontWaiter,
-  NO_WAIT,
-  type FontWaiter,
-} from "./fonts.ts";
+import { bundledFaces, documentFontWaiter, NO_WAIT, type FontWaiter } from "./fonts.ts";
 import {
   canvasMeasurer,
   DEFAULT_FAMILIES,
@@ -725,7 +720,8 @@ export class CanvasRenderer {
     const edit = this.#edit;
     if (edit === null || edit.ended) return;
     const node = this.#tree?.nodes.get(edit.id as ElementId);
-    const map = node && node.kind === "element" && !node.gone ? this.#map(node.parent) : null;
+    const map =
+      node && node.kind === "element" && !node.gone ? this.#map(node.parent) : null;
     if (!node || !map) {
       edit.place(null, this.#viewport.devicePixelRatio);
       return;

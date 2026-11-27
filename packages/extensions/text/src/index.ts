@@ -144,13 +144,18 @@ export const textEditing = defineElementEditing(textView, {
 });
 
 /** True if every id is a text box whose content may be edited. */
-function allEditableText(ctx: CommandContext, ids: readonly unknown[]): ids is ElementId[] {
+function allEditableText(
+  ctx: CommandContext,
+  ids: readonly unknown[],
+): ids is ElementId[] {
   return (
     ids.length > 0 &&
     ids.every((id) => {
       if (typeof id !== "string") return false;
       try {
-        return elementFacts(ctx, id).type === TEXT_TYPE && capabilitiesOf(ctx, id).editContent;
+        return (
+          elementFacts(ctx, id).type === TEXT_TYPE && capabilitiesOf(ctx, id).editContent
+        );
       } catch {
         return false;
       }
@@ -222,12 +227,15 @@ function charToggle(name: "bold" | "italic", shortcut: string) {
     shortcuts: [shortcut],
     quick: true,
     enabled: (ctx, args) =>
-      targets(ctx, args, true).some((t) => /[^\n]/.test(t.text.toString().slice(t.index, t.index + t.length))),
+      targets(ctx, args, true).some((t) =>
+        /[^\n]/.test(t.text.toString().slice(t.index, t.index + t.length)),
+      ),
     execute(ctx, args) {
       const list = targets(ctx, args, true);
       const on = !list.every((t) => allHave(t.text, t.index, t.length, name));
       edit(ctx.doc, () => {
-        for (const t of list) formatChars(t.text, t.index, t.length, { [name]: on ? true : null });
+        for (const t of list)
+          formatChars(t.text, t.index, t.length, { [name]: on ? true : null });
       });
     },
   });
@@ -247,10 +255,14 @@ function listToggle(name: "bullets" | "numbers", kind: ListKind, shortcut: strin
     quick: true,
     enabled: (ctx, args) => targets(ctx, args, false).length > 0,
     execute(ctx, args) {
-      const list = targets(ctx, args, false).map((t) => ({ t, paragraphs: paragraphsOf(t) }));
+      const list = targets(ctx, args, false).map((t) => ({
+        t,
+        paragraphs: paragraphsOf(t),
+      }));
       const off = list.every(({ t, paragraphs }) => allLists(t.text, paragraphs, kind));
       edit(ctx.doc, () => {
-        for (const { t, paragraphs } of list) setLists(t.text, paragraphs, off ? null : kind);
+        for (const { t, paragraphs } of list)
+          setLists(t.text, paragraphs, off ? null : kind);
       });
     },
   });
@@ -273,14 +285,17 @@ const setStyle = defineCommand<unknown, void>({
   enabled(ctx, args) {
     const change = readFieldChange(args);
     if (change === undefined || !STYLE_KEYS.includes(change.key)) return false;
-    if (!isStyleValue(change.key, change.value) || !allEditableText(ctx, change.ids)) return false;
+    if (!isStyleValue(change.key, change.value) || !allEditableText(ctx, change.ids))
+      return false;
     // A change that changes nothing is not offered.
-    const value = change.key === "color" ? String(change.value).toLowerCase() : change.value;
+    const value =
+      change.key === "color" ? String(change.value).toLowerCase() : change.value;
     return change.ids.some((id) => dataMap(ctx.doc, id).get(change.key) !== value);
   },
   execute(ctx, args) {
     const change = readFieldChange(args)!;
-    const value = change.key === "color" ? String(change.value).toLowerCase() : change.value;
+    const value =
+      change.key === "color" ? String(change.value).toLowerCase() : change.value;
     for (const id of change.ids)
       if (dataMap(ctx.doc, id).get(change.key) !== value)
         updateElementData(ctx, id, { [change.key]: value });
@@ -305,13 +320,23 @@ function readInsert(args: unknown): InsertTextArgs | null {
   if (args === undefined) return {};
   if (args === null || typeof args !== "object") return null;
   const a = args as Record<string, unknown>;
-  const finite = (v: unknown): boolean => v === undefined || (typeof v === "number" && Number.isFinite(v));
+  const finite = (v: unknown): boolean =>
+    v === undefined || (typeof v === "number" && Number.isFinite(v));
   if (!finite(a["x"]) || !finite(a["y"])) return null;
-  if (a["w"] !== undefined && !(typeof a["w"] === "number" && Number.isFinite(a["w"]) && a["w"] > 0)) return null;
+  if (
+    a["w"] !== undefined &&
+    !(typeof a["w"] === "number" && Number.isFinite(a["w"]) && a["w"] > 0)
+  )
+    return null;
   if (a["text"] !== undefined && typeof a["text"] !== "string") return null;
   for (const key of STYLE_KEYS)
     if (a[key] !== undefined && !isStyleValue(key, a[key])) return null;
-  if (a["parent"] !== undefined && a["parent"] !== null && typeof a["parent"] !== "string") return null;
+  if (
+    a["parent"] !== undefined &&
+    a["parent"] !== null &&
+    typeof a["parent"] !== "string"
+  )
+    return null;
   return a as InsertTextArgs;
 }
 

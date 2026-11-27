@@ -69,7 +69,8 @@ function runStyle(attributes: Attributes | undefined): Omit<TextRun, "text"> {
   return {
     bold: attributes?.["bold"] === true,
     italic: attributes?.["italic"] === true,
-    color: typeof color === "string" && color.length > 0 && color.length <= 64 ? color : null,
+    color:
+      typeof color === "string" && color.length > 0 && color.length <= 64 ? color : null,
   };
 }
 
@@ -138,7 +139,11 @@ export function parseRichText(content: TextContent): RichText {
       at += part.length;
     });
   }
-  if (paragraphs.length === 0 || at > start || !paragraphs[paragraphs.length - 1]!.terminated)
+  if (
+    paragraphs.length === 0 ||
+    at > start ||
+    !paragraphs[paragraphs.length - 1]!.terminated
+  )
     end(false, null);
   return { paragraphs, length: at };
 }
