@@ -69,67 +69,96 @@ export async function indexedDbBackend(
   if (!factory) throw new StorageError("unavailable", "IndexedDB is not available");
   const durability = options.durability ?? "strict";
 
-  let db: IDBDatabase;
-  try {
-    const open = factory.open(name, 1);
-    open.onupgradeneeded = () => {
-      if (!open.result.objectStoreNames.contains(STORE))
-        open.result.createObjectStore(STORE);
+  const connect = async (): Promise<IDBDatabase> => {
+    let opened: IDBDatabase;
+    try {
+      // No version: a database that another program upgraded still opens.
+      const open = factory.open(name);
+      open.onupgradeneeded = () => {
+        if (!open.result.objectStoreNames.contains(STORE))
+          open.result.createObjectStore(STORE);
+      };
+      opened = await new Promise<IDBDatabase>((resolve, reject) => {
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
+        open.onblocked = () =>
+          reject(new StorageError("unavailable", "IndexedDB is blocked by another tab"));
+      });
+    } catch (error) {
+      throw new StorageError("unavailable", "IndexedDB could not be opened", {
+        cause: error,
+      });
+    }
+    // A newer version of the database elsewhere: let it upgrade. The browser
+    // may also close the connection itself (site data cleared). Either way the
+    // next operation opens a new connection.
+    opened.onversionchange = () => {
+      opened.close();
+      if (db === opened) db = null;
     };
-    db = await new Promise<IDBDatabase>((resolve, reject) => {
-      open.onsuccess = () => resolve(open.result);
-      open.onerror = () => reject(open.error);
-      open.onblocked = () =>
-        reject(new StorageError("unavailable", "IndexedDB is blocked by another tab"));
-    });
-  } catch (error) {
-    throw new StorageError("unavailable", "IndexedDB could not be opened", {
-      cause: error,
-    });
-  }
-  // A newer version of the database elsewhere: let it upgrade.
-  db.onversionchange = () => db.close();
+    opened.onclose = () => {
+      if (db === opened) db = null;
+    };
+    return opened;
+  };
+  let db: IDBDatabase | null = await connect();
+  let closed = false;
 
-  const tx = (mode: IDBTransactionMode) =>
-    mode === "readwrite"
-      ? db.transaction(STORE, mode, { durability })
-      : db.transaction(STORE, mode);
+  /**
+   * Runs one transaction, on a new connection if the old one was closed. A
+   * transaction that could not start or was aborted wrote nothing, so it is
+   * tried once more on a fresh connection.
+   */
+  const run = async <T>(
+    what: string,
+    mode: IDBTransactionMode,
+    body: (t: IDBTransaction) => Promise<T>,
+  ): Promise<T> => {
+    if (closed) throw new StorageError("unavailable", "The backend was closed");
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        db ??= await connect();
+        const t =
+          mode === "readwrite"
+            ? db.transaction(STORE, mode, { durability })
+            : db.transaction(STORE, mode);
+        return await body(t);
+      } catch (error) {
+        lastError = error;
+        const errorName = (error as { name?: unknown } | null)?.name;
+        if (errorName !== "InvalidStateError" && errorName !== "AbortError") break;
+        db = null;
+      }
+    }
+    throw wrap(lastError, what);
+  };
 
   return {
     name: `indexeddb:${name}`,
     async read(key) {
       checkKey(key);
-      try {
-        const t = tx("readonly");
-        return toBytes(await request(t.objectStore(STORE).get(key)));
-      } catch (error) {
-        throw wrap(error, "read");
-      }
+      return run("read", "readonly", async (t) =>
+        toBytes(await request(t.objectStore(STORE).get(key))),
+      );
     },
     async list(prefix) {
-      try {
-        const t = tx("readonly");
+      return run("list", "readonly", async (t) => {
         const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`, false, true);
         const keys = await request(t.objectStore(STORE).getAllKeys(range));
         return keys.filter((key): key is string => typeof key === "string");
-      } catch (error) {
-        throw wrap(error, "list");
-      }
+      });
     },
     async write(key, bytes) {
       checkKey(key);
-      try {
-        const t = tx("readwrite");
+      await run("write", "readwrite", async (t) => {
         t.objectStore(STORE).put(bytes.slice(), key);
         await done(t);
-      } catch (error) {
-        throw wrap(error, "write");
-      }
+      });
     },
     async create(key, bytes) {
       checkKey(key);
-      try {
-        const t = tx("readwrite");
+      return run("create", "readwrite", async (t) => {
         const store = t.objectStore(STORE);
         let created = false;
         // Checking and adding in one transaction is atomic.
@@ -142,24 +171,21 @@ export async function indexedDbBackend(
         };
         await done(t);
         return created;
-      } catch (error) {
-        throw wrap(error, "create");
-      }
+      });
     },
     async remove(keys) {
       for (const key of keys) checkKey(key);
       if (keys.length === 0) return;
-      try {
-        const t = tx("readwrite");
+      await run("remove", "readwrite", async (t) => {
         const store = t.objectStore(STORE);
         for (const key of keys) store.delete(key);
         await done(t);
-      } catch (error) {
-        throw wrap(error, "remove");
-      }
+      });
     },
     close() {
-      db.close();
+      closed = true;
+      db?.close();
+      db = null;
     },
   };
 }

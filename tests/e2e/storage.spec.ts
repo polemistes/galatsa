@@ -56,6 +56,7 @@ test.describe("storage layer", () => {
     test.info().annotations.push({ type: "browser", description: features.userAgent });
     expect(features.indexedDB).toBe(true);
     expect(await call(page, "contract")).toBe(true);
+    expect(await call(page, "reconnect")).toBe(true);
   });
 
   test("a stopped page's work is offered and restored at the next start", async ({

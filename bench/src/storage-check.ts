@@ -89,6 +89,32 @@ const api = {
     return true;
   },
 
+  /** The browser closes the connection (a newer version elsewhere): the backend opens a new one. */
+  async reconnect() {
+    const name = "galatsa-storage-reconnect";
+    const b = await indexedDbBackend({ name });
+    try {
+      await b.write("k", new Uint8Array([1, 2, 3]));
+      await new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open(name, 2);
+        request.onsuccess = () => {
+          request.result.close();
+          resolve();
+        };
+        request.onerror = () => reject(request.error);
+      });
+      const back = await b.read("k");
+      if (!back || !same(back, new Uint8Array([1, 2, 3]))) {
+        throw new Error("No reconnection after the connection was closed");
+      }
+      await b.write("k2", new Uint8Array([4]));
+    } finally {
+      b.close?.();
+      await deleteDatabase(name);
+    }
+    return true;
+  },
+
   async contract() {
     const name = "galatsa-storage-contract";
     const b = await indexedDbBackend({ name });
@@ -269,6 +295,7 @@ async function auto(mode: string): Promise<string> {
   if (mode === "phase1") {
     await api.reset();
     await api.contract();
+    await api.reconnect();
     await api.tornCheckpoint();
     await api.worker();
     const features = await api.features();
