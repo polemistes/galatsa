@@ -652,10 +652,18 @@ describe("the drawing tool", () => {
     const overlay = createRecordingDrawContext();
     handler.drawOverlay!(overlay);
     const stroke = overlay.calls.find((c) => c.op === "stroke");
-    expect(stroke?.op === "stroke" && stroke.path).toEqual([
-      expect.stringMatching(/^moveTo\(100(\.0+\d*)?,100(\.0+\d*)?\)$|^moveTo\(99\.99/),
-      expect.stringMatching(/^lineTo\((70|69\.9|70\.0)/),
-    ]);
+    // The preview runs from where the drag started to where the pointer is.
+    const points = (stroke?.op === "stroke" ? stroke.path : []).map((op) =>
+      op
+        .replace(/^\w+\(|\)$/g, "")
+        .split(",")
+        .map(Number),
+    );
+    expect(points).toHaveLength(2);
+    expect(points[0]![0]).toBeCloseTo(100, 9);
+    expect(points[0]![1]).toBeCloseTo(100, 9);
+    expect(points[1]![0]).toBeCloseTo(70, 9);
+    expect(points[1]![1]).toBeCloseTo(140, 9);
     handler.pointerUp!(pointer({ x: 70, y: 140 }));
     const e = t.element(t.services.state.selection[0]!);
     expect(e.size).toEqual({ w: 50, h: 0 });
