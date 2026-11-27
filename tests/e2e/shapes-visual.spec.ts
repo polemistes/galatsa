@@ -8,11 +8,15 @@
 // page, so the compositor, scroll bars and the screen's pixel ratio play no
 // part.
 //
-// A new kind is picked up from the gallery; its first run fails and writes the
-// picture, which is looked at and checked in:
+// A new kind is picked up from the gallery. Its pictures are made by running
 //
 //   pnpm --filter @galatsa/e2e exec playwright test shapes-visual.spec.ts \
 //     --project=chromium --project=editor-firefox --update-snapshots=missing
+//
+// which writes the pictures that are missing and passes; they are looked at
+// and checked in. Until they are, `pnpm check` fails
+// (scripts/lib/shape-pictures.test.ts checks that every listed kind has its
+// pictures), and a run of this test without the option fails on them.
 //
 // Pictures are made per browser and platform; only Chromium and Firefox on
 // Linux are stored so far.
@@ -42,10 +46,14 @@ test("every shape kind looks as stored", async ({ page }) => {
       )!;
       return canvas.toDataURL("image/png").replace(/^data:image\/png;base64,/, "");
     }, kind);
-    // Rendering is deterministic in one browser build; the small allowance
-    // covers antialiasing differences between machines with the same build.
+    // Rendering is deterministic in one browser build (the same pictures in
+    // runs after each other). The allowance is small on purpose: a colour
+    // channel may differ by about 1 % in a few pixels, which covers rounding
+    // on another machine with the same build, while a changed cap, join,
+    // colour, opacity or a half-unit change of the outline width fails.
     expect.soft(Buffer.from(png, "base64")).toMatchSnapshot(`${kind}.png`, {
-      maxDiffPixelRatio: 0.002,
+      threshold: 0.01,
+      maxDiffPixels: 8,
     });
   }
   expect(errors).toEqual([]);

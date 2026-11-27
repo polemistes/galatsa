@@ -196,6 +196,9 @@ importers:
       '@eslint/js':
         specifier: 10.0.1
         version: 10.0.1(eslint@10.14.0(supports-color@7.2.0))
+      '@galatsa/extension-shape':
+        specifier: workspace:*
+        version: link:packages/extensions/shape
       '@galatsa/i18n':
         specifier: workspace:*
         version: link:packages/i18n
