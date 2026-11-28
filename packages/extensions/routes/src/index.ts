@@ -32,6 +32,7 @@ export {
   type MoveVisitArgs,
   type NotesArgs,
   type SpeedArgs,
+  type MotionGuardArgs,
   type PlaceArgs,
   type PresentArgs,
   type RenameRouteArgs,
@@ -67,6 +68,7 @@ export {
 export { routeOverlay, routeShapes } from "./overlay.ts";
 export {
   isStopSpeed,
+  motionGuardOn,
   speedOfTransition,
   STOP_SPEEDS,
   transitionForSpeed,

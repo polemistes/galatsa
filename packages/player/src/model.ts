@@ -17,6 +17,7 @@ import {
   type CameraView,
   type DocumentSnapshot,
   type ElementId,
+  type Json,
   type Region,
   type RouteEntryId,
   type RouteId,
@@ -34,6 +35,8 @@ export interface PresentationSource {
   readonly resolver: Resolver;
   /** An element's name ("" for none): a frame stop without a name is called by its frame's. */
   nameOf?(id: ElementId): string;
+  /** A document-wide setting (docs/adr/0001, section 2), undefined when it is not set. */
+  setting?(key: string): Json | undefined;
 }
 
 /** Size of the drawing area in CSS pixels. */
@@ -61,13 +64,18 @@ export interface Step {
 
 /** A source over a document that was read into a snapshot (a file). */
 export function sourceFromSnapshot(
-  snapshot: Pick<DocumentSnapshot, "elements" | "stops" | "routes">,
+  snapshot: Pick<DocumentSnapshot, "elements" | "stops" | "routes"> &
+    Partial<Pick<DocumentSnapshot, "settings">>,
 ): PresentationSource {
   const elements = snapshot.elements;
   return {
     stopsAndRoutes: () => snapshot,
     resolver: new Resolver(lookupFromRecord(elements)),
     nameOf: (id) => (Object.hasOwn(elements, id) ? (elements[id]?.name ?? "") : ""),
+    setting: (key) =>
+      snapshot.settings !== undefined && Object.hasOwn(snapshot.settings, key)
+        ? snapshot.settings[key]
+        : undefined,
   };
 }
 

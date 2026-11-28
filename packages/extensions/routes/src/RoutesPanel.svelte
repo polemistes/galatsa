@@ -31,7 +31,12 @@
     routesUsing,
     type StopsAndRoutes,
   } from "./model.ts";
-  import { speedOfTransition, STOP_SPEEDS, type StopSpeed } from "./speed.ts";
+  import {
+    motionGuardOn,
+    speedOfTransition,
+    STOP_SPEEDS,
+    type StopSpeed,
+  } from "./speed.ts";
   import { choose, currentChoice, watchChoice } from "./state.ts";
   import { translator } from "./translate.ts";
 
@@ -134,6 +139,7 @@
       visibility,
       notes,
       speed: stop === null ? "default" : speedOfTransition(stop.transition),
+      motionGuard: motionGuardOn(doc),
     };
   });
 
@@ -370,6 +376,20 @@
         >{t("galatsa.routes:delete-route")}</button
       >
     {/if}
+  </div>
+
+  <div class="check">
+    <input
+      type="checkbox"
+      id="{uid}-motion-guard"
+      checked={model.motionGuard}
+      aria-describedby="{uid}-motion-guard-hint"
+      onchange={(e) => run(ROUTES.setMotionGuard, { on: e.currentTarget.checked })}
+    />
+    <label for="{uid}-motion-guard">{t("galatsa.routes:motion-guard")}</label>
+    <p class="hint" id="{uid}-motion-guard-hint">
+      {t("galatsa.routes:motion-guard.hint")}
+    </p>
   </div>
 
   <h3>{t("galatsa.routes:steps")}</h3>
@@ -639,6 +659,16 @@
     margin: 0;
     color: #64748b;
     font-size: 13px;
+  }
+  .check {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 6px;
+    align-items: center;
+    font-size: 13px;
+  }
+  .check .hint {
+    grid-column: 2;
   }
   .field {
     display: flex;

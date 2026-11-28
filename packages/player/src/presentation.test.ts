@@ -18,6 +18,8 @@ import {
 } from "@galatsa/extension-api";
 import {
   BRAKE_DURATION,
+  FLIGHT_LIMITS_SETTING,
+  MAX_FLIGHT_DURATION,
   cut,
   fade,
   fly,
@@ -794,6 +796,57 @@ describe("the surroundings", () => {
     expect(arrival(plain)).toBe(times["normal"]);
     expect(times["calm"]! / times["normal"]!).toBeCloseTo(1 / 0.7, 1);
     expect(times["fast"]! / times["normal"]!).toBeCloseTo(1 / 1.4, 1);
+  });
+
+  it("flies however far with the document's motion sickness guard off; reduced motion still wins", () => {
+    // From the fourth stop to the fifth, 2^40 away: a cross-fade with the guard on.
+    const kindHalfway = (
+      doc: TestDocument,
+      options: Partial<PresentationOptions> = {},
+    ) => {
+      const t = setup(doc, { step: 3, ...options });
+      t.p.next();
+      // A flight this far is faster than the normal peak speed (it is held to
+      // the longest time a flight takes), but it never jumps.
+      let taken = 0;
+      let last = t.p.picture();
+      while (t.p.state.phase === "moving" && taken < LONG) {
+        if (taken === 300) kinds.push(t.p.picture().kind);
+        t.clock.advance(5);
+        taken += 5;
+        const next = t.p.picture();
+        expect(pictureGap(t.source.resolver, last, next, SCREEN.width).gap).toBeLessThan(
+          0.1,
+        );
+        last = next;
+      }
+      expect(single(t.p.picture())).toEqual(t.viewOf("s4"));
+      return taken;
+    };
+    let kinds: string[] = [];
+    kindHalfway(document());
+    expect(kinds).toEqual(["blend"]);
+    const off = (): TestDocument =>
+      ({
+        ...document(),
+        settings: { [FLIGHT_LIMITS_SETTING]: false },
+      }) as TestDocument;
+    kinds = [];
+    const taken = kindHalfway(off());
+    expect(kinds).toEqual(["view"]);
+    expect(taken).toBeLessThanOrEqual(MAX_FLIGHT_DURATION + 5);
+    kinds = [];
+    kindHalfway(off(), { systemReducedMotion: true });
+    expect(kinds).toEqual(["blend"]);
+    // Turned off while presenting: the next transition flies.
+    const t = setup(document(), { step: 3 });
+    (t.doc as TestDocument & { settings?: Record<string, unknown> }).settings = {
+      [FLIGHT_LIMITS_SETTING]: false,
+    };
+    t.p.documentChanged();
+    t.p.next();
+    t.clock.advance(300);
+    expect(t.p.picture().kind).toBe("view");
   });
 
   it("steers onto the new fit when the screen changes size in the middle of a flight", () => {

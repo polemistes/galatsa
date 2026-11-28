@@ -112,6 +112,34 @@ export function resolveComfort(
   };
 }
 
+/**
+ * The document setting "motion sickness guard" (docs/adr/0015-presentation.md):
+ * a document-wide setting (docs/adr/0001, section 2) whose value false turns
+ * the flight limits off for the whole presentation. Missing, or anything
+ * else, is on.
+ */
+export const FLIGHT_LIMITS_SETTING = "galatsa.transitions.flightLimits";
+
+/** Whether the motion sickness guard is on, from the setting's value. */
+export function readFlightLimits(value: Json | undefined): boolean {
+  return value !== false;
+}
+
+/**
+ * The comfort settings with the flight limits off (the motion sickness guard
+ * turned off): the camera flies however far the stops are apart. Reduced
+ * motion stays as it is and still wins; a flight that would be very long
+ * flies faster instead (MAX_FLIGHT_DURATION, transitions.ts).
+ */
+export function withoutFlightLimits(comfort: ComfortSettings): ComfortSettings {
+  return {
+    ...comfort,
+    maxFlightZoomRatio: Infinity,
+    maxFlightDistance: Infinity,
+    maxFlightDuration: Infinity,
+  };
+}
+
 /** The media query of the system's "reduce motion" setting. */
 export const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 

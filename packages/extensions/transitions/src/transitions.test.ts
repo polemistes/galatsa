@@ -30,11 +30,13 @@ import {
   flightDuration,
   FLIGHT_SPEEDS,
   fly,
+  MAX_FLIGHT_DURATION,
   MIN_FLIGHT_DURATION,
   readFlightSpeed,
   restingView,
   transitionsExtension,
 } from "./transitions.ts";
+import { readFlightLimits, withoutFlightLimits } from "./comfort.ts";
 
 const VIEWPORT = { width: 1000, height: 600 };
 const NO_LIMITS: ComfortSettings = {
@@ -240,7 +242,12 @@ describe("the flight", () => {
     expect(calm.frame(calm.duration / 2).kind).toBe("blend");
     const motion = plan(from, to, NO_LIMITS);
     const length = flightPath(from, to, VIEWPORT.width).length;
-    expect(motion.duration).toBeCloseTo((length / 0.6375) * 1000, 6);
+    // At the normal speed it would take 46 s: it flies faster, in the longest
+    // time a flight takes.
+    const natural = (length / 0.6375) * 1000;
+    expect(natural).toBeGreaterThan(40_000);
+    expect(motion.duration).toBe(MAX_FLIGHT_DURATION);
+    const peak = FLIGHT_PEAK_SPEED * (natural / motion.duration);
     expect(motion.frame(motion.duration)).toEqual({ kind: "view", view: to });
     let last = 0;
     let previous: CameraView = from;
@@ -253,7 +260,7 @@ describe("the flight", () => {
       last = frame.view.zoom;
       // No step is longer than the peak speed allows.
       expect(metricDistance(previous, frame.view, VIEWPORT.width)).toBeLessThanOrEqual(
-        (motion.duration / n / 1000) * (1 + 1e-6),
+        (motion.duration / n / 1000) * peak * (1 + 1e-3),
       );
       previous = frame.view;
     }
@@ -596,5 +603,35 @@ describe("the speed of a flight into a stop", () => {
       expect(limited.duration).toBe(FADE_DURATION);
       expect(limited.frame(limited.duration / 2).kind).toBe("blend");
     }
+  });
+});
+
+describe("the motion sickness guard, off", () => {
+  const far: CameraView = { space: null, cx: 1e7, cy: 0, zoom: 1e-3 };
+  const off = withoutFlightLimits(DEFAULT_COMFORT);
+
+  it("is read from the document setting: only false turns it off", () => {
+    expect(readFlightLimits(false)).toBe(false);
+    expect(readFlightLimits(true)).toBe(true);
+    expect(readFlightLimits(undefined)).toBe(true);
+    expect(readFlightLimits(null)).toBe(true);
+    expect(readFlightLimits("off")).toBe(true);
+  });
+
+  it("lets the camera fly however far, within the longest time a flight takes", () => {
+    expect(exceedsFlightLimits(A, far, VIEWPORT, DEFAULT_COMFORT)).toBe(true);
+    expect(exceedsFlightLimits(A, far, VIEWPORT, off)).toBe(false);
+    const guarded = plan(A, far);
+    expect(guarded.frame(guarded.duration / 2).kind).toBe("blend");
+    const flight = plan(A, far, off);
+    expect(flight.frame(flight.duration / 2).kind).toBe("view");
+    expect(flight.duration).toBeLessThanOrEqual(MAX_FLIGHT_DURATION);
+    expect(flight.frame(flight.duration)).toEqual({ kind: "view", view: far });
+  });
+
+  it("still gives way to reduced motion", () => {
+    const reduced = plan(A, far, { ...off, reducedMotion: true });
+    expect(reduced.duration).toBe(FADE_DURATION);
+    expect(reduced.frame(reduced.duration / 2).kind).toBe("blend");
   });
 });

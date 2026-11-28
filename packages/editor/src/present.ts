@@ -8,7 +8,7 @@
 // edits made while it runs (someone else's, later). See
 // docs/adr/0015-presentation.md.
 
-import { Problems, envelopeField, type ElementId } from "@galatsa/core";
+import { Problems, envelopeField, type ElementId, type Json } from "@galatsa/core";
 import { roots, stopsAndRoutesOf } from "@galatsa/core/ydoc";
 import type { PresentationRequest } from "@galatsa/extension-api/editing";
 import type { I18n } from "@galatsa/i18n";
@@ -39,6 +39,10 @@ export function presentEditor(
         const record = roots(doc).elements.get(id);
         if (record === undefined || typeof record.get !== "function") return "";
         return envelopeField.name(record.get("name"), new Problems(0));
+      },
+      setting: (key) => {
+        const settings = roots(doc).settings;
+        return settings.has(key) ? (settings.get(key) as Json) : undefined;
       },
     },
     scene: editor.scene,

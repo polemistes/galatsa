@@ -359,6 +359,30 @@ test("routes and stops through the panel, each action one undo step", async ({
   await expect.poll(transitions).toEqual([]);
   expect((await routes(page)).undoSteps).toBe(speedSteps + 4);
 
+  // The motion sickness guard, for the whole presentation: on by default; off
+  // and on again is the document setting, one undo step each.
+  const guardSetting = () =>
+    withEditor(
+      page,
+      (editor) =>
+        (editor.doc.getMap("settings").toJSON() as Record<string, unknown>)[
+          "galatsa.transitions.flightLimits"
+        ] ?? null,
+      null,
+    );
+  const guard = panel.getByRole("checkbox", { name: "Motion sickness guard" });
+  await expect(guard).toBeChecked();
+  await expect(panel.getByText("Long moves fade instead of flying.")).toBeVisible();
+  expect(await guardSetting()).toBeNull();
+  const guardSteps = (await routes(page)).undoSteps;
+  await guard.uncheck();
+  await expect.poll(guardSetting).toBe(false);
+  expect((await routes(page)).undoSteps).toBe(guardSteps + 1);
+  await guard.check();
+  await expect.poll(guardSetting).toBe(true);
+  await expect(guard).toBeChecked();
+  expect((await routes(page)).undoSteps).toBe(guardSteps + 2);
+
   // Notes typed and then, from the notes field, Delete stop and Delete anyway:
   // the notes are saved (one step), the stop leaves both routes (one step),
   // and Ctrl+Z, with no click on the canvas, brings it back to both.

@@ -46,6 +46,16 @@ export const FLIGHT_SPEED = FLIGHT_PEAK_SPEED * (1 - RAMP);
 /** Shortest flight in milliseconds, so that a small move is not abrupt. */
 export const MIN_FLIGHT_DURATION = 500;
 
+/**
+ * The longest a flight takes, in milliseconds before `durationScale`: a longer
+ * one flies faster instead. Within the default flight limits no flight comes
+ * near it (they stop at 4.2 s at normal speed, 6 s calm); it bounds flights
+ * when the limits are off (the motion sickness guard turned off,
+ * withoutFlightLimits), or set higher than this. Claude's choice, see
+ * docs/adr/0015-presentation.md.
+ */
+export const MAX_FLIGHT_DURATION = 6000;
+
 /** How fast a flight into a stop goes: the stop's choice (the fly transition's option). */
 export type FlightSpeed = "calm" | "normal" | "fast";
 
@@ -139,12 +149,11 @@ export function flightDuration(length: number, durationScale: number, speed = 1)
   const scale = scaleOf(durationScale);
   let factor = Number.isFinite(speed) && speed > 0 ? speed : 1;
   if (scale > 1) factor = Math.min(factor, 1);
-  return (
-    Math.max(
-      MIN_FLIGHT_DURATION / Math.min(factor, 1),
-      (length / (FLIGHT_SPEED * factor)) * 1000,
-    ) * scale
+  const natural = Math.max(
+    MIN_FLIGHT_DURATION / Math.min(factor, 1),
+    (length / (FLIGHT_SPEED * factor)) * 1000,
   );
+  return Math.min(natural, MAX_FLIGHT_DURATION) * scale;
 }
 
 /**

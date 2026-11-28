@@ -29,8 +29,11 @@ import {
 } from "@galatsa/extension-api";
 import {
   DEFAULT_COMFORT_PREFERENCES,
+  FLIGHT_LIMITS_SETTING,
   fly,
+  readFlightLimits,
   resolveComfort,
+  withoutFlightLimits,
   type ComfortPreferences,
 } from "@galatsa/extension-transitions";
 import {
@@ -116,6 +119,8 @@ export class Presentation {
   readonly #hidden = new Map<number, Hidden>();
   #system: boolean;
   #choice: boolean | null = null;
+  /** The document's motion sickness guard (FLIGHT_LIMITS_SETTING). */
+  #limits: boolean;
   #sr: StopsAndRoutes;
   #routes: RouteInfo[];
   #route: RouteId | null;
@@ -133,6 +138,7 @@ export class Presentation {
     this.#transitions = options.transitions ?? (() => undefined);
     this.#preferences = options.preferences ?? DEFAULT_COMFORT_PREFERENCES;
     this.#system = options.systemReducedMotion ?? false;
+    this.#limits = this.#readLimits();
     this.#sr = this.#source.stopsAndRoutes();
     this.#routes = readRoutes(this.#sr);
     const wanted = options.route ?? null;
@@ -327,8 +333,18 @@ export class Presentation {
     this.#comfortChanged();
   }
 
+  /**
+   * The comfort settings transitions are planned with. With the document's
+   * motion sickness guard off the flight limits do not apply (the camera
+   * flies however far); reduced motion still wins.
+   */
   #comfort(): ComfortSettings {
-    return resolveComfort(this.#preferences, this.#system, this.#choice);
+    const comfort = resolveComfort(this.#preferences, this.#system, this.#choice);
+    return this.#limits ? comfort : withoutFlightLimits(comfort);
+  }
+
+  #readLimits(): boolean {
+    return readFlightLimits(this.#source.setting?.(FLIGHT_LIMITS_SETTING));
   }
 
   #comfortChanged(): void {
@@ -377,6 +393,13 @@ export class Presentation {
       if (this.#at >= 0) this.#at = find(at, this.#at);
       this.#target = find(target, this.#target);
       this.#refit("document", hiddenBefore);
+    }
+    // The motion sickness guard switched: a running transition goes on to
+    // the same goal under the new settings.
+    const limits = this.#readLimits();
+    if (limits !== this.#limits) {
+      this.#limits = limits;
+      this.#playback.setComfort(this.#comfort(), this.#now());
     }
     this.#emit();
   }
